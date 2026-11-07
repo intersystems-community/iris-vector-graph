@@ -108,6 +108,11 @@ GROUPS: Dict[str, Group] = {
 }
 #: Namespace variables an E2E module cannot be given per run, and why (tests/unit/test_460_gate_namespace_vars.py).
 SESSION_NAMESPACES: Dict[str, str] = {
+    "IVG_NS_IVG262FHA": (
+        "a FHIR-capable namespace set up under the IVG Schema IVGALT (tests/e2e/test_262_alt_schema_fhir.py): only "
+        "the CONTRIBUTING.md recipe makes a FHIR server, which the gate cannot, and the FHIR session namespace "
+        "holds Graph_KG; unset, the file skips"
+    ),
     "IVG_NS_IVGFHIR": (
         "the FHIR session namespace: tests/conftest.py imports tests/e2e/fhir_conftest.py at startup, before this "
         "plugin can scope a variable to a module, and its session fixtures drop and rebuild it (setup_namespace) "

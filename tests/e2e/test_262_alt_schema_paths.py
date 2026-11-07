@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import pytest
 
@@ -30,10 +31,24 @@ def alt():
     conn = ns262.connect(NS)
     from iris_vector_graph import IRISGraphEngine
 
-    engine = IRISGraphEngine(conn, embedding_dimension=4, namespace=NS, schema_prefix=SCHEMA, native_cypher=False)
-    status = engine.initialize_schema()
-    yield {"conn": conn, "engine": engine, "status": status}
-    conn.close()
+    # T068 B3: every statement any cursor of the driver runs while this module does (setup, the engine's Python SQL
+    # and its Cypher's), for test_no_statement_ivg_sent_names_another_schema
+    sent: list = []
+    cls = type(conn.cursor())
+    original = cls.execute
+
+    def recording(self, sql, *args, **kw):
+        sent.append(str(sql))
+        return original(self, sql, *args, **kw)
+
+    cls.execute = recording
+    try:
+        engine = IRISGraphEngine(conn, embedding_dimension=4, namespace=NS, schema_prefix=SCHEMA, native_cypher=False)
+        status = engine.initialize_schema()
+        yield {"conn": conn, "engine": engine, "status": status, "sent": sent}
+    finally:
+        cls.execute = original
+        conn.close()
 
 
 def _one(conn, sql, params=None):
@@ -178,13 +193,40 @@ def test_iris_maps_each_schema_to_its_default_package(alt):
     assert "GRAPH_KG" not in {s.upper() for s in ns262.schemas(conn)}
 
 
+#: A reference to the default IVG Schema's objects (T068 B3): the schema itself, a table class (`Graph.KG.nodes`,
+#: `Graph.KG.rdf_*`, `Graph.KG.kg_*` ...), or a routine class DDL in Graph_KG projects (`Graph.KG.funcCY...`,
+#: `Graph.KG.prockg...`).
+_DEFAULT_SCHEMA_REF = re.compile(
+    r"Graph_KG|Graph\.KG\.(?:nodes|docs|rdf_\w+|kg_\w+|fhir_\w+|ledger_\w+|embedding_\w+|code_crosswalk|func\w+|"
+    r"prockg\w+)\b")
+
+#: Every compiled text of an IVG class a deploy rewrites for the schema: method bodies, query SQL, parameter values,
+#: storage locations, and the SQL names of tables, properties and stored procedures.
+_COMPILED_TEXT = [
+    ("CompiledMethod", "Implementation"), ("CompiledMethod", "SqlName"), ("CompiledQuery", "SqlQuery"),
+    ("CompiledParameter", "_Default"), ("CompiledStorage", "DataLocation"), ("CompiledStorage", "IdLocation"),
+    ("CompiledStorage", "IndexLocation"), ("CompiledStorage", "StreamLocation"), ("CompiledClass", "SqlSchemaName"),
+    ("CompiledClass", "SqlTableName"), ("CompiledXData", "Data"),
+]
+
+
 def test_the_deployed_classes_name_graph_kg_nowhere(alt):
-    """SC-004, read from what compiled: method bodies and class keywords of every IVG class."""
-    rows = ns262.rows(alt["conn"], "SELECT parent, Implementation FROM %Dictionary.CompiledMethod "
-                                   "WHERE parent %STARTSWITH 'Graph.KG.' OR parent %STARTSWITH 'IVG.'")
-    assert rows
-    survivors = sorted({p for p, impl in rows if impl and ("Graph_KG" in str(impl) or "Graph.KG.rdf" in str(impl))})
-    assert survivors == []
+    """SC-004, read from what compiled: every compiled text of every IVG class (T068 B3: method bodies alone, and
+    only "Graph_KG" or "Graph.KG.rdf", missed the rest)."""
+    survivors = set()
+    seen = 0
+    for table, column in _COMPILED_TEXT:
+        rows = ns262.rows(alt["conn"], f'SELECT parent, "{column}" FROM %Dictionary.{table} '
+                                       "WHERE parent %STARTSWITH 'Graph.KG.' OR parent %STARTSWITH 'IVG.'"
+                          if table != "CompiledClass" else
+                          # a persistent class only: every other class in package Graph.KG reports IRIS's
+                          # package-to-schema default (Graph_KG) here, and projects no table
+                          f'SELECT ID, "{column}" FROM %Dictionary.CompiledClass WHERE ClassType = \'persistent\' '
+                          "AND (ID %STARTSWITH 'Graph.KG.' OR ID %STARTSWITH 'IVG.')")
+        seen += len(rows)
+        survivors |= {(table, column, p) for p, text in rows if text and _DEFAULT_SCHEMA_REF.search(str(text))}
+    assert seen
+    assert sorted(survivors) == []
 
 
 # --------------------------------------------------------------------------- T026: one case per path
@@ -267,6 +309,23 @@ def test_drop_temporal_structural_rows_dry_run_reads_ivgalt(alt):
     assert report.rows == rows
 
 
+def test_drop_temporal_structural_rows_deletes_from_ivgalt(alt):
+    """T068 B2: the real run, not the dry one. Two ALT_AD temporal edges each wrote a structural row (the default);
+    with the predicate made temporal-only, the drop deletes exactly those rows from IVGALT.rdf_edges and the window
+    read still answers from the temporal index."""
+    e, conn = alt["engine"], alt["conn"]
+    e.create_edge_temporal("altd:1", "ALT_AD", "altd:2", timestamp=1700000000, weight=1.0)
+    e.create_edge_temporal("altd:1", "ALT_AD", "altd:3", timestamp=1700000600, weight=1.0)
+    before = _one(conn, f"SELECT COUNT(*) FROM {SCHEMA}.rdf_edges WHERE p = 'ALT_AD'")
+    assert before == 2
+    e.set_temporal_structural("ALT_AD", False)
+    report = e.drop_temporal_structural_rows("ALT_AD")
+    assert report.rows == 2
+    assert _one(conn, f"SELECT COUNT(*) FROM {SCHEMA}.rdf_edges WHERE p = 'ALT_AD'") == 0
+    got = e.get_edges_in_window("altd:1", "ALT_AD", 1699999990, 1700000010)
+    assert [(g.get("target") or g.get("o")) for g in got] == ["altd:2"]
+
+
 def test_ledger_commit_verify(alt):
     from iris_vector_graph.ledger import Changeset
 
@@ -314,6 +373,46 @@ def test_pagerank_ppr_and_betweenness(alt):
     between = e.betweenness_centrality()
     middle = {s["id"]: s["score"] for s in between}.get(ids["g2"])
     assert middle and middle > 0
+
+
+def test_global_pagerank_and_cdlp(alt):
+    """T068 B2: global PageRank and CDLP read IVGALT. Worked by hand: in the 3-cycle altc:a -> altc:b -> altc:c ->
+    altc:a every node has the same score (the cycle is symmetric) and one community; the node altc:z with no edge
+    scores below them and is a community of its own. PageRank covers every default-graph node, scores summing to 1."""
+    e, conn = alt["engine"], alt["conn"]
+    for n in ("a", "b", "c", "z"):
+        e.create_node(f"altc:{n}", labels=["AltC"])
+    for s_, o in (("a", "b"), ("b", "c"), ("c", "a")):
+        e.create_edge(f"altc:{s_}", "ALT_C", f"altc:{o}")
+    ranks = dict(e.kg_PAGERANK(max_iterations=200))
+    nodes = _one(conn, f"SELECT COUNT(*) FROM {SCHEMA}.nodes WHERE graph_id = ''") or _one(
+        conn, f"SELECT COUNT(*) FROM {SCHEMA}.nodes")
+    assert len(ranks) == nodes, (len(ranks), nodes)
+    assert abs(sum(ranks.values()) - 1.0) < 1e-6
+    cyc = [ranks[f"altc:{n}"] for n in ("a", "b", "c")]
+    assert max(cyc) - min(cyc) < 1e-9 and ranks["altc:z"] < min(cyc)
+    communities = e.kg_CDLP()
+    assert len({communities[f"altc:{n}"] for n in ("a", "b", "c")}) == 1
+    assert communities["altc:z"] != communities["altc:a"]
+
+
+def test_routed_embeddings_live_in_ivgalt(alt):
+    """T068 B2: a named graph's vectors go to a routed table (kg_emb_*), which is created in IVGALT and nowhere else,
+    and the graph's KNN reads it."""
+    e, conn = alt["engine"], alt["conn"]
+    graph = "alt_rg"
+    for i, vec in enumerate(([1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0])):
+        e.create_node(f"altr:{i}", labels=["AltR"], graph=graph)
+        assert e.store_embedding(f"altr:{i}", vec, graph=graph)
+    route = e.resolve_route(graph=graph)
+    assert route is not None and route.table_name.startswith("kg_emb_"), route
+    schemas = ns262.rows(conn, "SELECT TABLE_SCHEMA FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ?",
+                         [route.table_name])
+    assert [s for (s,) in schemas] == [SCHEMA], schemas
+    assert _one(conn, f'SELECT COUNT(*) FROM {SCHEMA}."{route.table_name}"') == 2
+    hits = e.cypher.execute_knn_vec([0.9, 0.1, 0.0, 0.0], 1, None, graph=graph)
+    assert hits.error is None, hits.error
+    assert [r[0] for r in hits.rows] == ["altr:0"]
 
 
 def test_bfs_and_shortest_path(alt):
@@ -396,3 +495,18 @@ def test_a_schema_whose_package_holds_someone_elses_class_is_refused(alt):
         nat.set(recorded, "^IVG.Deploy", "schema")
         nat.set(stamp, "^IVG.Deploy", "schema", "recorded")
         conn.cursor().execute("DROP TABLE IVGCLASH.mine")
+
+
+def test_no_statement_ivg_sent_names_another_schema(alt):
+    """T068 B3: every statement the engine's cursors ran in this module (setup and every case above, Python's SQL
+    as well as Cypher's) names IVG objects in IVGALT only. Last in the file, so it reads every case's statements."""
+    sent = alt["sent"]
+    assert len(sent) > 100, len(sent)
+    outside = sorted({(n, sql[:160]) for sql in sent for n in ns262.names_outside(sql, SCHEMA)
+                      if not _BUILTIN_JSON_VALUE.search(sql)})
+    assert outside == []
+
+
+#: IRIS's own JSON_VALUE (its `RETURNING` clause is the built-in's syntax, which IVG's JSON_VALUE function has not):
+#: the functional index on rdf_edges' confidence reads it, unqualified by design, in any schema
+_BUILTIN_JSON_VALUE = re.compile(r"JSON_VALUE\(qualifiers, '\$\.\w+' RETURNING ")

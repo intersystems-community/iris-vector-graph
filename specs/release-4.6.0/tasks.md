@@ -434,6 +434,17 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 
+- Spec 262 T068 A2: no test runs the suite from the installed wheel (US5-AS3); run the spec 262 E2E files against the
+  built wheel (no `PYTHONPATH` on the tree) in `scripts/ci-parity.sh`
+- Spec 262 T068 A3: no test that a cached query naming `SQLUser.*` is never reused by IVG after the upgrade (spec.md's
+  edge case)
+- Spec 262 T068 A4: no test with iris-vector-rag installed beside IVG (US3-AS4: IVG reads only `IVG_SCHEMA_PREFIX`)
+- Spec 262 T068 C14: `contracts/python-api.md` and `data-model.md` predate the setup result's `other_schemas`,
+  `read_path_grants`, `warnings`, `embedding_dimension`, `ledger_history_copied` and `arno_wrappers_replaced` and the
+  legacy items' `replacement` / `class_present`: regenerate both from the code
+- Spec 262 T068 C20: `plan.md`'s nine phases and test list predate `tasks.md`'s story phases (seven unit tests it adds
+  are not listed); align them, with a glossary line that `schema_prefix` names a schema, not a prefix
+
 - `test_203` TestCalendarAccessors::test_datetime_calendar_fields_with_zone_name fails under driver 5.4.1 only (the raw
   cursor reads `'45'`, 5.4.0 `45`); already failing on the release head (fixes51)
 - `test_ivf_index` leaves its `TEST_*:vidx` IVF indexes in the session namespace (fixes51)

@@ -25,7 +25,7 @@ classes leave the wheel.
 **Project Type**: single library (`iris_vector_graph/`, `iris_src/src/`)
 **Performance Goals**: no write, erase or read path more than 5% slower than `a42db224` on `Graph_KG` and on `IVGALT` (FR-020a)
 **Constraints**: test-first; database state asserted after each call; legacy namespaces built from frozen DDL; no edits outside this repo
-**Scale/Scope**: ~47 functions and procedures, 4 views, 53 `User.func*` classes, 102 `SQLUser.` references in the translator, 283 `Graph_KG` references in 32 classes, 2 classes leaving the wheel
+**Scale/Scope**: ~47 functions and procedures, 4 views, 53 `User.func*` classes, 102 `SQLUser.` references in the translator, 283 `Graph_KG` references in 32 classes, 4 classes leaving the wheel (measured at 4.5.1 by T003: 46 `SQLUser` functions, 4 views, 19 lazy Arno functions; FR-015)
 
 ## Constitution Check
 
@@ -34,7 +34,7 @@ _GATE: Must pass before Phase 0 research. Re-checked after Phase 1 design._
 | Principle | How the plan meets it |
 | --- | --- |
 | I. Library-First | All in `iris_vector_graph/` and `iris_src/src/`; operators get `remove_legacy_objects` and `status()`, not scripts |
-| II. Compatibility-First | Existing namespaces keep every 4.5.x object and grant (FR-010, FR-010a); `schema_prefix="Graph_KG"` callers unchanged. Two approved breaks, both in ADR-0016 and the 2026-11-03 grill: fresh namespaces get no `SQLUser` views and functions, and a second schema in one namespace now raises |
+| II. Compatibility-First | Existing namespaces keep every 4.5.x object and grant (FR-010, FR-010a), but for the EXECUTE grants on the 4.5.x Arno wrappers, which upgrading revokes (FR-010c, R293); every setup adds the read-path grants (FR-010b, R278); `schema_prefix="Graph_KG"` callers unchanged. Two approved breaks, both in ADR-0016 and the 2026-11-03 grill: fresh namespaces get no `SQLUser` views and functions, and a second schema in one namespace now raises |
 | III. Test-First | Every task below starts with a failing test; the red run is recorded in the task |
 | IV. IRIS E2E | `ivg-iris-enterprise`, port from `IVG_PORT` (`tests/conftest.py`); `SKIP_IRIS_TESTS` defaults `"false"`; an e2e test per user story, plus one per write/delete/read path in `IVGALT` (FR-021) |
 | V. Simplicity | One rewrite at deploy instead of a run-time layer; two name helpers; the record in the existing `^IVG.Deploy` |
@@ -73,8 +73,9 @@ iris_vector_graph/
 ├── _engine/admin.py, status.py    status().schema, .legacy_objects; remove_legacy_objects()
 ├── engine.py                      schema_prefix=None → IVG_SCHEMA_PREFIX → Graph_KG; first-access checks (FR-006, FR-006a)
 └── (IVGSchemaError lives in schema_name.py, re-exported from iris_vector_graph/__init__.py)
-iris_src/src/Graph/KG/             unchanged text, rewritten at deploy (research R1); gains CypherFn, StrSplit, JsonKeys, SQL,
-                                   PageRankEmbedded moved from User.* and the top-level package (research R10)
+iris_src/src/Graph/KG/             unchanged text, rewritten at deploy (research R1); gains CypherFn, JsonKeys, SQL,
+                                   PageRankEmbedded moved from User.* and the top-level package (research R10); StrSplit
+                                   retired (STR_SPLIT is DDL only, 15685746)
 iris_src/dev/                      NEW  Graph/KG/Benchmark.cls, Graph/KG/BenchFormat.cls, User.Exec.cls (not packaged)
 scripts/dev/gen_legacy_manifest.py NEW
 scripts/bench/schema_gate.py       NEW  FR-020a speed gate

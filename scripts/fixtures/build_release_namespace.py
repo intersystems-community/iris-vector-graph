@@ -446,13 +446,15 @@ def run_arno_wrappers(tag: str, ns: str, schemas=("",)) -> dict:
     return parse_result(out.stdout)
 
 
-def run_cypher(tag: str, ns: str, query: str, user: str = "_SYSTEM", password: str = "SYS") -> dict:
+def run_cypher(tag: str, ns: str, query: str, user: str = "_SYSTEM", password: str = "SYS",
+               native: bool = False) -> dict:
     """Run `query` through `tag`'s own engine on `ns`, connected as `user`: `{"rows", "sql", "error"}` (rows as text).
 
-    For a check that the SQL an old release sends still runs, under a user's own privileges, before an upgrade."""
+    For a check that the SQL an old release sends still runs, under a user's own privileges, before an upgrade.
+    `native` lets the release's native executor take the query (4.4.0+ compiles a plan class for a shape it runs)."""
     tree = release_worktree(tag)
     env = dict(os.environ, PYTHONPATH=str(tree), IVG_RUN_CYPHER_USER=user, IVG_RUN_CYPHER_PASSWORD=password,
-               IVG_RUN_CYPHER_QUERY=query, IVG_NATIVE_CYPHER="0")
+               IVG_RUN_CYPHER_QUERY=query, IVG_NATIVE_CYPHER="1" if native else "0")
     args = [sys.executable, str(Path(__file__).resolve()), tag, ns, "--cypher"]
     out = subprocess.run(args, env=env, capture_output=True, text=True, timeout=600, cwd=str(tree))
     if out.returncode != 0:

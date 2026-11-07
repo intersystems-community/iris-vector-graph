@@ -72,6 +72,15 @@ def _state(conn, engine) -> dict:
     }
 
 
+#: A one-hop shape 4.5.1's native executor runs and compiles (Graph.KG.Cypher.Gen, spec 257): a labelled start, a
+#: typed hop, a property column (measured on the seeded namespace: an untyped hop or `RETURN b.node_id` stays on SQL).
+PLAN_QUERY = "MATCH (a:Person)-[r:knows]->(b) RETURN b.name"
+
+
+def _plan_classes(conn) -> list:
+    return ns262.rows(conn, "SELECT Name FROM %Dictionary.ClassDefinition WHERE Name %STARTSWITH 'IVGC.P'")
+
+
 def _sorted_rows(rows) -> list:
     return sorted([None if v is None else str(v) for v in row] for row in rows)
 
@@ -112,6 +121,15 @@ def upg():
         if table != "rdf_props":
             cur.execute(f"GRANT SELECT ON Graph_KG.{table} TO {NOPROPS_ROLE}")
     app_before = run_cypher("v4.5.1", NS, CMP_QUERY, APP_USER, APP_PW)
+    # FR-014's case: 4.5.1's native executor compiles a one-hop shape into an IVGC.P<n> class ("sync" builds it before
+    # the run; the default "job" builds it in the background). Run twice, so the second run reads the built class.
+    gen_mode = ns262.native(conn)
+    gen_mode.set("sync", "^IVG.CypherGen", "mode")
+    try:
+        native_runs = [run_cypher("v4.5.1", NS, PLAN_QUERY, native=True) for _ in range(2)]
+    finally:
+        gen_mode.kill("^IVG.CypherGen", "mode")
+    plans_before = _plan_classes(conn)
     before = _snapshot(conn)
     from iris_vector_graph import IRISGraphEngine
 
@@ -125,6 +143,7 @@ def upg():
     sel_plain = _cypher_as(SEL_USER, SEL_PW, ADA_QUERY)
     sel_vlp = _cypher_as(SEL_USER, SEL_PW, VLP_QUERY)
     yield {"conn": conn, "engine": engine, "built": built, "before": before, "dry": dry, "after_dry": after_dry,
+           "plans_before": plans_before, "native_runs": native_runs,
            "status": status, "upgraded": upgraded, "app_before": app_before, "app_after": app_after,
            "sel_after": sel_after, "sel_plain": sel_plain, "sel_vlp": sel_vlp}
     conn.close()
@@ -198,8 +217,9 @@ def test_a_user_with_only_the_granted_role_runs_cypher_before_and_after_the_upgr
 
 
 def test_a_select_only_user_runs_a_query_that_calls_no_4_5_function_after_the_upgrade(upg):
-    """R278, a strict xfail until Tom's decision: since R218 RETURN b.name reads through Graph_KG.CY_TYPED, so a user
-    holding SELECT alone, who ran this query under 4.5.1 (no function in it), was refused (-99) after the upgrade."""
+    """R278 (FR-010b): since R218 RETURN b.name reads through Graph_KG.CY_TYPED, so a user holding SELECT alone, who
+    ran this query under 4.5.1 (no function in it), was refused (-99) after the upgrade until setup granted the read
+    path's EXECUTE to every holder of SELECT on rdf_props. (It was a strict xfail until Tom's decision.)"""
     plain = upg["sel_plain"]
     assert plain["error"] is None and plain["rows"] == [["Bes"]], plain
     assert "Graph_KG.CY_TYPED(" in plain["sql"]
@@ -263,9 +283,12 @@ def test_a_read_path_routine_a_later_release_adds_reaches_the_role_on_the_next_s
 
 
 def test_a_native_plan_class_from_451_is_gone(upg):
-    """FR-014: the deploy fingerprint changed, so IVGC.P<n> plans compiled against 4.5.x names are dropped."""
-    plans = ns262.rows(upg["conn"], "SELECT Name FROM %Dictionary.ClassDefinition WHERE Name %STARTSWITH 'IVGC.P'")
-    assert plans == []
+    """FR-014: the deploy fingerprint changed, so IVGC.P<n> plans compiled against 4.5.x names are dropped. The
+    fixture has 4.5.1 compile one first (spec 262 T068 B1: with none there, this could not fail); with
+    `Gen.DropAll`'s call taken out of setup, the class survives and this fails (measured 2026-11-07)."""
+    assert all(r["error"] is None for r in upg["native_runs"]), upg["native_runs"]
+    assert upg["plans_before"], "4.5.1 compiled no IVGC.P class: the case is not set up"
+    assert _plan_classes(upg["conn"]) == []
 
 
 def test_remove_legacy_objects_lists_exactly_the_manifest_objects_present(upg):

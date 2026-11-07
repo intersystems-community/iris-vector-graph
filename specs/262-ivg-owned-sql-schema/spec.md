@@ -4,7 +4,7 @@
 
 **Feature Branch**: `262-ivg-owned-sql-schema`
 **Created**: 2026-11-03
-**Status**: Draft
+**Status**: Implemented in 4.6.0 (spec 262 T001-T068; amended 2026-11-07 by T068's analysis)
 **Ships in**: IVG 4.6.0, with the `read_only` security fix and the documentation restructure
 **Decisions**: ADR-0016 (`docs/adr/0016-one-ivg-schema-per-namespace.md`); `/grill-with-docs` session with Tom, 2026-11-03
 **Input**: IVG's SQL footprint leaves the default schema. In 4.5.1, `initialize_schema()` creates about 47 SQL functions in
@@ -130,7 +130,8 @@ read path, and confirm that no `Graph_KG` schema exists in the namespace afterwa
 The first `initialize_schema()` records the IVG Schema in the namespace. An engine that later asks for a different one
 is refused with an error naming both, the first time it touches the namespace, instead of sharing the namespace's
 globals with the recorded schema. An existing namespace with no record gets one automatically when the answer is
-unambiguous.
+unambiguous and is the engine's own schema; an engine on a namespace whose IVG tables are in another single schema is
+refused with an error naming it (FR-009).
 
 **Why this priority**: without it, a second schema in one namespace corrupts the adjacency index and the ledger
 silently.
@@ -156,7 +157,8 @@ IVG tables in one schema, and in two.
 
 ### User Story 5 - Production namespaces carry no benchmark code (Priority: P2)
 
-`Graph.KG.Benchmark` and `Graph.KG.BenchFormat` are not in the wheel and are not deployed. `Graph.KG.Service` (a REST
+`Graph.KG.Benchmark`, `Graph.KG.BenchFormat`, `User.Exec` and `iris.vector.graph.GraphOperators` are not in the wheel
+and are not deployed. `Graph.KG.Service` (a REST
 dispatcher) and `Graph.KG.FHIRGraphSyncTask` (a Task Manager task) still ship, and the inventory says each is inert
 until a web application or a task schedule names it.
 
@@ -233,13 +235,14 @@ the 4.6.0 migration notes say what moved.
   whose methods project as SQL functions MUST be in the IVG Schema's package, so that they project into the IVG Schema.
 - **FR-003**: The name MUST be settable by `IRISGraphEngine(schema_prefix=...)` and by `IVG_SCHEMA_PREFIX`, the argument
   taking precedence; IVG MUST NOT read `IRIS_SCHEMA_PREFIX`.
-- **FR-004**: The name MUST match `[A-Za-z][A-Za-z0-9_]*`, MUST NOT be `SQLUser` or start with `%`, and an invalid name
-  MUST raise `ValueError` before any database call.
+- **FR-004**: The name MUST match `[A-Za-z][A-Za-z0-9_]*`, MUST NOT be `SQLUser` or start with `%`, MUST NOT map to a
+  package under `Graph.KG`, `IVG` or `IVGC` (IVG's code packages), and an invalid name MUST raise `ValueError` before any
+  database call.
 - **FR-005**: The first `initialize_schema()` in a namespace MUST record the IVG Schema in the namespace, and the classes
   deployed there MUST name only that schema and its package, never `Graph_KG` when the schema is another.
 - **FR-006**: An engine whose schema differs from the namespace's record MUST raise an error naming both, on its first
   database access, before any write.
-- **FR-006a**: An engine whose namespace has no schema record, or lacks the 4.6.0 objects, MUST raise one error on its first database access that says the namespace was set up by an earlier release and names `initialize_schema()` and its dry run; it MUST run no other query first, and MUST NOT fall back to the 4.5.x objects.
+- **FR-006a**: An engine whose namespace has no schema record, or lacks the 4.6.0 objects, MUST raise an error on its first database access, run no other query first, and MUST NOT fall back to the 4.5.x objects. The error says which of three cases it is (4.6.0 R201), each naming `initialize_schema()` and its dry run: set up by an earlier release and not upgraded; never set up for IVG; or a setup that stopped (IVG's own objects, nothing an earlier release made).
 - **FR-007**: The SQL the Cypher translator, the native executor, the compiled native plans and the fast paths generate
   MUST name only objects in the IVG Schema, fully qualified.
 - **FR-008**: Every IVG query MUST qualify its tables; the `SQLUser` views (`nodes`, `rdf_edges`, `rdf_labels`,
@@ -248,11 +251,15 @@ the 4.6.0 migration notes say what moved.
 #### Existing namespaces
 
 - **FR-009**: An existing namespace with no record MUST be recorded automatically when IVG's tables are in exactly one
-  schema; when they are in more than one, `initialize_schema()` MUST stop with an error listing each schema and its row
-  counts, and MUST record nothing until a name is passed explicitly.
+  schema and that schema is the engine's; when it is another, the engine MUST be refused with an error naming that
+  schema (`schema_prefix='RAG'`) and MUST record nothing, rather than switch to it (the safer choice: an engine never
+  writes to a schema it was not given). When they are in more than one schema, `initialize_schema()` MUST stop with an
+  error listing each schema and its row counts, and MUST record nothing until a name is passed explicitly.
 - **FR-010**: Upgrading MUST leave the 4.5.x `SQLUser` and `User` objects in place and working, and MUST log once that
   they remain and how to remove them.
 - **FR-010a**: Upgrading MUST copy every privilege granted on a 4.5.x legacy object (to a user or a role) onto its replacement in the IVG Schema, and the record dry run (FR-013) MUST list each grant it would copy.
+- **FR-010b**: Every setup MUST give EXECUTE on each read-path routine of the IVG Schema to each user or role that holds EXECUTE on one of them or SELECT on its `rdf_props` (on the object or on the schema), and report each grant: 4.6.0's translation calls routines 4.5.x did not have, so a user who could run Cypher before the upgrade would otherwise be refused after it (4.6.0 R170, R278). EXECUTE on routines only, never a table.
+- **FR-010c**: Upgrading MUST revoke EXECUTE on every 4.5.x Arno function outside the IVG Schema (`SQLUser.ivg_arno_*`) from every grantee but a `%All` holder, leaving the functions in place, and warn about a grant held through a schema grant, which it cannot revoke on one object (4.6.0 R293, Tom's decision of 2026-11-04: those wrappers open any library and call any function). This is the one exception to FR-010's "in place and working".
 - **FR-011**: `remove_legacy_objects(dry_run=True)` MUST list exactly the objects on a frozen 4.5.x manifest that exist
   in the namespace, and MUST change nothing; `dry_run=False` MUST remove exactly those.
 - **FR-012**: The manifest MUST be a fixed list of names and classes taken from the 4.5.x releases, never a pattern.
@@ -261,8 +268,9 @@ the 4.6.0 migration notes say what moved.
 
 #### What ships
 
-- **FR-015**: `Graph.KG.Benchmark`, `Graph.KG.BenchFormat` and `User.Exec` (which runs `Xecute` on any string) MUST NOT be in the wheel or deployed; they move to
-  development sources the tests deploy themselves, and are on the legacy manifest.
+- **FR-015**: `Graph.KG.Benchmark`, `Graph.KG.BenchFormat`, `User.Exec` (which runs `Xecute` on any string) and
+  `iris.vector.graph.GraphOperators` (4.6.0 R080) MUST NOT be in the wheel or deployed; they move to development sources
+  the tests deploy themselves, and are on the legacy manifest, with the retired `Graph.KG.Loader`.
 - **FR-016**: `Graph.KG.Service` and `Graph.KG.FHIRGraphSyncTask` MUST keep shipping.
 
 #### Inventory and documentation
@@ -279,7 +287,7 @@ the 4.6.0 migration notes say what moved.
 
 #### Speed
 
-- **FR-020a**: On the default IVG Schema and on a non-default one, no write, erase or read path MUST be more than 5% slower than at `a42db224`, the last code state before spec 262 (median of repeated runs on the same container), measured by a benchmark gate over at least: edge and node writes (row and bulk), bare-node retire and graph erase, temporal edge writes, a Cypher one-hop and a variable-length read, PageRank, and a ledger commit.
+- **FR-020a**: On the default IVG Schema and on a non-default one, no write, erase or read path MUST be more than 5% slower than at `a42db224`, the last code state before spec 262 (the speed baseline; `fd3789a9` in tasks.md is the red-run base, 29 commits later), measured by a benchmark gate over at least: edge and node writes (row and bulk), bare-node retire and graph erase, temporal edge writes, a Cypher one-hop and a variable-length read, PageRank, and a ledger commit. The gate runs every path at least 5 times on each side, interleaved, and compares medians; a run the gate refuses (VM swap, a stalled Write Daemon) or a "rerun needed" verdict is not a pass. Tom's allowed paths for 4.6.0 (release plan, Decisions) are reported with their measured cost and fail above twice it.
 
 #### Tests
 
@@ -301,9 +309,8 @@ the 4.6.0 migration notes say what moved.
 ### Measurable Outcomes
 
 - **SC-001**: A freshly initialized namespace has 0 IVG objects in `SQLUser`, the `User` package and the top-level
-  package (4.5.1: about 47 DDL functions plus the `[ SqlProc ]` methods of `User.CypherFn`, `User.funcSTRSPLIT` and
-  `User.funcJSONKEYS`; 4 views; the DDL-generated `User.func*` classes, 5 shipped `User.*` classes and one class with
-  no package; exact counts taken from a live 4.5.1 namespace by T003).
+  package (4.5.1, measured by T003: 46 `SQLUser` functions and 4 views, plus 19 Arno functions created on first use;
+  the legacy manifest holds 65 functions, 7 classes and 4 views from 3.2.0-4.5.1: tests/unit/test_legacy_manifest.py).
 - **SC-002**: The inventory test reports 0 differences between ADMIN_GUIDE and a fresh namespace.
 - **SC-003**: In a namespace whose IVG Schema is `IVGALT`, every write, delete and read path gives its known answer and
   the namespace holds no `Graph_KG` schema.
@@ -312,7 +319,7 @@ the 4.6.0 migration notes say what moved.
 - **SC-005**: A 4.5.1 namespace upgrades with 0 changes to the application's SQL; `remove_legacy_objects(dry_run=True)`
   lists 100% of the manifest objects present and 0 others.
 - **SC-006**: An engine with a mismatched schema is refused on 100% of first accesses, with 0 rows or globals changed.
-- **SC-006a**: The benchmark gate reports every measured path within 5% of `a42db224` on both `Graph_KG` and `IVGALT`.
+- **SC-006a**: The benchmark gate (FR-020a's run rule) reports every measured path within 5% of `a42db224` on both `Graph_KG` and `IVGALT`, an allowed path within twice its recorded cost.
 - **SC-007**: The two newcomer walkthroughs of the 4.6.0 release gate (IRIS expert, Python developer) report no
   "blocker" or "wrong" item about where IVG's objects live (checked at the 4.6.0 release gate, not by this spec's
   tasks).
@@ -326,4 +333,4 @@ the 4.6.0 migration notes say what moved.
 - hipporag2-pipeline and other consumers are informed through the release notes and, for opsreview, the agent bus; IVG
   edits no other repository.
 - 5.0 removes the legacy objects on upgrade; that is out of scope here.
-- Renaming a namespace's IVG Schema after it is recorded is out of scope for 4.6.0. The mixed-namespace error (FR-009) and ADMIN_GUIDE give the manual route: record one schema with `schema_prefix=`, then move or drop the other schema's IVG tables with the SQL ADMIN_GUIDE supplies; a test runs that SQL on a mixed namespace and checks the result.
+- Renaming a namespace's IVG Schema after it is recorded is out of scope for 4.6.0. The mixed-namespace error (FR-009) and ADMIN_GUIDE give the manual route: record one schema with `schema_prefix=`, then move or drop the other schema's IVG tables with the SQL the migration notes supply (linked from ADMIN_GUIDE); a test runs that SQL on a mixed namespace and checks the result.

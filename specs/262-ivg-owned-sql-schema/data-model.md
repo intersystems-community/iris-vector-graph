@@ -15,7 +15,7 @@ The SQL schema that holds every table, function, procedure and view IVG creates 
 
 ## Schema record
 
-`^IVG.Deploy("schema")` = name as given. `^IVG.Deploy("schema", "recorded")` = `$ListBuild($ZDateTime($H, 3), ivgVersion)`.
+`^IVG.Deploy("schema")` = name as given. `^IVG.Deploy("schema", "recorded")` = the text `"<UTC timestamp> UTC <ivgVersion>"` (iris_vector_graph/schema_name.py, `write_record`).
 
 States and transitions:
 
@@ -24,7 +24,8 @@ States and transitions:
  (absent) ──────────────────────────────────────────▶ recorded(name)
     │
     │ initialize_schema() on a 4.5.x namespace
-    ├── IVG tables in exactly one schema S ───────────▶ recorded(S)
+    ├── IVG tables in exactly one schema S, S the engine's ▶ recorded(S)
+    ├── IVG tables in exactly one schema S, not the engine's ▶ (absent) + error naming S (FR-009)
     ├── IVG tables in several schemas, no name given ─▶ (absent)  + error listing schemas and row counts
     └── IVG tables in several schemas, name S given ──▶ recorded(S) + the others reported, untouched
 

@@ -14,7 +14,7 @@ print(engine.initialize_schema()["schema"])          # Graph_KG
 
 ```sql
 SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = 'SQLUser'   -- 0 of IVG's
-SELECT COUNT(*) FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = 'SQLUser'        -- 0 of IVG's
+SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'SQLUser' AND TABLE_TYPE = 'VIEW'  -- 0 of IVG's
 ```
 
 ## A chosen schema
