@@ -218,13 +218,13 @@ that mix numbers and strings.
 
 **Changed (breaking)**
 
-- **A Cypher read that fails comes back in `result.error`; it raised for weighted paths, variable-length patterns and
-  `shortestPath`.** If you caught the exception, pass `raise_on_error=True`.
+What a 4.5.x caller must change, one line each; each change has its full entry under Changed or Fixed, below, and
+[docs/migration/v4.6.0.md](docs/migration/v4.6.0.md#breaking-changes) the same list.
+
+- A Cypher read that fails comes back in `result.error`; it raised for weighted paths, variable-length patterns and
+  `shortestPath`. If you caught the exception, pass `raise_on_error=True`.
 - `count_nodes`, `get_nodes` and the property readers (`get_node_ids_by_property`, `get_property_pairs` and the
   rest) raise when their query fails; they answered `0` or `[]`. Catch the error where a failure is expected.
-  What a 4.5.x caller must change, one line each; each change has its full entry under Changed or Fixed, below, and
-  [docs/migration/v4.6.0.md](docs/migration/v4.6.0.md#breaking-changes) the same list.
-
 - Result lists, maps and paths are Python values: `execute_cypher`, Bolt and REST answer lists and dicts, nested ones
   too, instead of JSON text; a path is `{'nodes': [...], 'rels': [...]}`, a map projection a dict whose values keep
   their stored types, and a node inside a list (`collect(n)`) a dict `{"_id", "_labels", "_props"}` whose `_props`
@@ -240,44 +240,58 @@ that mix numbers and strings.
   query or catch the error. A null still answers null.
 - IVG's SQL objects are in the IVG Schema (default `Graph_KG`), not `SQLUser`, and a namespace an earlier release set
   up is refused until `initialize_schema()` has run there: run it once per namespace (look first with
-  `dry_run=True`), set `IVG_SCHEMA_PREFIX`, and qualify your SQL with the schema. The four `SQLUser` views are gone:
-  read the tables.
+  `dry_run=True`), set `IVG_SCHEMA_PREFIX` only if your schema is not `Graph_KG`, and qualify your own SQL with the
+  schema. The four `SQLUser` views are gone: read the tables.
 - With `IVG_API_KEY` set, every route on every app needs the key, Bolt included: send `X-Api-Key` (or Bearer), and
   the key in Bolt's HELLO/LOGON.
 - `cypher_api`'s `/health` answers only `{"status": ...}` with 200 or 503: read the status code.
-- `sync()`, the algorithm methods and a refused write raise (`RuntimeError`, `NotImplementedError`,
-  `GraphWriteError`) where they answered `False`, `[]`, `{}`, `None` or 0: catch the exception.
+- `sync()`, the algorithm methods and a refused write raise where they answered `False`, `[]`, `{}`, `None` or 0:
+  `sync()` and a failed algorithm method raise `RuntimeError` naming the method, `bfs_vector_rerank` raises
+  `NotImplementedError`, and a write IRIS or IVG refuses raises `GraphWriteError` (a `RuntimeError`). Catch the
+  exception.
 - `save_snapshot`, `restore_snapshot` and `bulk_ingest_edges` raise on a table or global they cannot read or write:
   handle `SnapshotReadError` / `RuntimeError`.
-- The counters count the default graph when no graph is given: pass `graph=`, or add up the graphs.
+- `node_count()`, `edge_count()`, `count_nodes()`, `get_node_count()`, `get_edge_count()`,
+  `get_label_distribution()` and the HTTP `/schema` and `/stats` counts count the default graph when no graph is
+  given (`status()` still counts every graph): pass `graph=`, or add up the graphs.
 - `delete_node(id)` and `bulk_delete_nodes(ids)` without `graph=` refuse an id two graphs hold: pass `graph=`.
 - Without `USE GRAPH`, a `CALL` and a `WITH` stage answer each graph's own rows: add `USE GRAPH ''` for the default
   graph's.
-- Seven `^NKG` procedures refuse under `USE GRAPH` or once a named graph has edges, and the GDS shims refuse what they
+- Seven `^NKG` procedures (`ivg.betweenness`, `ivg.closeness`, `ivg.eigenvector`, `ivg.leiden`, `ivg.triangleCount`,
+  `ivg.scc`, `ivg.kcore`) refuse under `USE GRAPH` or once a named graph has edges, and the GDS shims refuse what they
   cannot honour: call the engine method, or keep a graph in a namespace of its own; drop unknown config keys.
 - `ivg.shortestPath.weighted` honours `maxHops` (default 10): pass `maxHops` for longer paths.
 - `shortestPath` and variable-length path functions name their columns as the RETURN writes them, and `khop` answers
   `{"nodes": [...], "edges": [...]}`: read columns by alias or item text.
 - `YIELD <column> AS <name>` binds the name on every `ivg.*` procedure: rename an alias that clashed.
 - Integer division truncates toward zero, and arithmetic on a zero divisor or a value of the wrong type fails with
-  openCypher's `ArithmeticError` / `TypeError`: `toFloat(x) / 2` for a fraction; guard the operands.
+  openCypher's `ArithmeticError` / `TypeError`: `toFloat(x) / 2` for a fraction; guard the operands. Where the
+  query's text shows the error (`'a' - 1`) `execute_cypher` raises Python's `TypeError`; where IRIS meets it on a row
+  (`1 / 0`, `n.name - 1`) the read fails as any read does ([User guide](docs/USER_GUIDE.md#errors)): `result.error`
+  holds the openCypher name (`ArithmeticError: integer division by zero`), or `raise_on_error=True` raises
+  `RuntimeError`.
 - `<`, `<=`, `>`, `>=` between two durations answer null: compare their components.
 - A CREATE or MERGE between matched nodes refuses a relationship property computed from the row: compute it in a
   `WITH`.
 - `MERGE` with no `USE GRAPH` matches and creates in the default graph only, and `MERGE ... ON CREATE SET n = {...}`
   or `ON MATCH SET n = {...}` on a node is refused: add `USE GRAPH '<g>'`; use `SET n += {...}`, or a `SET` after the `MERGE`.
-- A write after a `WITH` that cannot be answered raises `SyntaxError` ("split the query"): split it.
+- A `SET`, `REMOVE`, `DELETE`, `MERGE` or `CREATE` after a `WITH` whose shape cannot be answered raises `SyntaxError`
+  ("split the query"): split it into a read and a write.
 - `create_edge` and `store_edge` refuse a NaN or infinite qualifier with `ValueError`: drop or encode such values.
 - `ppr()` takes one seed or a list of node IDs and raises `TypeError` otherwise.
-- The bulk loaders refuse rows that are not the documented shapes: send those shapes.
-- `kg_WCC` takes no `max_iterations` limit by default and raises "WCC did not converge" at one that is hit.
+- The bulk loaders refuse rows that are not the documented shapes with `ValueError`: `bulk_create_nodes` and
+  `bulk_create_edges` skipped a row missing a key and dropped unknown keys (`weight`, `qualifiers`, `label`),
+  `bulk_create_edges_temporal` took a missing endpoint or timestamp, and `BulkLoader.load_nodes` / `load_edges` took a
+  dict. Send the shape each method's docstring (API_REFERENCE) states.
+- `kg_WCC` takes no `max_iterations` limit by default (it was 100) and raises "WCC did not converge" at one that is hit:
+  drop `max_iterations=`, or raise it above the graph's diameter.
 - An engine no longer sets the module-wide `set_schema_prefix`: call it yourself for an engine-less translation.
 - `initialize_schema()`'s status keys say what the run did (`tables_created` is a list) and `routines` is spelled as
   the catalog does (`kg_PPR`): update scripts that read them.
 - `IRISGraphEngine(EmbeddedConnection())` outside IRIS raises `EmbeddedUnavailableError`: run under `irispython` or
   connect over TCP.
 - The `ai` extra, the benchmark and test-only classes, `User.Exec`, `GraphOperators`, `LIST_HEAD`, `LIST_LAST`,
-  `User.funcSTRSPLIT`, `execute_weighted_shortest_path`, `NKGAccel.PPRNative` / `PPRJson` and `module.xml` are gone
+  `User.funcSTRSPLIT`, `execute_weighted_shortest_path`, `NKGAccel.PPRNative` / `PPRJson` and the IPM module manifests are gone
   (Removed): drop them from install specs and vendored trees.
 - `docker-compose.yml` names no container and takes its ports from `IVG_IRIS_PORT` / `IVG_WEB_PORT`: find the
   container with `docker compose ps`.
