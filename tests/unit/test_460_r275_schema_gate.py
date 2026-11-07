@@ -322,9 +322,30 @@ def test_excluding_stalled_runs_that_changes_the_verdict_or_leaves_too_few_says_
 
 
 def test_the_gate_refuses_to_start_on_an_open_stall_or_a_swapping_vm():
-    assert gate.preflight_problems(swap_used_mb=40897, wd_open=False)
-    assert gate.preflight_problems(swap_used_mb=0, wd_open=True)
-    assert gate.preflight_problems(swap_used_mb=100, wd_open=False) == []
+    """Measured 2026-11-07: 40.9 GB of swap 'used' both during the 06:10 stall and after the gate stopped (pages stay
+    in swap until touched: history, not pressure); after the stop, 0 pages/s out and 11-300 pages/s in at load 20-34.
+    So the check is the rate over a sample: any page out, or more than 1000 in a second (3x the idle burst)."""
+    assert gate.preflight_problems(swap_in_per_s=12.8, swap_out_per_s=0.0, wd_open=False) == []
+    assert gate.preflight_problems(swap_in_per_s=300.3, swap_out_per_s=0.0, wd_open=False) == []
+    assert gate.preflight_problems(swap_in_per_s=0.0, swap_out_per_s=4.0, wd_open=False)
+    assert gate.preflight_problems(swap_in_per_s=1500.0, swap_out_per_s=0.0, wd_open=False)
+    assert gate.preflight_problems(swap_in_per_s=0.0, swap_out_per_s=0.0, wd_open=True)
+
+
+def test_swap_rates_are_read_from_two_vmstat_samples(monkeypatch):
+    samples = iter(["pswpin 1000\npswpout 50\n", "pswpin 1128\npswpout 50\n"])
+    monkeypatch.setattr(gate, "container_text", lambda c, *cmd: next(samples))
+    monkeypatch.setattr(gate.time, "sleep", lambda s: None)
+    assert gate.container_swap_rates("c", seconds=10) == (12.8, 0.0)
+
+
+def test_a_wd_log_file_stands_in_for_the_containers_log(tmp_path, monkeypatch):
+    log = tmp_path / "messages.log"
+    log.write_text(WD_LOG)
+    monkeypatch.setattr(gate, "container_text", lambda c, *cmd: (_ for _ in ()).throw(AssertionError("no docker")))
+    monkeypatch.setattr(gate, "container_swap_rates", lambda c, seconds=10: (0.0, 0.0))
+    code = gate.main(["--out", str(tmp_path / "g"), "--base-code", str(tmp_path), "--wd-log", str(log)])
+    assert code == 2  # its last stall is open: refused
 
 
 def test_a_stall_that_decides_the_verdict_says_rerun():
@@ -349,7 +370,7 @@ def test_the_report_says_which_runs_a_stall_left_out():
 
 
 def test_main_refuses_to_start_on_a_swapping_vm_and_writes_nothing(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(gate, "container_swap_mb", lambda c: 40897.0)
+    monkeypatch.setattr(gate, "container_swap_rates", lambda c, seconds=10: (0.0, 25.0))
     monkeypatch.setattr(gate, "container_text", lambda c, *cmd: "")
     code = gate.main(["--out", str(tmp_path / "g"), "--base-code", str(tmp_path)])
     assert code == 2 and "swap" in capsys.readouterr().err and not (tmp_path / "g").exists()
@@ -357,7 +378,7 @@ def test_main_refuses_to_start_on_a_swapping_vm_and_writes_nothing(tmp_path, mon
 
 def test_main_marks_runs_inside_a_stall_from_messages_log(tmp_path, monkeypatch):
     """End to end with the fake worker: a stall window covering the whole run leaves every run out: rerun needed."""
-    monkeypatch.setattr(gate, "container_swap_mb", lambda c: 0.0)
+    monkeypatch.setattr(gate, "container_swap_rates", lambda c, seconds=10: (0.0, 0.0))
     state = {"calls": 0}
 
     def text(container, *cmd):
@@ -376,3 +397,14 @@ def test_main_marks_runs_inside_a_stall_from_messages_log(tmp_path, monkeypatch)
     report = json.loads((tmp_path / "g" / "gate.json").read_text())
     assert code == 1 and all("rerun needed" in v["reason"] for v in report["verdicts"])
     assert report["write_daemon_stalls"] and all(v["stalled_runs"] == [0, 1, 2, 3, 4] for v in report["verdicts"])
+
+
+def test_every_run_has_its_utc_start_and_end_in_gate_json(tmp_path):
+    import re as _re
+
+    code, out = _run_gate(tmp_path, {})
+    spans = json.loads((out / "gate.json").read_text())["spans_utc"]
+    runs = [r for side in spans.values() for path in side.values() for r in path]
+    assert len(runs) == 3 * 2 * 5
+    stamp = _re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
+    assert all(stamp.match(r["start"]) and stamp.match(r["end"]) and r["start"] <= r["end"] for r in runs)

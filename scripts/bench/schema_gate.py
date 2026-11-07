@@ -249,13 +249,23 @@ def _stalled(spans: Optional[Sequence[tuple]], windows: Sequence[tuple]) -> set:
     return out
 
 
-def preflight_problems(swap_used_mb: float, wd_open: bool, max_swap_mb: float = 1024) -> List[str]:
-    """Why the gate should not start: a container VM swapping (timings would be the VM's) or a Write Daemon stall
-    still open (IRIS's)."""
+#: Preflight limits, from 2026-11-07's numbers: the VM held 40.9 GB in swap during the 06:10 Write Daemon stall and
+#: still did after the gate stopped (a page stays in swap until touched, so "used" is history, not pressure); with the
+#: gate stopped it swapped 0 pages/s out and 11-300 pages/s in at load 20-34. So the gate samples the rates: any page
+#: swapped out means the VM is evicting now, and more than 1000 pages/s in is over 3x that idle burst.
+MAX_SWAP_IN_PER_S = 1000.0
+MAX_SWAP_OUT_PER_S = 0.0
+
+
+def preflight_problems(swap_in_per_s: float, swap_out_per_s: float, wd_open: bool,
+                       max_in: float = MAX_SWAP_IN_PER_S, max_out: float = MAX_SWAP_OUT_PER_S) -> List[str]:
+    """Why the gate should not start: a VM swapping now (timings would be the VM's) or a Write Daemon stall still
+    open (IRIS's)."""
     problems = []
-    if swap_used_mb > max_swap_mb:
-        problems.append(f"the container's VM has {swap_used_mb:.0f} MB in swap (over {max_swap_mb:.0f}): "
-                        "timings would measure the VM")
+    if swap_out_per_s > max_out:
+        problems.append(f"the container's VM is swapping out ({swap_out_per_s:.1f} pages/s; allowed {max_out:g})")
+    if swap_in_per_s > max_in:
+        problems.append(f"the container's VM is swapping in ({swap_in_per_s:.1f} pages/s; allowed {max_in:g})")
     if wd_open:
         problems.append("a Write Daemon stall is open in messages.log (no 'completed a pass' after the last alert)")
     return problems
@@ -270,16 +280,27 @@ def container_text(container: str, *cmd: str) -> str:
     return r.stdout if r.returncode == 0 else ""
 
 
-def container_swap_mb(container: str) -> float:
-    """Swap in use on the container's VM, in MB (`free -m`); 0 when it cannot be read."""
-    for line in container_text(container, "free", "-m").splitlines():
-        if line.lower().startswith("swap:"):
+def container_swap_rates(container: str, seconds: float = 10) -> tuple:
+    """Pages swapped in and out per second on the container's VM over `seconds` (/proc/vmstat pswpin, pswpout)."""
+    def read():
+        values = {}
+        for line in container_text(container, "cat", "/proc/vmstat").splitlines():
             parts = line.split()
-            return float(parts[2]) if len(parts) > 2 else 0.0
-    return 0.0
+            if len(parts) == 2 and parts[0] in ("pswpin", "pswpout"):
+                values[parts[0]] = int(parts[1])
+        return values.get("pswpin", 0), values.get("pswpout", 0)
+
+    in0, out0 = read()
+    time.sleep(seconds)
+    in1, out1 = read()
+    return round((in1 - in0) / seconds, 1), round((out1 - out0) / seconds, 1)
 
 
 MESSAGES_LOG = "/usr/irissys/mgr/messages.log"
+
+
+def _utc_iso(ts: float) -> str:
+    return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
 def gate_passes(verdicts: Sequence[Verdict]) -> bool:
@@ -380,7 +401,10 @@ def parse(argv):
     p.add_argument("--alt-schema", default="IVGALT")
     p.add_argument("--dry-plan", action="store_true", help="print the sides, paths and interleaved order; run nothing")
     p.add_argument("--container", default=os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise"))
-    p.add_argument("--max-swap-mb", type=float, default=1024)
+    p.add_argument("--max-swap-in", type=float, default=MAX_SWAP_IN_PER_S, help="pages/s swapped in, at most")
+    p.add_argument("--max-swap-out", type=float, default=MAX_SWAP_OUT_PER_S, help="pages/s swapped out, at most")
+    p.add_argument("--wd-log", help="a copy of messages.log to read the Write Daemon stalls from (default: the "
+                                    "container's, read with docker exec)")
     p.add_argument("--no-iris-checks", action="store_true",
                    help="skip the container checks (VM swap, Write Daemon stalls): the harness's own tests")
     return p.parse_known_args(argv)
@@ -408,10 +432,14 @@ def main(argv=None) -> int:
         print(f"no {BASE_COMMIT} checkout at {args.base_code}: run scripts/fixtures/build_release_namespace.py "
               f"{BASE_COMMIT} {args.base_ns} first", file=sys.stderr)
         return 2
+    def messages_log() -> str:
+        return Path(args.wd_log).read_text() if args.wd_log else container_text(args.container, "cat", MESSAGES_LOG)
+
     if not args.no_iris_checks:
-        windows_now = write_daemon_windows(container_text(args.container, "cat", MESSAGES_LOG))
-        problems = preflight_problems(container_swap_mb(args.container), bool(windows_now and windows_now[-1][1] is None),
-                                      args.max_swap_mb)
+        windows_now = write_daemon_windows(messages_log())
+        swap_in, swap_out = container_swap_rates(args.container)
+        problems = preflight_problems(swap_in, swap_out, bool(windows_now and windows_now[-1][1] is None),
+                                      args.max_swap_in, args.max_swap_out)
         if problems:
             print("the gate did not start: " + "; ".join(problems), file=sys.stderr)
             return 2
@@ -444,16 +472,15 @@ def main(argv=None) -> int:
             else:
                 timings[side][path].append(None)
                 errors.append({"side": side, "path": path, "run": run, "error": answer.get("error")})
-            if not args.no_iris_checks and k % 15 == 14 and "Pausing users" in container_text(
-                    args.container, "tail", "-n", "200", MESSAGES_LOG):
+            if not args.no_iris_checks and k % 15 == 14 and "Pausing users" in (
+                    messages_log() if args.wd_log else container_text(args.container, "tail", "-n", "200", MESSAGES_LOG)):
                 stopped = "the Write Daemon paused users (messages.log): the gate stopped"
                 print(stopped, file=sys.stderr)
                 break
     finally:
         for w in workers.values():
             w.close()
-    windows = ([] if args.no_iris_checks
-               else write_daemon_windows(container_text(args.container, "cat", MESSAGES_LOG)))
+    windows = [] if args.no_iris_checks else write_daemon_windows(messages_log())
     verdicts = compare(timings, answers=answers, spans=spans, windows=windows)
     meta = {"base_commit": BASE_COMMIT, "runs": args.runs, "scale": args.scale, "started": started,
             "elapsed_s": round(time.monotonic() - t0, 1), "sides": meta_sides,
@@ -464,7 +491,9 @@ def main(argv=None) -> int:
     passed = gate_passes(verdicts) and stopped is None
     (out / "gate.json").write_text(json.dumps(
         {"passed": passed, "threshold": THRESHOLD, **meta, "verdicts": verdicts_json(verdicts), "errors": errors,
-         "timings": timings, "answers": answers, "spans": spans}, indent=2))
+         "timings": timings, "answers": answers, "spans": spans,
+         "spans_utc": {sd: {p: [{"start": _utc_iso(a), "end": _utc_iso(b)} for a, b in runs] for p, runs in by.items()}
+                       for sd, by in spans.items()}}, indent=2))
     (out / "gate.md").write_text(render_markdown(verdicts, meta))
     print(render_markdown(verdicts, meta))
     if stopped:
