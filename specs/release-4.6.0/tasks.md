@@ -451,6 +451,8 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 - `Communities.cls` and `Centrality` write node ids into JSON without escaping quotes; ORDER BY over durations sorts by
   their text (`P1D` before `PT1H`), which the TCK accepts (fixes60, unverified)
 - Setup registers `kg_EdgeEmbeddings` in `embedding_registry` with `kind = 'node'` (fixes61)
+- `api.main`'s `/health` always answers 200 `{"status": "healthy", ...}`: a health check that tests nothing
+  (R051 audit)
 - Upgrading 2.x quarantines a named-graph edge whose endpoints are only in the default graph, where 3.2.0's upgrade
   places it (KNOWN_ISSUES); E2E parked on 461-edge-placement (fixes68)
 - An `UNWIND` of a list concatenation (`l1 + l2`, built as JSON text before `JSON_TABLE` reads it) reads a `''` element

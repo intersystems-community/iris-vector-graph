@@ -1132,6 +1132,13 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 - **`bulk_create_nodes` stores `''`**: it stored NULL, which read back as null. **Finding affected rows:**
   `SELECT graph_id, s, "key" FROM Graph_KG.rdf_props WHERE val IS NULL` (a property written as null by another path
   shows too). <!-- R307 -->
+- **`set_edge_weight` with a NaN or infinite weight keeps the relationship readable: data written wrong.** It wrote
+  the weight as the bare token `NaN` or `Infinity`, which is not JSON, so every property read of that relationship
+  failed (`CY_REL_PROP`, SQLCODE -149) and its other properties could no longer be read; it now stores the weight as
+  a Cypher `SET r.weight = 0.0 / 0` does (`"NAN"`, `"INF"`, `"-INF"`). Qualifier text it cannot parse raises
+  `GraphWriteError` and is left as it was, where it was replaced by the weight alone, dropping every other key.
+  **Finding affected rows:** the NaN and Infinity query of the next entry; a relationship whose other properties were
+  dropped this way left no mark.
 - **`create_edge` and `store_edge` refuse a NaN or infinite qualifier with `ValueError`**, as `weight` does: it was
   written as the invalid JSON `NaN`, and one such row failed every relationship read in the namespace. **Finding
   affected rows:**

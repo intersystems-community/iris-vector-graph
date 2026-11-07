@@ -25,6 +25,16 @@ from iris_vector_graph.schema_name import rewrite_schema_text
 logger = logging.getLogger(__name__)
 
 
+
+def _cypher_json_number(v):
+    """`v` as a relationship's qualifiers JSON holds it: a NaN or an infinity spelled as a Cypher write stores it
+    (`SET r.w = 0.0 / 0` writes `"NAN"`; `"INF"`, `"-INF"`), any other value as it is. `json.dumps` wrote the bare
+    tokens `NaN` / `Infinity`, which are not JSON, and every property read of the relationship then failed (4.6.0)."""
+    if isinstance(v, float) and not math.isfinite(v):
+        return "NAN" if math.isnan(v) else ("INF" if v > 0 else "-INF")
+    return v
+
+
 def _rollback_conn(conn) -> None:
     """Roll the connection back before raising; a failure here is cleanup and must not hide the error raised."""
     try:
@@ -1286,17 +1296,21 @@ class NodesEdgesMixin:
             if not rows:
                 _rollback(cursor)
                 return False
-            new_weight = float(weight)
+            new_weight = _cypher_json_number(float(weight))
             for row_id, qual_json in rows:
+                # qualifier text that is not a JSON object is refused, not replaced: `{}` in its place dropped every
+                # other key of the relationship without a word (4.6.0)
                 try:
                     quals = json.loads(qual_json) if qual_json else {}
-                except (TypeError, ValueError):
-                    quals = {}
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"the qualifiers of {source} -[{predicate}]-> {target} are not JSON: {exc}") from exc
                 if not isinstance(quals, dict):
-                    quals = {}
+                    raise ValueError(f"the qualifiers of {source} -[{predicate}]-> {target} are not a JSON object")
+                quals = {k: _cypher_json_number(v) for k, v in quals.items()}
                 quals["weight"] = new_weight
                 cursor.execute(
-                    f"UPDATE {self._t('rdf_edges')} SET qualifiers = ? WHERE %ID = ?", [json.dumps(quals), row_id]
+                    f"UPDATE {self._t('rdf_edges')} SET qualifiers = ? WHERE %ID = ?",
+                    [json.dumps(quals, allow_nan=False), row_id],
                 )
             cursor.execute("COMMIT")
         except Exception as e:
