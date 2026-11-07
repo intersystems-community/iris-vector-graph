@@ -2095,7 +2095,11 @@ class QueryMixin:
             sql_query.return_items = list(parsed.return_clause.items)
             sql_query.parsed_query = parsed
         if sql_query.var_length_paths:
-            return self._route_var_length(sql_query, parameters)
+            routed = self._route_var_length(sql_query, parameters)
+            # 4.6.0 R311: the BFS routes build their own rows; their list, map and path columns are answered as Python
+            # values, as the SQL route's are
+            _decode_json_value_columns(routed, sql_query)
+            return routed
         metadata = sql_query.query_metadata
         if sql_query.is_transactional:
             _ledger_check(self, "cypher_dml")
@@ -2533,6 +2537,10 @@ class QueryMixin:
             metadata=result.metadata,
         )
 
+    # 4.6.1: remove, measured unreachable. Since 4.6.0 R308 (3ff6a049) a named path expands in SQL whatever its RETURN
+    # (translator._vlp_bfs_answers), and path functions need a named path; shortestPath has its own route and
+    # approx_count_distinct goes to its own handler (_execute_approx_count_distinct). Only unit tests that patch
+    # _vlp_bfs_answers reach it.
     def _execute_var_length_labeled_path_funcs(
         self, sql_query, parameters, vl0, source_ids=None
     ) -> "IVGResult":
@@ -3122,6 +3130,8 @@ class QueryMixin:
                 return IVGResult(columns=null_cols, rows=[[None] * len(null_cols)], metadata=sql_query.query_metadata)
             return IVGResult(columns=out_cols, rows=[], metadata=sql_query.query_metadata)
 
+        # 4.6.1: remove this step, measured unreachable: a RETURN of the hop's relationship variable expands in SQL since
+        # 4.6.0 R294 (translator._vlp_bfs_answers).
         # Step 5: RETURN r, one row per path: the path's relationships as the SQL route gives them (CY_VLP_PATHS), a
         # JSON list of {"type", "props"}, each edge's qualifiers read by the row it walked. It was [[":TYPE"], ...]
         # (4.6.0 R294).
