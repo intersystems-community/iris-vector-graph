@@ -476,6 +476,16 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
 - A read refused for a missing privilege logs only at DEBUG (`execute_sql error`); raise it to WARNING (R4 expert W2)
 - `kg_PAGERANK()` and `delete_node` let `iris.dbapi.OperationalError` (SQLCODE -99) through, and `delete_node` raises a
   plain `RuntimeError` for SQLCODE -415: raise `RuntimeError` naming the method and `GraphWriteError` (R4 expert W3)
+- Personalized PageRank (`kg_PERSONALIZED_PAGERANK`, `ppr()`, `CALL ivg.ppr`) leaves out nodes with no edges; answer
+  them 0.0 as networkx does (R4 python W5)
+- Global PageRank is networkx's on the multigraph (one edge per type between a pair); say so beside `pagerank(G,
+  weight=None)` in USER_GUIDE and API_REFERENCE (R4 python W6)
+- A weighted path's `path.costs` and `totalCost` read as integers for weights written as 1.0, and `gds` `costs` are
+  running totals: keep the weights as written and say what `gds` `costs` hold (R4 python W7)
+- No batch loader takes a plain edge's weight (`bulk_create_edges` refuses `weight` and `qualifiers`); add one or
+  document `create_edge` as the route in DATA_FORMATS (R4 python W9)
+- `CALL ivg.eigenvector` reports non-convergence in `result.error` as IRIS text; `RETURN 1 / 0`'s `result.error` is IRIS
+  text naming `CYPHERFN_IVGTYPEERROR`: start each with the openCypher name (R4 python W3, W4)
 
 - `test_203` TestCalendarAccessors::test_datetime_calendar_fields_with_zone_name fails under driver 5.4.1 only (the raw
   cursor reads `'45'`, 5.4.0 `45`); already failing on the release head (fixes51)

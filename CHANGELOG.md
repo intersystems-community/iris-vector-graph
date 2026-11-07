@@ -232,10 +232,10 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   three JSON-text columns), and a relationship, returned by itself or inside a list or map (`collect(r)`), a dict
   `{"type", "props"}` (over Bolt, `RETURN r` is a Relationship). A string the query builds stays a string; a
   stored property string that spells a list, a map or a boolean still reads as one
-  ([Known issues](docs/KNOWN_ISSUES.md#a-stored-string-that-spells-a-boolean-a-list-or-a-map-reads-as-one-and-u0000-as-the-empty-string)). Drop `json.loads` on result values.
+  ([Known issues](docs/KNOWN_ISSUES.md#a-stored-string-that-spells-a-boolean-a-list-or-a-map-reads-as-one-and-u0000-as-the-empty-string)). Drop `json.loads` on result values, except for nodes: keep it for `RETURN n`'s `n_labels` and `n_props` columns and for each entry of a nested node's `_props` (`'{"key":"k","value":"a"}'`).
 - A list or map property reads as the list or map (Fixed: values): drop `json.loads` on `x.p` and `properties(n)`.
-- With no `USE GRAPH`, `MATCH (a), (b)` pairs each graph's nodes only: for pairs across graphs, one `USE GRAPH` query
-  per graph.
+- With no `USE GRAPH`, `MATCH (a), (b)` pairs each graph's nodes only, never a node of one graph with a node of
+  another: for pairs across graphs, read each graph's nodes with its own `USE GRAPH` query and pair them in Python.
 - `size()` of a number, a boolean or a map, and `abs`, `ceil`, `floor`, `round`, `sign`, `sqrt`, `exp`, `log`,
   `log10`, `sin`, `cos`, `tan`, `cot`, `asin`, `acos`, `atan`, `degrees`, `radians` and `haversin` of a string, a
   boolean, a list or a map, raise `TypeError` (they answered a number: `abs('a')` was 0, `sqrt(true)` 1): fix the
@@ -274,16 +274,20 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 - Integer division truncates toward zero, and arithmetic on a zero divisor or a value of the wrong type fails with
   openCypher's `ArithmeticError` / `TypeError`: `toFloat(x) / 2` for a fraction; guard the operands. Where the
   query's text shows the error (`'a' - 1`) `execute_cypher` raises Python's `TypeError`; where IRIS meets it on a row
-  (`1 / 0`, `n.name - 1`) the read fails as any read does ([User guide](docs/USER_GUIDE.md#errors)): `result.error`
-  holds the openCypher name (`ArithmeticError: integer division by zero`), or `raise_on_error=True` raises
-  `RuntimeError`.
+  (`1 / 0`, `n.name - 1`) the read fails as any read does ([User guide](docs/USER_GUIDE.md#errors)): `result.error` is
+  IRIS's SQL error text, which contains the openCypher name after the IVG function that raised it
+  (`... [%msg: <SQL Function GRAPH_KG.CYPHERFN_IVGTYPEERROR failed with error: SQLCODE=-400,%msg=ArithmeticError:
+integer division by zero>]`; on a row, `GRAPH_KG.CY_ARITH`), and `raise_on_error=True` raises `RuntimeError` with that
+  text. Test for the name with `in`, not `startswith`.
 - `<`, `<=`, `>`, `>=` between two durations answer null: compare their components.
 - A CREATE or MERGE between matched nodes refuses a relationship property computed from the row: compute it in a
   `WITH`.
 - `MERGE` with no `USE GRAPH` matches and creates in the default graph only, and `MERGE ... ON CREATE SET n = {...}`
   or `ON MATCH SET n = {...}` on a node is refused: add `USE GRAPH '<g>'`; use `SET n += {...}`, or a `SET` after the `MERGE`.
 - A `SET`, `REMOVE`, `DELETE`, `MERGE` or `CREATE` after a `WITH` whose shape cannot be answered raises `SyntaxError`
-  ("split the query"): split it into a read and a write.
+  ("split the query"): the write reads, after the `WITH`, a property or label that an earlier `SET` or `REMOVE` of the
+  same rows changed, where the `MATCH` before it filters on what was changed; the message names the case. Split it
+  into a read and a write.
 - `create_edge` and `store_edge` refuse a NaN or infinite qualifier with `ValueError`: drop or encode such values.
 - `ppr()` takes one seed or a list of node IDs and raises `TypeError` otherwise.
 - The bulk loaders refuse rows that are not the documented shapes with `ValueError`: `bulk_create_nodes` and
@@ -292,14 +296,21 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   dict. Send the shape each method's docstring (API_REFERENCE) states.
 - `kg_WCC` takes no `max_iterations` limit by default (it was 100) and raises "WCC did not converge" at one that is hit:
   drop `max_iterations=`, or raise it above the graph's diameter.
-- An engine no longer sets the module-wide `set_schema_prefix`: call it yourself for an engine-less translation.
+- An engine no longer sets the module-wide `set_schema_prefix`: for an engine-less translation call it yourself
+  (`from iris_vector_graph.cypher.translator import set_schema_prefix`).
 - `initialize_schema()`'s status keys say what the run did (`tables_created` is a list) and `routines` is spelled as
-  the catalog does (`kg_PPR`): update scripts that read them.
+  the catalog does (`kg_PPR`): update scripts that read them. Search for `tables_created` read as a boolean (it was
+  always `True`, now `[]` on a re-run), `kg_built` (now `True` only when this run built `^KG`) and upper-case routine
+  names (`KG_PPR`, now `kg_PPR`; `kg_Betweenness`).
 - `IRISGraphEngine(EmbeddedConnection())` outside IRIS raises `EmbeddedUnavailableError`: run under `irispython` or
   connect over TCP.
 - The `ai` extra, the benchmark and test-only classes, `User.Exec`, `GraphOperators`, `LIST_HEAD`, `LIST_LAST`,
   `User.funcSTRSPLIT`, `execute_weighted_shortest_path`, `NKGAccel.PPRNative` / `PPRJson` and the IPM module manifests are gone
-  (Removed): drop them from install specs and vendored trees.
+  (Removed): drop them from install specs and vendored trees. Replacements: `CALL ivg.shortestPath.weighted` for
+  `execute_weighted_shortest_path`; `engine.kg_PERSONALIZED_PAGERANK()` or `engine.ppr()` (in ObjectScript
+  `Graph.KG.PageRank.RunJson`) for `PPRNative` / `PPRJson`; the IVG Schema's `STR_SPLIT` for `User.funcSTRSPLIT`;
+  `head()` and `last()` for `LIST_HEAD` / `LIST_LAST`; the IVG Schema's `kg_TXT`, `kg_KNN_VEC` and `kg_RRF_FUSE`
+  for `GraphOperators`' procedures; none for `User.Exec`.
 - `docker-compose.yml` names no container and takes its ports from `IVG_IRIS_PORT` / `IVG_WEB_PORT`: find the
   container with `docker compose ps`.
 - The Arno loaders resolve one library path (`IVG_ARNO_LIB`, else a recorded path in the manager or binary directory,

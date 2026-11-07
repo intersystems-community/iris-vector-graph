@@ -459,7 +459,9 @@ engine.sync()
 Every node of the graph is in every answer, a node with no edge too: it has a PageRank score, a degree and closeness
 row (0), a component and a community of its own, coreness 0 and no triangles, and the `n` of the degree and
 closeness formulas below is `node_count()`. So an answer is networkx's on the graph with every node, edgeless ones
-included. Before 4.6.0 a node with no edge was in no answer and `n` counted only the nodes with an edge. Ranked
+included. Before 4.6.0 a node with no edge was in no answer and `n` counted only the nodes with an edge. Personalized
+PageRank is the exception: `kg_PERSONALIZED_PAGERANK()`, `ppr()` and `CALL ivg.ppr` answer only the nodes reached from
+the seeds, and a node with no edge is not in the answer (networkx gives it 0.0). Read a missing node as 0.0. Ranked
 answers go highest first and break a tie by node ID in IRIS collation (numbers first, by value, then text: `9`,
 `10`, `07`, `a`); two scores equal to 12 decimal places are a tie, so float noise between two nodes in the same
 position does not order them.
@@ -608,7 +610,10 @@ iterates on A + I as networkx does, every node taking part (a node with no edge 
 does on the same graph; raise `max_iter` or `tol`. A graph with no cycle, or two separate cycles of the same weight,
 converges slowly or not at all. Before 4.6.0 it iterated on A, defaulted to 30 rounds and answered the last round
 without a word: on a graph whose only cycle was a directed 3-cycle with tails the answer changed with `max_iter`
-mod 3 and matched networkx for no `max_iter`. `CALL ivg.eigenvector` answers the same and raises the same.
+mod 3 and matched networkx for no `max_iter`. `CALL ivg.eigenvector` answers the same. When it does not converge it
+reports it as any failed read does: `execute_cypher` answers no rows with `result.error` holding IRIS's text, which
+contains `PowerIterationFailedConvergence`, and `execute_cypher(..., raise_on_error=True)` raises
+`PowerIterationFailedConvergence`.
 
 Betweenness runs Brandes from `sample_size` source nodes and scales by the node count over `sample_size`. The default,
 0, uses every source on a graph of up to 200 nodes and 200 of them above that, an approximation. Any `sample_size` at
@@ -668,8 +673,7 @@ projections), then a configuration map: `CALL gds.shortestPath.dijkstra.stream('
 targetNode: 'erin'})`. The defaults are in parentheses. The four `ivg.*` centrality procedures answer highest score first,
 ties by node ID, and `topK` keeps the highest; before 4.6.0 `ivg.closeness` kept the first nodes by ID and
 `ivg.eigenvector` ignored `topK`. The community procedures are in [Communities](COMMUNITIES.md#cypher-procedures).
-The search procedures (`ivg.vector.search`, `ivg.bm25.search`, `ivg.ivf.search`, `ivg.retrieve`, `ivg.neighbors`)
-are not described in this guide yet; [section 7](#7-text-and-vector-search) describes the Python search methods.
+The search procedures are in the table at the end of this section.
 
 A `direction` (the procedures below, `ivg.neighbors`, and the methods `degree_centrality`, `betweenness_centrality`,
 `closeness_centrality`, `kg_NEIGHBORS`, `kg_MENTIONS`, `fhir_expand_concepts` and `fhir_concept_ppr`) is `"out"`
@@ -708,6 +712,20 @@ engine.execute_cypher(
 
 The `score` is the degree over the five other nodes, as for `degree_centrality()` above.
 
+The search procedures take their arguments in order (defaults in parentheses); `ivg.vector.search` also takes an
+options map. [Section 7](#7-text-and-vector-search) describes the indexes and the Python search methods they read.
+
+| Procedure           | Arguments                                                                                                                           | Options                                                                                                       | Yields              |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `ivg.bm25.search`   | `name` (a BM25 index), `query` (text), `k`                                                                                          | none                                                                                                          | `node`, `score`     |
+| `ivg.vector.search` | `label`, `property` (string literals), `query` (a vector, or a node ID whose stored vector is the query), `limit`                   | `similarity` ("cosine"; "dot_product"), `embedding_config` (an IRIS embedding configuration: `query` is text) | `node`, `score`     |
+| `ivg.ivf.search`    | `name` (an IVF index), `query_vec` (a list of floats), `k`, `nprobe`                                                                | none                                                                                                          | `node`, `score`     |
+| `ivg.retrieve`      | `query` (text), `limit` (10), `bm25_name` ("default"), `vec_label` ("\*"), `rrf_k` (60), `embedding_config` (the engine's embedder) | none                                                                                                          | `node`, `rrf_score` |
+| `ivg.neighbors`     | `source_ids` (a node ID or a list), `predicate` (every type), `direction` ("out")                                                   | none                                                                                                          | `neighbor`          |
+
+`ivg.retrieve` fuses a BM25 ranking with a vector ranking (reciprocal rank fusion), so it needs an embedder: without
+one it answers no rows and `result.error` says so. [Section 7](#bm25-text-search) has an `ivg.bm25.search` example.
+
 ---
 
 ## 7. Text and vector search
@@ -721,6 +739,10 @@ engine.bm25_build("bios", ["bio"])["indexed"]
 # → 5
 [node for node, score in engine.bm25_search("bios", "vector", k=3)]
 # → ['bob', 'alice']
+engine.execute_cypher(
+    "CALL ivg.bm25.search('bios', 'vector', 3) YIELD node, score RETURN node.node_id AS id"
+).rows
+# → [['bob'], ['alice']]
 ```
 
 Five people have a bio (Acme has none). Both Bob's and Alice's bios contain "vector" once; Bob's is shorter, so it

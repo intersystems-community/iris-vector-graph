@@ -83,8 +83,9 @@ It prints:
 [['Bob']]
 ```
 
-`initialize_schema()` sets up IVG in the namespace the connection is in (here `USER`) and prints nothing; it logs one
-summary line at INFO. With logging configured, `import iris` itself logs two warnings from the driver's
+`initialize_schema()` sets up IVG in the namespace the connection is in (here `USER`) and prints nothing; it logs a
+summary line at INFO (`IVG ready in namespace USER, ...`), one more when it rebuilds `^KG` from rows already there,
+and, where the Arno library is loaded, lines about `^NKG`. With logging configured, `import iris` itself logs two warnings from the driver's
 embedded-Python wrapper (`IRISINSTALLDIR or ISC_PACKAGE_INSTALLDIR environment variable is not set`,
 `Embedded Python not configured`): they are about running inside IRIS, and a connection like this one does not use
 it. Run it once per namespace, and again after you upgrade the package. `embedding_dimension` is the
