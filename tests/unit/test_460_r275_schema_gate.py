@@ -186,3 +186,19 @@ def test_the_worker_answers_on_its_own_stdout_and_reports_a_failure(tmp_path):
                        timeout=60, cwd=str(gate.REPO))
     answers = [json.loads(line) for line in r.stdout.splitlines()]
     assert len(answers) == 1 and answers[0]["ok"] is False and "error" in answers[0]
+
+
+def test_dry_plan_prints_the_schedule_and_touches_nothing(tmp_path, capsys):
+    """`--dry-plan`: the paths, the sides and the interleaved order, with no worker started and no file written."""
+    code = gate.main(["--dry-plan", "--runs", "5", "--paths", "pagerank,graph_erase", "--out", str(tmp_path / "g"),
+                      "--worker", str(tmp_path / "no_such_worker.py"), "--base-code", str(tmp_path / "absent")])
+    out = capsys.readouterr().out
+    assert code == 0 and not (tmp_path / "g").exists()
+    assert out.count("\n") >= 5 * 2 * 3 and "pagerank" in out and "graph_erase" in out
+    assert "run 0" in out and "run 4" in out and "IVG262BASE" in out and "IVGALT" in out
+
+
+def test_the_nkg_row_says_what_each_side_times():
+    v = gate.compare(timings([1.0] * 5, path="nkg_first_read_after_erase"))
+    md = gate.render_markdown(v, {"runs": 5})
+    assert "BuildNKG + SCCJson" in md and "rebuild inside" in md

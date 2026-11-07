@@ -57,6 +57,11 @@ PATHS = (
     "collect_node_property",
     "nkg_first_read_after_erase",
 )
+#: What a path's timed body is, where the sides differ (said in the report's row).
+NOTES = {
+    "nkg_first_read_after_erase": "the first correct read after an erase: base BuildNKG + SCCJson (a42db224 has no "
+                                  "EnsureNKG); current SCCJson, its rebuild inside",
+}
 DEFAULT_OUT = Path.home() / ".cache" / "ivg-bench" / "spec262" / "gate"
 
 
@@ -152,8 +157,9 @@ def render_markdown(verdicts: Sequence[Verdict], meta: dict) -> str:
     ]
     for v in verdicts:
         change = "-" if v.ratio is None else f"{(v.ratio - 1) * 100:+.1f}%"
+        note = f" ({NOTES[v.path]})" if v.path in NOTES else ""
         lines.append(f"| {v.path} | {v.side} | {_fmt(v.base_median)} | {_fmt(v.median)} | {change} | "
-                     f"{'ok' if v.ok else 'FAIL: ' + v.reason} |")
+                     f"{'ok' if v.ok else 'FAIL: ' + v.reason}{note} |")
     for side, info in (meta.get("sides") or {}).items():
         lines.append("")
         lines.append(f"- {side}: {info.get('namespace')} ({info.get('schema')}), code {info.get('version')}")
@@ -203,6 +209,7 @@ def parse(argv):
     p.add_argument("--default-ns", default="IVG460FXGATE")
     p.add_argument("--alt-ns", default="IVG460FXGALT")
     p.add_argument("--alt-schema", default="IVGALT")
+    p.add_argument("--dry-plan", action="store_true", help="print the sides, paths and interleaved order; run nothing")
     return p.parse_known_args(argv)
 
 
@@ -218,6 +225,12 @@ def main(argv=None) -> int:
         "default": (str(REPO), args.default_ns, "Graph_KG"),
         "alt": (str(REPO), args.alt_ns, args.alt_schema),
     }
+    if args.dry_plan:
+        for side, (code, ns, schema) in sides.items():
+            print(f"side {side}: {ns} ({schema}), code {code}")
+        for run, path, side in schedule(paths, SIDES, args.runs):
+            print(f"run {run}  {path:28s} {side}")
+        return 0
     if not Path(args.base_code).is_dir():
         print(f"no {BASE_COMMIT} checkout at {args.base_code}: run scripts/fixtures/build_release_namespace.py "
               f"{BASE_COMMIT} {args.base_ns} first", file=sys.stderr)
