@@ -65,6 +65,10 @@ result = engine.execute_cypher(
     {"id": "alice"},
 )
 print(result.rows)  # [['Bob']]
+
+# Leave USER as you found it: the Quickstart counts a namespace with no other graph in it
+engine.delete_node("alice")
+engine.delete_node("bob")
 ```
 
 It prints:

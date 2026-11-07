@@ -79,6 +79,10 @@ its tables in the IVG Schema, `Graph_KG`. It is safe to run again; run it after 
 Five biomedical entities and five relationships: TP53 interacts with BRCA1, BRCA1 targets the drug Olaparib and is
 associated with breast cancer, and Olaparib treats breast and ovarian cancer.
 
+The counts and scores below are those of a namespace with no other graph in it. The README's first query deletes its
+two nodes when it is done. In a namespace that already holds a graph, `engine.erase_all()` empties it first (it removes
+every graph's content), or use another namespace; otherwise the counts and the PageRank scores differ.
+
 ```python
 nodes = [
     {"id": "gene:BRCA1",      "labels": ["Gene"],    "properties": {"name": "BRCA1",    "type": "tumor_suppressor"}},

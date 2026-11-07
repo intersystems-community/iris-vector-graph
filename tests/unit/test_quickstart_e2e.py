@@ -31,6 +31,19 @@ class TestTheReadmeSnippet:
         code = q.readme_snippet((ROOT / "README.md").read_text())
         assert q.expected_print(code) == [["Bob"]]
 
+    def test_it_removes_the_nodes_it_creates(self):
+        """The guides are read in order in one namespace: the README's alice and bob, left in USER, made QUICKSTART's
+        first block print "7 nodes, 6 edges" for its "5 nodes, 5 edges" and its PageRank list them (quickstart_e2e
+        --isolated on d004e79e). The snippet deletes, after its promise, every node it creates."""
+        import re
+
+        code = q.readme_snippet((ROOT / "README.md").read_text())
+        created = re.findall(r'create_node\(\s*"([^"]+)"', code)
+        deleted = re.findall(r'delete_node\(\s*"([^"]+)"', code)
+        assert created and sorted(created) == sorted(deleted), (created, deleted)
+        promise = code.rindex("print(")
+        assert all(code.index(f'delete_node("{n}"') > promise for n in deleted), "delete after the promise"
+
     def test_a_missing_section_is_an_error_not_an_empty_program(self):
         with pytest.raises(ValueError, match="Run your first query"):
             q.readme_snippet("# README\n\n```python\nprint(1)\n```\n")
