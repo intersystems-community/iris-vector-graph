@@ -238,10 +238,11 @@ def test_every_side_tunes_the_same_tables_after_seeding():
 
 
 # --- the two slowdowns Tom allowed, by design (2026-11-07) ---------------------------------------------------------
-def test_exactly_two_paths_are_allowed_each_with_its_cost_and_reason():
-    assert set(gate.ALLOWED) == {"collect_node_property", "pagerank"}
+def test_exactly_three_paths_are_allowed_each_with_its_cost_and_reason():
+    assert set(gate.ALLOWED) == {"collect_node_property", "pagerank", "pagerank_cached"}
     for path, entry in gate.ALLOWED.items():
         assert 0 < entry["cost"] < 1 and entry["reason"] and entry["fix"]
+    assert "R313" in gate.ALLOWED["pagerank_cached"]["fix"] and "R306" in gate.ALLOWED["pagerank_cached"]["fix"]
     assert "R262" in gate.ALLOWED["collect_node_property"]["fix"]
     assert "R306" in gate.ALLOWED["pagerank"]["fix"]
 
@@ -268,3 +269,11 @@ def test_an_allowed_path_more_than_twice_its_cost_fails():
 def test_no_other_path_is_allowed_past_five_percent():
     v = gate.compare(timings([1.0] * 5, default=[1.06] * 5, path="cypher_one_hop"))
     assert not next(x for x in v if x.side == "default").ok
+
+
+def test_cached_pagerank_is_allowed_up_to_twice_its_cost():
+    cost = gate.ALLOWED["pagerank_cached"]["cost"]
+    within = gate.compare(timings([1.0] * 5, default=[1.0 + cost] * 5, path="pagerank_cached"))
+    past = gate.compare(timings([1.0] * 5, default=[1.0 + 2 * cost + 0.01] * 5, path="pagerank_cached"))
+    assert next(x for x in within if x.side == "default").allowed
+    assert not next(x for x in past if x.side == "default").ok

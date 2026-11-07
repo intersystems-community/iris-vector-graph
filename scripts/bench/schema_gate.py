@@ -58,7 +58,7 @@ PATHS = (
     "collect_node_property",
     "nkg_first_read_after_erase",
 )
-#: The two slowdowns Tom allowed (2026-11-07): each is the cost of a correctness fix, measured against a42db224 at
+#: The three slowdowns Tom allowed (2026-11-07): each is the cost of a correctness fix, measured against a42db224 at
 #: 20,000 nodes. Such a path is "allowed (by design)", not passed, while it is slower by at most twice its cost; past
 #: that it fails, so the allowance cannot hide a new regression. Every other path meets THRESHOLD.
 ALLOWED = {
@@ -71,6 +71,13 @@ ALLOWED = {
         "cost": 0.53,
         "reason": "computing PageRank first reads the nodes with no edge (156 ms against 102 ms)",
         "fix": "R225/R306: a node with no edge has its PageRank score (4.6.1: the loners in PageRank's own pass)",
+    },
+    "pagerank_cached": {
+        "cost": 0.75,
+        "reason": "a cached call reads the node table's row count and largest id first (3.1-3.3 ms against "
+                  "1.7-1.9 ms, +1.3 ms)",
+        "fix": "R313's node-set token, which a node added or removed with no edge moves, the price of R306's loner "
+               "scores in a cached answer (4.6.1: a nodes delete hook read in Lookup)",
     },
 }
 #: What a path's timed body is, where the sides differ (said in the report's row).

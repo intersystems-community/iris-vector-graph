@@ -445,6 +445,10 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   +50% against 4.5.x since R262 (speed gate, R275; allowed for 4.6.0 by Tom)
 - PageRank's loners (the nodes with no edge, R306) read in PageRankGlobalJson's own pass over the node set, not by a
   separate LonersJson scan: computing PageRank is +53% against 4.5.x (speed gate, R275; allowed for 4.6.0 by Tom)
+- A delete hook on the nodes table (a functional index like idx_labels_adj, or an AFTER DELETE trigger) bumping a
+  counter that AlgoCache.Lookup adds to its token, so a cached PageRank needs no node-set query: R313's COUNT/MAX
+  token costs +1.3 ms a cached call (allowed for 4.6.0 by Tom); the row-id counter alone (branch
+  460-speedgate-r313-token, c40f74dc) is 1.76 ms against 1.74 ms but misses a bare node's DETACH DELETE or SQL DELETE
 - `test_230_migration::test_the_kg_rekey_leaves_every_procedure_in_place` leaves default-graph registry rows pointing at
   `kg_NodeEmbeddings_optimized` and `kg_EdgeEmbeddings` when run out of the suite's order (e2efix-vectors)
 - (Fixed in 4.6.0 by R306 for closeness `both`; the rest stays deferred.) `ClosenessGlobal` and `ClosenessGlobalMSBFS` read direction `both` as `out`, so `ivg.closeness` and

@@ -288,13 +288,14 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   string inside the list: `[[n.x], {k: n.s}]` answered `['[1]', '{"k":"a"}']`), and a string is a string (Bolt and
   GraphQL answered `RETURN '{"a":1}'` as a map, and Bolt `RETURN '1e5'` as 100000.0). A whole node is still its three
   columns of JSON text. **What to do:** drop `json.loads` on such a value (it raises `TypeError` on a list).
-  <!-- R311 -->
-- **Two reads cost more than in 4.5.x, for right answers.** `collect()` of a node property takes about 50% longer
+  <!-- R314 -->
+- **Three reads cost more than in 4.5.x, for right answers.** `collect()` of a node property takes about 50% longer
   (166-188 ms against 111-125 ms for 20,000 values): each element is built as typed JSON, so a stored number stays a
   number and a list a list (R262). Computing PageRank takes about 53% longer (156 ms against 102 ms at 20,000 nodes): it
-  reads the nodes with no edge first, so they get their score (R225, R306); a cached call does not (R313). Spec 262's
-  speed gate holds every other write, erase and read path to 5% of 4.5.x, on the default and a non-default IVG Schema.
-  <!-- R275 -->
+  reads the nodes with no edge first, so they get their score (R225, R306); a cached call takes about 1.3 ms longer
+  (3.1-3.3 ms against 1.7-1.9 ms), reading the node table's row count and largest id so that a node added or removed
+  with no edge is seen (R313). Spec 262's speed gate holds every other write, erase and read path to 5% of 4.5.x, on the
+  default and a non-default IVG Schema. <!-- R275 -->
 - **With no `USE GRAPH`, a `MATCH` of two patterns pairs each graph's nodes only.** Before 4.6.0 a cartesian or
   disconnected `MATCH` (`MATCH (a:A), (b:B)`) with no `USE GRAPH` paired every graph's `a` with every graph's `b`, so a
   namespace with named graphs answered rows mixing two graphs' nodes, and a write through them (`SET a.p = b.q`, a
@@ -1157,19 +1158,19 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 - **A map literal spells a property as `RETURN x.p` reads it.** `RETURN {k: x.p}` answered the API's number text
   `'0'` as the number 0 where `RETURN x.p`, `[x.p]` and `x {.p}` answer the string, and wrote the strings `'.95'` and
   `'007'` as bare numbers and a newline or `$Char(0)` unescaped, so the map's JSON did not parse; a relationship's
-  boolean was 1 or 0. Found by the value matrix's new reader of list and map expressions. <!-- R311 -->
+  boolean was 1 or 0. Found by the value matrix's new reader of list and map expressions. <!-- R314 -->
 - **A slice keeps its elements' types.** `['a', [1], {k: 1}, true][0..4]` answered `['a', '[1]', '{"k":1}', '1']`;
-  each element is now read as its own JSON. <!-- R311 -->
+  each element is now read as its own JSON. <!-- R314 -->
 - **A parameter's element, slice or key answers.** `RETURN $p[1]` failed `-23` (read as a node's property), `$m.k`
   bound one parameter for its two `?`, `RETURN $b` of `true` answered 1 and `[$b]` `[1]`; the query knows the value
-  before it runs, so it binds it. `WITH $p AS l RETURN l` answered `l` as a node's three columns. <!-- R311 -->
+  before it runs, so it binds it. `WITH $p AS l RETURN l` answered `l` as a node's three columns. <!-- R314 -->
 - **A mixed `UNWIND` of a literal list answers each value's type.** `UNWIND [n, r, p, 1.5, ['list'], 'text', '7',
 {a: 'map'}] AS v RETURN v` answered the string `'7'` as the integer 7, `1.5` as `Decimal('1.5')` under 5.4.0, and
-  the list, map and graph values as JSON text. <!-- R311 -->
+  the list, map and graph values as JSON text. <!-- R314 -->
 - **A mathematical function answers a float under 5.4.0.** `RETURN sqrt(12.96)` answered
-  `Decimal('3.600000000000000000')`. <!-- R311 -->
+  `Decimal('3.600000000000000000')`. <!-- R314 -->
 - **`MATCH p = ()-[:R]->() RETURN nodes(p)` answers.** It failed `-23` when the path's first node is anonymous.
-  <!-- R311 -->
+  <!-- R314 -->
 - **`min(r.w)` and `max(r.w)` are not rounded**: over a relationship property they answered 1 for 0.95 (the column
   was typed integer); they answer the value as `RETURN r.w` reads it. `max(n.flag)` answers a boolean, not `'true'`.
   <!-- R307 -->
@@ -1585,7 +1586,7 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   floats, 5.4.1 integers as text). A list must now be a list, a map a dict, an integer an `int` and a float a `float`,
   at every level; node, relationship and path values keep their documented renders. `IVG_TCK_LENIENT=1` keeps the old
   scoring, and `scripts/tck/rescore.py --mode typed` is the live rule. The value matrix no longer decodes JSON text
-  for its `collect`, `mapproj` and `props` readers either. <!-- R311 -->
+  for its `collect`, `mapproj` and `props` readers either. <!-- R314 -->
 - **A TCK scenario whose graph was not built fails, with the reason.** The harness ran each setup query under
   `except Exception: pass` and never read `IVGResult.error`, so a scenario whose setup failed ran on an empty graph; the
   named-graph build only logged, and the `^KG` sync, schema setup, multigraph mode and teardown errors were dropped too.
