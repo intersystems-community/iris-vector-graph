@@ -83,7 +83,7 @@ def loaded_kg(engine, vectors):
         except Exception:
             pass
 
-    engine.rebuild_kg()
+    engine.sync()
 
     engine.bm25_build("hla_kg", text_props=["name", "id"])
 
