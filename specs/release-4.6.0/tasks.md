@@ -484,6 +484,9 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   running totals: keep the weights as written and say what `gds` `costs` hold (R4 python W7)
 - No batch loader takes a plain edge's weight (`bulk_create_edges` refuses `weight` and `qualifiers`); add one or
   document `create_edge` as the route in DATA_FORMATS (R4 python W9)
+- A query that reads many properties prepares slowly: the SQL route joins `rdf_props` once per property use (six
+  comparisons of `x.v` with `y.v`: 18 tables, 41 s to prepare on 2026.3 x86; one join per variable and key: 8 tables,
+  6.6 s, same rows); join once per variable and key. KNOWN_ISSUES entry
 - `CALL ivg.eigenvector` reports non-convergence in `result.error` as IRIS text; `RETURN 1 / 0`'s `result.error` is IRIS
   text naming `CYPHERFN_IVGTYPEERROR`: start each with the openCypher name (R4 python W3, W4)
 

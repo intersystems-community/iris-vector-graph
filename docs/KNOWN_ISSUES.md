@@ -476,6 +476,22 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
   numbers do.
 - **Check:** `RETURN duration('PT1H').seconds` fails with SQLCODE -25.
 
+### A query that reads many properties prepares slowly
+
+- **Symptom:** the first run of a query that reads properties many times on the SQL route takes seconds to prepare.
+  Six comparisons of `x.v` with `y.v` (`RETURN x.v < y.v AS a, x.v <= y.v AS b, ...`) join 18 tables and took 41 s
+  to prepare on 2026.3 (x86); written with one join per variable and key, the same query is 8 tables and 6.6 s, with
+  the same rows. On 2026.3.0AI (ARM64, the laptop container) the query took 2.10 s the first time and 0.003 s the
+  second. Bound in a `WITH` first, it took 0.21 s, and both answered `[[True, True, False, False, False, True]]`
+  for `v` of 1 and 2.
+- **Cause:** the SQL route joins `rdf_props` once for each use of a property, not once per variable and key, and IRIS
+  prepares the plan over all of those joins.
+- **Versions:** 4.6.0 and earlier; on the 4.6.1 list.
+- **Workaround:** bind each property once in a `WITH`, then compare the bound values:
+  `MATCH (x), (y) WITH x.v AS xv, y.v AS yv RETURN xv < yv AS a, xv <= yv AS b, ...`. IRIS caches the prepared
+  plan, so only the first run of a query text pays the price; a query you run often pays it once.
+- **Check:** the first run of the query is much slower than the second.
+
 ### The first call of a query with undirected hops compiles slowly
 
 - **Symptom:** a query with up to three anchored undirected hops (`(a {name: $n})-[:L]-(b)-[:L]-(c)`) is rewritten into
