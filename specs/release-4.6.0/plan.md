@@ -78,6 +78,9 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
   uncached `pagerank` (+~37 ms at 20k nodes, R225/R306's edgeless-node scores) are allowed, with the measured cost and
   reason printed in the gate report and the CHANGELOG; an allowed path more than twice its documented cost still fails.
   Every other path meets FR-020a's 5%. 4.6.1: a typed aggregate for `collect()` and a fused loner pass in PageRank.
+- (2026-11-07) Cached PageRank allowed too (Tom): R313's node-set token costs +1.3 ms per cached call (3.1-3.3 ms
+  against 1.7-1.9 ms; it was 47-59 ms before R313); a cheaper token without a nodes delete hook missed Cypher `DETACH
+  DELETE` (a wrong answer) and is parked on 460-speedgate-r313-token. 4.6.1: a delete hook on `nodes` for the token.
 
 ## Doc-test conventions (layer 1, workstream D)
 
