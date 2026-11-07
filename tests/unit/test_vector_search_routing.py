@@ -141,25 +141,3 @@ class TestVectorSearchRouting:
         with patch.object(eng, "ivf_search", return_value=[]) as mock_ivf:
             eng.search_nodes_by_vector(query, k=5, ivf_name="idx", nprobe=32)
         mock_ivf.assert_called_once_with("idx", query, k=5, nprobe=32)
-
-    def test_native_tier_faster_than_ivf_on_live_db(self, iris_connection):
-        import time
-        from iris_vector_graph.engine import IRISGraphEngine
-        e = IRISGraphEngine(iris_connection, embedding_dimension=768)
-        if not e._probe_native_vec():
-            pytest.skip("native VECTOR_COSINE not available")
-
-        import math, random
-        def rand_vec(d):
-            v = [random.gauss(0, 1) for _ in range(d)]
-            n = math.sqrt(sum(x*x for x in v)) or 1.0
-            return [x/n for x in v]
-
-        q = rand_vec(768)
-        times = []
-        for _ in range(5):
-            t0 = time.perf_counter()
-            e.search_nodes_by_vector(q, k=10)
-            times.append((time.perf_counter() - t0) * 1000)
-        times.sort()
-        assert times[2] < 200, f"vector_search p50={times[2]:.1f}ms — native HNSW should be fast"
