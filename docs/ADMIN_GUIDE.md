@@ -880,8 +880,10 @@ when the ledger is on. IVG's own snapshots (`save_snapshot`, `restore_snapshot`)
 `^IVG.Ledger` with the ledger classes' storage, `^IVG.GraphMode` and `^IVG.TemporalStructural`; a global that is
 empty is not written. It leaves out `^IVG.Deploy`, `^IVG.CypherGen`, `^EmbedQueue`, and the tables
 `ledger_revisions` and `ledger_stats` as SQL (their storage globals are in it), `rdf_namespaces`,
-`relationship_mappings`, `table_mappings`, `fhir_bridges`, `code_crosswalk` and `embedding_quarantine`. A table it
-cannot read, such as an `fhir_*` table not created yet, is listed with 0 rows. A snapshot made through the HTTP
+`relationship_mappings`, `table_mappings`, `fhir_bridges`, `code_crosswalk` and `embedding_quarantine`. A table or
+global it cannot read (a login without SELECT on it, say) raises `SnapshotReadError`, a `RuntimeError` naming it and
+IRIS's error, and no archive is written; an `fhir_*` table not created yet (no FHIR graph set up) is left out. Before
+4.6.0 such a table was listed with 0 rows, so a restore from the archive emptied it. A snapshot made through the HTTP
 server goes to
 `IVG_SNAPSHOT_DIR`, the temporary directory unless you set it
 ([known issue](KNOWN_ISSUES.md#snapshots-made-through-the-rest-api-land-in-the-temporary-directory)).
