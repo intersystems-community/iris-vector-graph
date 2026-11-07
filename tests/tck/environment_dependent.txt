@@ -1,0 +1,5 @@
+# TCK scenarios whose expected answer depends on the host, not on IVG (docs/dev/TCK.md, "Environment-dependent
+# scenarios"). One per line: `<scenario key> | <reason>`, the key as results.tsv writes it. scripts/tck/summarize.py
+# still counts a listed failure as eligible and failed, and names it on its own line. List a scenario here only when
+# both answers are right for their host, never to hide an IVG defect.
+Temporal2.Temporal2 - Create Temporal Values from a String::[6] Should parse date time with named time zone from string -- @1.5 | Europe/Stockholm in 1818 comes from the host's tz database (Python zoneinfo reads /usr/share/zoneinfo first): a mainline build (macOS, the tzdata wheel) links Stockholm to Berlin and answers the expected +00:53:28; Debian and Ubuntu build tzdata with backzone, which keeps Stockholm's own offset, and answer +01:12:12 (both tz 2026e, measured 2026-11-07)

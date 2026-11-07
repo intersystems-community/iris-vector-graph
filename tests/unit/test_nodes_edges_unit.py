@@ -55,11 +55,12 @@ class TestCountNodes:
         sql = cursor.execute.call_args[0][0]
         assert "rdf_labels" in sql
 
-    def test_count_nodes_returns_zero_on_error(self):
+    def test_count_nodes_error_raises(self):
+        """A failed count raises (4.6.0; it answered 0)."""
         eng, conn, cursor = _make_eng()
         cursor.execute.side_effect = RuntimeError("table not found")
-        result = eng.count_nodes()
-        assert result == 0
+        with pytest.raises(RuntimeError, match="table not found"):
+            eng.count_nodes()
 
 
 # ---------------------------------------------------------------------------
@@ -349,11 +350,12 @@ class TestGetNode:
         result = eng.get_node("missing_node")
         assert result is None
 
-    def test_get_node_sql_error_returns_none(self):
+    def test_get_node_sql_error_raises(self):
+        """A failed read raises (4.6.0; it answered None, which read as no such node)."""
         eng, conn, cursor = _make_eng()
         cursor.execute.side_effect = RuntimeError("SQL error")
-        result = eng.get_node("any_node")
-        assert result is None
+        with pytest.raises(RuntimeError, match="SQL error"):
+            eng.get_node("any_node")
 
 
 # ---------------------------------------------------------------------------
@@ -391,14 +393,15 @@ class TestBulkLoadSession:
 
 class TestGetNodesExtended:
 
-    def test_exception_falls_back_to_cypher(self):
+    def test_exception_raises_without_cypher_fallback(self):
+        """A failed batch read raises (4.6.0); it no longer retries node by node through Cypher."""
         eng, conn, cursor = _make_eng()
         cursor.execute.side_effect = RuntimeError("SQL error")
         with patch.object(eng, "_get_node_cypher_fallback",
                           return_value={"id": "n1", "labels": []}) as mock_fb:
-            result = eng.get_nodes(["n1"])
-        mock_fb.assert_called_once_with("n1")
-        assert len(result) == 1
+            with pytest.raises(RuntimeError, match="SQL error"):
+                eng.get_nodes(["n1"])
+        mock_fb.assert_not_called()
 
     def test_empty_list_returns_empty(self):
         eng, conn, cursor = _make_eng()

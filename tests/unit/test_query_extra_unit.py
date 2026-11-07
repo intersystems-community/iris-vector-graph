@@ -28,7 +28,8 @@ def _make_eng(dim=4):
 class TestSemicolonMultiPartException:
 
     def test_sub_execute_exception_propagates(self):
-        """A part that raises fails the whole call: 4.5.1 swallowed it and answered with the other parts."""
+        """A part that raises fails the whole call (result.error, or raised with raise_on_error): 4.5.1 swallowed it and
+        answered with the other parts."""
         eng, conn, cursor = _make_eng()
 
         # Use a real semicolon+CALL query so the branch triggers
@@ -42,10 +43,13 @@ class TestSemicolonMultiPartException:
             return IVGResult(columns=["x"], rows=[["ok"]])
 
         with patch.object(eng, "_execute_parsed", side_effect=fake_parsed):
+            r = eng.execute_cypher("CALL apoc.something(); CALL apoc.other()", parameters={})
+        # the failing part is the answer: its error and no rows, not the other part's rows (4.6.0 contract A)
+        assert r.rows == [] and "first sub fails" in r.error and call_count[0] == 1
+        call_count[0] = 0
+        with patch.object(eng, "_execute_parsed", side_effect=fake_parsed):
             with pytest.raises(RuntimeError, match="first sub fails"):
-                eng.execute_cypher(
-                    "CALL apoc.something(); CALL apoc.other()", parameters={}
-                )
+                eng.execute_cypher("CALL apoc.something(); CALL apoc.other()", parameters={}, raise_on_error=True)
         assert call_count[0] == 1, "no part runs after one that failed"
 
 
@@ -69,10 +73,13 @@ class TestExecuteShortestPathCypherPaths:
     def test_all_shortest_path(self):
         """Line 396: all_shortest=True → find_all=1."""
         eng, conn, cursor = _make_eng()
-        with patch("iris_vector_graph.schema._call_classmethod", return_value='[]'):
+        # the store calls ShortestPathJson through its own _call_classmethod
+        with patch.object(eng._store, "_call_classmethod", return_value='[]') as mock_call:
             sq = self._make_sq(all_shortest=True)
             result = eng._execute_shortest_path_cypher(sq, {"src": "n1", "dst": "n2"})
         assert isinstance(result, IVGResult)
+        args = mock_call.call_args.args
+        assert args[1] == "ShortestPathJson" and args[2:4] == ("n1", "n2") and args[-1] == "1"
 
     def test_source_resolved_from_source_var(self):
         """Line 408: source_id resolved from source_var in parameters."""
@@ -85,9 +92,10 @@ class TestExecuteShortestPathCypherPaths:
             "source_var": "src", "target_var": "dst",
         }]
         sq.query_metadata = {}
-        with patch("iris_vector_graph.schema._call_classmethod", return_value='[]'):
+        with patch.object(eng._store, "_call_classmethod", return_value='[]') as mock_call:
             result = eng._execute_shortest_path_cypher(sq, {"src": "n1", "dst": "n2"})
         assert isinstance(result, IVGResult)
+        assert mock_call.call_args.args[1:4] == ("ShortestPathJson", "n1", "n2")
 
     def test_source_from_first_param_value(self):
         """Line 417: source_id from first parameters value (no source_var match)."""
@@ -100,9 +108,11 @@ class TestExecuteShortestPathCypherPaths:
             "source_var": "missing_var", "target_var": "dst",
         }]
         sq.query_metadata = {}
-        with patch("iris_vector_graph.schema._call_classmethod", return_value='[]'):
+        with patch.object(eng._store, "_call_classmethod", return_value='[]') as mock_call:
             result = eng._execute_shortest_path_cypher(sq, {"dst": "n2", "other": "n1"})
         assert isinstance(result, IVGResult)
+        # source: the first string parameter value; target: $dst
+        assert mock_call.call_args.args[1:4] == ("ShortestPathJson", "n2", "n2")
 
     def test_source_none_raises(self):
         """Lines 426-428: source_id None → ValueError."""

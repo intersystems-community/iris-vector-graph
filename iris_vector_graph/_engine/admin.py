@@ -833,27 +833,23 @@ class AdminMixin:
             cache.pop(graph, None)
 
     def list_active_queries(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Return the SQL statements running now; [] if the listing fails.
+        """Return the SQL statements running now. A failed listing raises (4.6.0; it answered [], which read as none).
 
         There used to be a Community guard here on `GetISCProduct() == 4`, but 4
         is every InterSystems IRIS, so it returned [] everywhere. The segfault it
         was written for came from the old statement (see `active_queries_sql`).
         """
         cursor = self.conn.cursor()
-        try:
-            cursor.execute(active_queries_sql(max(1, int(limit))))
-            return [
-                {
-                    "id": str(r[0]),
-                    "state": str(r[1]),
-                    "client": str(r[2]),
-                    "command": str(r[3])[:200],
-                }
-                for r in cursor.fetchall()
-            ]
-        except Exception as e:
-            logger.warning("list_active_queries failed: %s", e)
-            return []
+        cursor.execute(active_queries_sql(max(1, int(limit))))
+        return [
+            {
+                "id": str(r[0]),
+                "state": str(r[1]),
+                "client": str(r[2]),
+                "command": str(r[3])[:200],
+            }
+            for r in cursor.fetchall()
+        ]
 
     def kill_query(self, query_id: str) -> bool:
         """End the IRIS process with ID ``query_id`` (an ``id`` from ``list_active_queries``).

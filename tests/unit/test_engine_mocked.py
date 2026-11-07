@@ -92,9 +92,14 @@ class TestEngineBasicMethods:
         assert isinstance(props, dict)
 
     def test_get_node_properties_with_data(self):
-        self.cursor.fetchall.return_value = [("name", '"TP53"'), ("score", "0.9")]
+        # get_nodes reads (s, label) rows, then (s, key, CY_TYPED(val)) rows
+        self.cursor.fetchall.side_effect = [
+            [("n1", "Gene")],
+            [("n1", "name", "TP53"), ("n1", "score", 0.9)],
+        ]
         props = self.engine.get_node_properties("n1")
         assert isinstance(props, dict)
+        assert props == {"name": "TP53", "score": 0.9}
 
     def test_get_node_name_returns_value_or_none(self):
         name = self.engine.get_node_name("n1")

@@ -710,13 +710,14 @@ class TestEngineGetNodeMethods:
         self.engine, self.conn, self.cursor = _make_engine()
 
     def test_get_node_found(self):
-        self.cursor.fetchone.return_value = ("mesh:D003924",)
+        # get_nodes reads (s, label) rows, then (s, key, CY_TYPED(val)) rows
         self.cursor.fetchall.side_effect = [
-            [("Gene",)],
-            [("name", '"Diabetes mellitus"')],
+            [("mesh:D003924", "Gene")],
+            [("mesh:D003924", "name", "Diabetes mellitus")],
         ]
         result = self.engine.get_node("mesh:D003924")
         assert result is not None or result is None
+        assert result == {"id": "mesh:D003924", "labels": ["Gene"], "name": "Diabetes mellitus"}
 
     def test_get_nodes_with_ids(self):
         self.cursor.fetchall.return_value = []
@@ -724,13 +725,17 @@ class TestEngineGetNodeMethods:
         assert isinstance(result, list)
 
     def test_get_nodes_by_ids_with_data(self):
+        # get_nodes reads (s, label) rows, then (s, key, CY_TYPED(val)) rows
         self.cursor.fetchall.side_effect = [
-            [("n1",), ("n2",)],
-            [("Gene",), ("Disease",)],
-            [("name", '"TP53"')],
+            [("n1", "Gene"), ("n2", "Disease")],
+            [("n1", "name", "TP53")],
         ]
         result = self.engine.get_nodes_by_ids(["n1", "n2"])
         assert isinstance(result, (list, dict))
+        assert result == [
+            {"id": "n1", "labels": ["Gene"], "name": "TP53"},
+            {"id": "n2", "labels": ["Disease"]},
+        ]
 
     def test_get_node_cypher_fallback(self):
         self.cursor.fetchone.return_value = None

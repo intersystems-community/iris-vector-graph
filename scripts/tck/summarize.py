@@ -21,6 +21,10 @@ The TSV has one line per scenario, sorted: ``<verdict>\\t<key>`` where key is
 ``<feature file stem>.<Feature name>::<scenario name>``. Older two-column files
 that use only 1/0 read the same way.
 
+A failing scenario listed in ``tests/tck/environment_dependent.txt`` (its expected answer depends on the host, such
+as its tz database) is still counted as eligible and failed, and is also named on an ``environment-dependent
+failures`` line, so a gate can tell it from a regression.
+
 ``diff`` prints the scenarios that pass in A and not in B, then the reverse.
 Scenarios ignored upstream are left out of both lists.
 
@@ -48,6 +52,24 @@ _PREFIX = re.compile(r"^features\.[^.]+\.[^.]+\.")
 _EXAMPLES_INDEX = re.compile(r" -- @(\d+)\.\d+")
 
 DEFAULT_FEATURES = Path(__file__).resolve().parents[2] / "tests" / "tck" / "features"
+#: Scenarios whose expected answer depends on the host, not on IVG (docs/dev/TCK.md, "Environment-dependent
+#: scenarios"): `<key> | <reason>` per line. A listed failure stays eligible and failed; the summary names it apart.
+ENVIRONMENT_DEPENDENT = DEFAULT_FEATURES.parent / "environment_dependent.txt"
+
+
+def environment_dependent(path: Path | str = ENVIRONMENT_DEPENDENT) -> dict[str, str]:
+    """{scenario key: reason} from the environment-dependent list; an entry with no reason is refused."""
+    out: dict[str, str] = {}
+    if not Path(path).exists():
+        return out
+    for n, line in enumerate(Path(path).read_text().splitlines(), 1):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, _, reason = line.partition(" | ")
+        if not reason.strip():
+            raise ValueError(f"{path}:{n}: {key.strip()!r} has no reason (write `<key> | <reason>`)")
+        out[key.strip()] = reason.strip()
+    return out
 
 
 def normalise_key(classname: str, name: str) -> str:
@@ -182,6 +204,11 @@ def _main_summary(argv: list[str]) -> int:
     c = counts(v)
     print(summary_line(c))
     print(f"failed {c.failed}, skipped by harness {c.skipped}")
+    env = environment_dependent()
+    env_failed = sorted(k for k in env if v.get(k) == FAIL)
+    print(f"environment-dependent failures: {len(env_failed)} (tests/tck/environment_dependent.txt)")
+    for k in env_failed:
+        print("  ENV", k)
     if ns.list_ignored:
         for k in sorted(k for k, x in v.items() if x == IGNORED):
             print("  IGNORED", k)

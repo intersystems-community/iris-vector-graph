@@ -182,34 +182,29 @@ class ProvMixin:
         self, ts_start: Optional[int], ts_end: Optional[int]
     ) -> List[Dict]:
         """Fetch temporal edges within an optional time window."""
-        try:
-            import json
-            iris_obj = self._iris_obj()
-            result_json = iris_obj.classMethodValue(
-                "Graph.KG.TemporalIndex",
-                "QueryWindow",
-                "",  # graphId (spec 223): the default graph. PROV-O export has no
-                # graph parameter yet, so it never sees a named graph's edges.
-                "",  # s_filter: all sources
-                "",  # p_filter: all predicates
-                int(ts_start) if ts_start is not None else 0,
-                int(ts_end) if ts_end is not None else 9999999999,
-            )
-            edges_raw = json.loads(str(result_json))
-            return [
-                {
-                    "edge_id": f"{e['s']}|{e['p']}|{e['o']}|{e['ts']}",
-                    "source": e["s"],
-                    "predicate": e["p"],
-                    "target": e["o"],
-                    "ts_start": e["ts"],
-                    "ts_end": e.get("ts_end"),
-                }
-                for e in edges_raw
-            ]
-        except Exception as ex:
-            logger.warning("prov_export: could not query temporal edges: %s", ex)
-            return []
+        iris_obj = self._iris_obj()
+        result_json = iris_obj.classMethodValue(
+            "Graph.KG.TemporalIndex",
+            "QueryWindow",
+            "",  # graphId (spec 223): the default graph. PROV-O export has no
+            # graph parameter yet, so it never sees a named graph's edges.
+            "",  # s_filter: all sources
+            "",  # p_filter: all predicates
+            int(ts_start) if ts_start is not None else 0,
+            int(ts_end) if ts_end is not None else 9999999999,
+        )
+        edges_raw = _json.loads(str(result_json))
+        return [
+            {
+                "edge_id": f"{e['s']}|{e['p']}|{e['o']}|{e['ts']}",
+                "source": e["s"],
+                "predicate": e["p"],
+                "target": e["o"],
+                "ts_start": e["ts"],
+                "ts_end": e.get("ts_end"),
+            }
+            for e in edges_raw
+        ]
 
     def _get_temporal_edges_for_nodes(self, node_ids: List[str]) -> List[Dict]:
         """Fetch temporal edges where source or target is in node_ids."""

@@ -457,7 +457,7 @@ A context manager for a large load, yielding a session whose `add_nodes(nodes)` 
 def count_nodes(label: Optional[str] = None, graph: Optional[str] = None) -> int
 ```
 
-Count the nodes in `graph`, or those with `label`; 0 on error.
+Count the nodes in `graph`, or those with `label`. A failed query raises (4.6.0; it answered 0).
 
 #### `count_subjects_with_property`
 
@@ -2400,7 +2400,7 @@ Deprecated since 4.1.0 (use `code_crosswalk_add`): upsert one `fhir_bridges` row
 def get_kg_anchors(icd_codes: List[str], bridge_type: str = 'icd10_to_mesh') -> List[str]
 ```
 
-Deprecated since 4.1.0 (use `fhir_resolve_concepts`): the existing node IDs that `fhir_bridges` maps `icd_codes` to under `bridge_type`; `[]` when the query fails (logged as a warning).
+Deprecated since 4.1.0 (use `fhir_resolve_concepts`): the existing node IDs that `fhir_bridges` maps `icd_codes` to under `bridge_type`. A failed query raises (4.6.0; it answered `[]`).
 
 #### `get_rel_mapping`
 
@@ -2693,7 +2693,7 @@ End the IRIS process with ID `query_id` (an `id` from `list_active_queries`).
 def list_active_queries(limit: int = 50) -> List[Dict[str, Any]]
 ```
 
-Return the SQL statements running now; \[\] if the listing fails.
+Return the SQL statements running now. A failed listing raises (4.6.0; it answered \[\], which read as none).
 
 #### `remove_legacy_objects`
 

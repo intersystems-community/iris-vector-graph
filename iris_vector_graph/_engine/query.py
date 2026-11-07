@@ -1723,6 +1723,10 @@ class QueryMixin:
                 all_cols = None
                 for part in parts:
                     sub = self.execute_cypher(part, parameters=parameters, **opts)
+                    if sub.error:
+                        # the first failing part is the answer, with no rows (4.6.0): the parts' error was never
+                        # read, so the other parts' rows came back as if it had answered nothing
+                        return IVGResult(columns=sub.columns or [], rows=[], error=sub.error)
                     if all_cols is None:
                         all_cols = sub.columns
                     all_rows.extend(sub.rows)
@@ -1777,7 +1781,16 @@ class QueryMixin:
         count_create = plan_count_create(parsed, parameters)
         if count_create is not None:
             return self._execute_count_create(count_create, parameters, procedures)
-        result = self._execute_parsed(parsed, parameters, procedures)
+        try:
+            result = self._execute_parsed(parsed, parameters, procedures)
+        except RuntimeError as exc:
+            # USER_GUIDE §3: a read that fails in IRIS comes back with result.error set. A route that calls a class
+            # method (shortestPath's Graph.KG.Traversal, refused <PROTECT> by a reading role) raised IRIS's error out
+            # of execute_cypher instead (4.6.0). Only IRIS's plain RuntimeError, only on a query that writes nothing:
+            # a write raises GraphWriteError whatever raise_on_error says, and a typed error keeps its type.
+            if raise_on_error or type(exc) is not RuntimeError or writes_cypher(cypher_query):
+                raise
+            result = IVGResult(columns=[], rows=[], error=str(exc))
         _raise_if_error(result, raise_on_error)
         _fill_empty_columns(result, parsed)
         return result
@@ -2202,8 +2215,10 @@ class QueryMixin:
         )
         if isinstance(raw, list):
             rows = [[r.get("node_id", r.get("id", "")), r.get("hops", 1)] for r in raw]
+        elif raw.error:  # 4.6.0: a failed walk raises; it answered no rows (a count of 0)
+            raise RuntimeError(f"one-hop traversal from {traversal['source_id']!r} failed: {raw.error}")
         else:
-            rows = raw.rows if not raw.error else []
+            rows = raw.rows
         if traversal["is_count"]:
             return IVGResult(columns=[traversal["return_col"]], rows=[[len(rows)]], metadata=sql_query.query_metadata)
         return IVGResult(columns=[traversal["return_col"]], rows=[[r[0]] for r in rows], metadata=sql_query.query_metadata)
@@ -2435,8 +2450,10 @@ class QueryMixin:
             bfs_result = self._store.execute_bfs(
                 source_id, predicates, max_hops, direction, 0, graph=graph
             )
+            if bfs_result.error:  # 4.6.0: a failed walk raises; it counted 0
+                raise RuntimeError(f"var-length count: the BFS from {source_id!r} failed: {bfs_result.error}")
             # BFS reports a node once per depth it is reached at: the count is of the nodes
-            cnt = len({row[0] for row in bfs_result.rows if row}) if not bfs_result.error else 0
+            cnt = len({row[0] for row in bfs_result.rows if row})
             return IVGResult(columns=[col_name], rows=[[cnt]], metadata=sql_query.query_metadata)
         row_limit = _extract_sql_row_limit(sql_str)
 
@@ -3353,52 +3370,45 @@ class QueryMixin:
         import re as _re
         if not target_ids or not post_where_conds:
             return target_ids
-        try:
-            cursor = self._store.conn.cursor()
-            cartesian_pat = _re.compile(
-                r'\bJOIN\s+\S+\s+' + _re.escape(target_alias) + r'\s+ON\s+1\s*=\s*1\b',
-                _re.IGNORECASE,
-            )
-            m = cartesian_pat.search(original_sql)
-            if not m:
-                return target_ids
-            where_start = original_sql.find('\nWHERE ')
-            if where_start == -1:
-                where_start = len(original_sql)
-            post_joins = original_sql[m.start():where_start].strip()
-            # Replace "JOIN nodes target_alias ON 1=1" with "FROM nodes target_alias"
-            post_joins = _re.sub(
-                r'\bJOIN\s+(\S+)\s+' + _re.escape(target_alias) + r'\s+ON\s+1\s*=\s*1\b',
-                r'FROM \1 ' + target_alias,
-                post_joins,
-                count=1,
-                flags=_re.IGNORECASE,
-            )
-            _CHUNK = 499
-            filtered: set = set()
-            for i in range(0, len(target_ids), _CHUNK):
-                chunk = target_ids[i:i + _CHUNK]
-                placeholders = ",".join("?" * len(chunk))
-                post_filter = f"{target_alias}.node_id IN ({placeholders})"
-                all_conds = [post_filter] + post_where_conds
-                post_query = (
-                    f"SELECT DISTINCT {target_alias}.node_id\n"
-                    f"{post_joins}\n"
-                    f"WHERE {' AND '.join(all_conds)}"
-                )
-                params = list(post_params) + list(chunk)
-                try:
-                    cursor.execute(post_query, params)
-                    for row in cursor.fetchall():
-                        if row and row[0]:
-                            filtered.add(row[0])
-                except Exception as exc:
-                    logger.debug("_filter_nodes_by_post_where query failed: %s", exc)
-                    filtered.update(chunk)
-            return [nid for nid in target_ids if nid in filtered]
-        except Exception as exc:
-            logger.debug("_filter_nodes_by_post_where failed: %s", exc)
+        cursor = self._store.conn.cursor()
+        cartesian_pat = _re.compile(
+            r'\bJOIN\s+\S+\s+' + _re.escape(target_alias) + r'\s+ON\s+1\s*=\s*1\b',
+            _re.IGNORECASE,
+        )
+        m = cartesian_pat.search(original_sql)
+        if not m:
             return target_ids
+        where_start = original_sql.find('\nWHERE ')
+        if where_start == -1:
+            where_start = len(original_sql)
+        post_joins = original_sql[m.start():where_start].strip()
+        # Replace "JOIN nodes target_alias ON 1=1" with "FROM nodes target_alias"
+        post_joins = _re.sub(
+            r'\bJOIN\s+(\S+)\s+' + _re.escape(target_alias) + r'\s+ON\s+1\s*=\s*1\b',
+            r'FROM \1 ' + target_alias,
+            post_joins,
+            count=1,
+            flags=_re.IGNORECASE,
+        )
+        _CHUNK = 499
+        filtered: set = set()
+        for i in range(0, len(target_ids), _CHUNK):
+            chunk = target_ids[i:i + _CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            post_filter = f"{target_alias}.node_id IN ({placeholders})"
+            all_conds = [post_filter] + post_where_conds
+            post_query = (
+                f"SELECT DISTINCT {target_alias}.node_id\n"
+                f"{post_joins}\n"
+                f"WHERE {' AND '.join(all_conds)}"
+            )
+            params = list(post_params) + list(chunk)
+            # 4.6.0: a failed filter query raises; it let every target of the chunk through (logged at DEBUG)
+            cursor.execute(post_query, params)
+            for row in cursor.fetchall():
+                if row and row[0]:
+                    filtered.add(row[0])
+        return [nid for nid in target_ids if nid in filtered]
 
     def _execute_shortest_path_cypher(
         self, sql_query, parameters=None
@@ -3911,7 +3921,9 @@ class QueryMixin:
                 bfs_result = self._store.execute_bfs(
                     source_id, vl["types"], max_hops, vl.get("direction", "out"), 0, graph=graph or None
                 )
-                cnt = len({row[0] for row in bfs_result.rows if row}) if not bfs_result.error else 0
+                if bfs_result.error:  # 4.6.0: a failed walk raises; it counted 0
+                    raise RuntimeError(f"var-length count: the BFS from {source_id!r} failed: {bfs_result.error}")
+                cnt = len({row[0] for row in bfs_result.rows if row})
             return IVGResult(                columns= [col_name],
                 rows= [[cnt]],
                 sql= f"VarLength.EndsCount({source_id}, {predicates_json}, {min_hops}..{max_hops})",
@@ -3984,9 +3996,8 @@ class QueryMixin:
                             bfs_results = list(_bfs_stream_pages(self.conn, tag))
                 else:
                     bfs_results = []
-            except Exception as e:
-                logger.warning(f"BFSFastJsonSorted failed: {e}")
-                return IVGResult(columns=[], rows=[], sql="", params=[], metadata=sql_query.query_metadata)
+            except Exception as e:  # 4.6.0: raises; it answered no rows, logged at WARNING
+                raise RuntimeError(f"var-length walk (BFSFastJsonSorted) from {source_id!r} failed: {e}") from e
 
         if min_hops > 1:
             min_step_per_node: dict = {}

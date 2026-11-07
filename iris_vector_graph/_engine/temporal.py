@@ -947,8 +947,8 @@ class TemporalMixin:
         ``^KG("tagg")``; a bucket the window cuts is read edge by edge, so an edge outside the window is
         never counted (4.6.0; before, every bucket the window touched counted whole). A purged bucket
         (``purge_raw_before``) keeps only its aggregate, so a window that cuts it counts none of it. An
-        empty window, an unknown metric, or a failed server call (logged as a warning) gives ``0`` or
-        ``0.0``, never ``None``.
+        empty window or an unknown metric gives ``0`` or ``0.0``, never ``None``; a failed server call raises
+        (4.6.0; it gave ``0.0``, logged as a warning).
         """
         result = self._store.get_temporal_aggregate(
             source, predicate, metric, ts_start, ts_end, graph=graph

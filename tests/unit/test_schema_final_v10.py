@@ -1028,11 +1028,12 @@ class TestReifyEdgeMixin:
         result = eng.get_reifications(1)
         assert result == []
 
-    def test_get_reifications_exception(self):
+    def test_get_reifications_exception_raises(self):
+        """A failed query raises (4.6.0; it answered [])."""
         eng, conn, cur = make_engine()
         cur.execute.side_effect = Exception("query failed")
-        result = eng.get_reifications(1)
-        assert result == []
+        with pytest.raises(Exception, match="query failed"):
+            eng.get_reifications(1)
 
     def test_get_reifications_null_key(self):
         eng, conn, cur = make_engine()

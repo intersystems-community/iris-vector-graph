@@ -948,15 +948,16 @@ class TestGetNodes:
         result = eng.get_nodes(["n1"])
         assert result[0].get("p_id") == "override_id"
 
-    def test_fallback_to_cypher_on_exception(self):
-        """Lines 320-343 fallback — SQL error triggers _get_node_cypher_fallback."""
+    def test_exception_raises_without_cypher_fallback(self):
+        """A SQL error raises (4.6.0); it no longer triggers _get_node_cypher_fallback per node."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
         cur.execute.side_effect = Exception("db crash")
         eng._get_node_cypher_fallback = MagicMock(return_value={"id": "n1", "labels": []})
 
-        result = eng.get_nodes(["n1"])
-        eng._get_node_cypher_fallback.assert_called_once_with("n1")
+        with pytest.raises(Exception, match="db crash"):
+            eng.get_nodes(["n1"])
+        eng._get_node_cypher_fallback.assert_not_called()
 
     def test_empty_node_filtered_if_not_in_nodes_table(self):
         """Lines 320-335 empty_nids branch — node not in DB is excluded."""
@@ -1627,11 +1628,13 @@ class TestCountNodes:
         cur.fetchone.return_value = (7,)
         assert eng.count_nodes(label="Person") == 7
 
-    def test_count_nodes_exception_returns_zero(self):
+    def test_count_nodes_exception_raises(self):
+        """A failed count raises (4.6.0; it answered 0)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
         cur.execute.side_effect = Exception("db error")
-        assert eng.count_nodes() == 0
+        with pytest.raises(Exception, match="db error"):
+            eng.count_nodes()
 
 
 class TestGetNodeIdsByLabel:
@@ -1695,12 +1698,13 @@ class TestPropertyPrimitives:
         result = eng.get_node_ids_by_property("name", limit=10)
         assert "TOP 10" in str(cur.execute.call_args)
 
-    def test_get_node_ids_by_property_exception_returns_empty(self):
+    def test_get_node_ids_by_property_exception_raises(self):
+        """A failed query raises (4.6.0; it answered [])."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
         cur.execute.side_effect = Exception("db fail")
-        result = eng.get_node_ids_by_property("name")
-        assert result == []
+        with pytest.raises(Exception, match="db fail"):
+            eng.get_node_ids_by_property("name")
 
     def test_get_property_pairs(self):
         eng, conn, cur = make_engine()

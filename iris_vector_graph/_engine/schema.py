@@ -3187,7 +3187,7 @@ class SchemaMixin:
     def get_reifications(self, edge_id: int) -> List[Dict[str, Any]]:
         """The reifiers of ``rdf_edges`` row ``edge_id``, as ``reifier_id``/``properties`` dicts.
 
-        Reads only. Returns an empty list when there are none, or when the query fails (logged).
+        Reads only. Returns an empty list when there are none; a failed query raises (4.6.0; it answered ``[]``).
         """
         cursor = self.conn.cursor()
         try:
@@ -3206,9 +3206,6 @@ class SchemaMixin:
                 if key is not None:
                     result[reifier_id]["properties"][key] = val
             return list(result.values())
-        except Exception as e:
-            logger.warning(f"get_reifications({edge_id}) failed: {e}")
-            return []
         finally:
             cursor.close()
 

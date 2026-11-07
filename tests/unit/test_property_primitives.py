@@ -166,10 +166,12 @@ class TestPropertyValueExistsUnit:
         engine, cursor = _make_engine({"rdf_props": []})
         assert engine.property_value_exists("k", "val%") is False
 
-    def test_false_on_exception(self):
+    def test_raises_on_exception(self):
+        """A failed query raises (4.6.0; it answered False)."""
         engine, cursor = _make_engine()
         cursor.execute.side_effect = Exception("boom")
-        assert engine.property_value_exists("k", "%") is False
+        with pytest.raises(Exception, match="boom"):
+            engine.property_value_exists("k", "%")
 
 
 class TestGetPropertyPairsLikeUnit:
@@ -232,10 +234,12 @@ class TestCountSubjectsWithPropertyUnit:
         engine, cursor = _make_engine({"rdf_props": [(None,)]})
         assert engine.count_subjects_with_property("k") == 0
 
-    def test_returns_zero_on_exception(self):
+    def test_raises_on_exception(self):
+        """A failed count raises (4.6.0; it answered 0)."""
         engine, cursor = _make_engine()
         cursor.execute.side_effect = Exception("boom")
-        assert engine.count_subjects_with_property("k") == 0
+        with pytest.raises(Exception, match="boom"):
+            engine.count_subjects_with_property("k")
 
 
 # ===========================================================================

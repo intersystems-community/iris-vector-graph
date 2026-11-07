@@ -435,12 +435,12 @@ class TestGetReifications:
         assert result[0]["reifier_id"] == "reif_1"
         assert result[0]["properties"]["confidence"] == "0.9"
 
-    def test_failure_returns_empty(self):
-        """Cover lines 818-820."""
+    def test_failure_raises(self):
+        """A failed query raises (4.6.0; it answered [])."""
         eng, conn, cursor = _make_eng()
         cursor.execute.side_effect = RuntimeError("table missing")
-        result = eng.get_reifications(edge_id=99)
-        assert result == []
+        with pytest.raises(RuntimeError, match="table missing"):
+            eng.get_reifications(edge_id=99)
 
 
 # ---------------------------------------------------------------------------

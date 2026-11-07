@@ -51,8 +51,8 @@ class TestListActiveQueriesEnterprise:
             assert "id" in result[0]
             assert "state" in result[0]
 
-    def test_enterprise_query_exception_returns_empty(self):
-        """Exception during the listing query returns []."""
+    def test_enterprise_query_exception_raises(self):
+        """An exception during the listing query propagates (4.6.0; it answered [])."""
         eng = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "2"
@@ -61,8 +61,8 @@ class TestListActiveQueriesEnterprise:
         eng.conn.cursor.return_value = cursor
 
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng.list_active_queries(limit=5)
-        assert result == []
+            with pytest.raises(RuntimeError, match="access denied"):
+                eng.list_active_queries(limit=5)
 
 
 # ---------------------------------------------------------------------------

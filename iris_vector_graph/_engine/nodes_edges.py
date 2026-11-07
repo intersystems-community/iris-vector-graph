@@ -534,33 +534,29 @@ class NodesEdgesMixin:
             return bfs_results
 
         cursor = self.conn.cursor()
-        try:
-            results = []
-            for s, p, o in edges:
-                # arno 1d75d97 bug: predicate is written as "R" placeholder.
-                # Fall back to matching by (s, o) only when p is the sentinel.
-                if p == "R":
-                    cursor.execute(
-                        f"SELECT qualifiers FROM {self._t('rdf_edges')} " "WHERE s=? AND o_id=?",
-                        [s, o],
-                    )
-                else:
-                    cursor.execute(
-                        f"SELECT qualifiers FROM {self._t('rdf_edges')} "
-                        "WHERE s=? AND p=? AND o_id=?",
-                        [s, p, o],
-                    )
-                row = cursor.fetchone()
-                qual_json = row[0] if row else None
-                try:
-                    qualifiers = _json.loads(qual_json) if qual_json else {}
-                except Exception:
-                    qualifiers = {}
-                if all(str(qualifiers.get(k)) == str(v) for k, v in prop_filter.items()):
-                    results.append((s, p, o))
-        except Exception as e:
-            logger.warning("_filter_edges_by_properties query failed: %s", e)
-            return bfs_results
+        results = []
+        for s, p, o in edges:
+            # arno 1d75d97 bug: predicate is written as "R" placeholder.
+            # Fall back to matching by (s, o) only when p is the sentinel.
+            if p == "R":
+                cursor.execute(
+                    f"SELECT qualifiers FROM {self._t('rdf_edges')} " "WHERE s=? AND o_id=?",
+                    [s, o],
+                )
+            else:
+                cursor.execute(
+                    f"SELECT qualifiers FROM {self._t('rdf_edges')} "
+                    "WHERE s=? AND p=? AND o_id=?",
+                    [s, p, o],
+                )
+            row = cursor.fetchone()
+            qual_json = row[0] if row else None
+            try:
+                qualifiers = _json.loads(qual_json) if qual_json else {}
+            except Exception:
+                qualifiers = {}
+            if all(str(qualifiers.get(k)) == str(v) for k, v in prop_filter.items()):
+                results.append((s, p, o))
 
         passing = set(results)
 
@@ -595,68 +591,57 @@ class NodesEdgesMixin:
 
         _IN_CHUNK = 499
 
-        try:
-            cursor = self.conn.cursor()
-            node_map = {nid: {"id": nid, "labels": []} for nid in node_ids}
+        cursor = self.conn.cursor()
+        node_map = {nid: {"id": nid, "labels": []} for nid in node_ids}
 
-            for i in range(0, len(node_ids), _IN_CHUNK):
-                chunk = node_ids[i : i + _IN_CHUNK]
-                placeholders = ",".join(["?"] * len(chunk))
+        for i in range(0, len(node_ids), _IN_CHUNK):
+            chunk = node_ids[i : i + _IN_CHUNK]
+            placeholders = ",".join(["?"] * len(chunk))
 
+            cursor.execute(
+                f"SELECT s, label FROM {self._t('rdf_labels')} "
+                f"WHERE graph_id = ? AND s IN ({placeholders})",
+                [graph_id] + list(chunk),
+            )
+            for s, label in cursor.fetchall():
+                if s in node_map:
+                    node_map[s]["labels"].append(label)
+
+            # R218: CY_TYPED reads a value stored as a number (a Cypher write's) as that number under
+            # every driver version; 5.4.1 read it as IRIS text (.94999999999999995559)
+            cursor.execute(
+                f'SELECT s, "key", {self._ivg_schema}.CY_TYPED(val) FROM {self._t("rdf_props")} '
+                f"WHERE graph_id = ? AND s IN ({placeholders})",
+                [graph_id] + list(chunk),
+            )
+            _STRUCTURAL_KEYS = ("id", "labels")
+            for s, key, val in cursor.fetchall():
+                if s in node_map:
+                    store_key = f"p_{key}" if key in _STRUCTURAL_KEYS else key
+                    # a list or map by the rule every Cypher read uses (4.6.0 R307), else 'true' / 'false'
+                    node_map[s][store_key] = read_node_value(val)
+
+        empty_nids = [
+            nid for nid, data in node_map.items() if not data["labels"] and len(data) <= 2
+        ]
+        if empty_nids:
+            existing_empty: set = set()
+            for i in range(0, len(empty_nids), _IN_CHUNK):
+                chunk = empty_nids[i : i + _IN_CHUNK]
+                e_placeholders = ",".join(["?"] * len(chunk))
                 cursor.execute(
-                    f"SELECT s, label FROM {self._t('rdf_labels')} "
-                    f"WHERE graph_id = ? AND s IN ({placeholders})",
+                    f"SELECT node_id FROM {self._t('nodes')} "
+                    f"WHERE graph_id = ? AND node_id IN ({e_placeholders})",
                     [graph_id] + list(chunk),
                 )
-                for s, label in cursor.fetchall():
-                    if s in node_map:
-                        node_map[s]["labels"].append(label)
-
-                # R218: CY_TYPED reads a value stored as a number (a Cypher write's) as that number under
-                # every driver version; 5.4.1 read it as IRIS text (.94999999999999995559)
-                cursor.execute(
-                    f'SELECT s, "key", {self._ivg_schema}.CY_TYPED(val) FROM {self._t("rdf_props")} '
-                    f"WHERE graph_id = ? AND s IN ({placeholders})",
-                    [graph_id] + list(chunk),
-                )
-                _STRUCTURAL_KEYS = ("id", "labels")
-                for s, key, val in cursor.fetchall():
-                    if s in node_map:
-                        store_key = f"p_{key}" if key in _STRUCTURAL_KEYS else key
-                        # a list or map by the rule every Cypher read uses (4.6.0 R307), else 'true' / 'false'
-                        node_map[s][store_key] = read_node_value(val)
-
-            empty_nids = [
-                nid for nid, data in node_map.items() if not data["labels"] and len(data) <= 2
+                existing_empty.update(row[0] for row in cursor.fetchall())
+            return [
+                node_map[nid]
+                for nid in node_ids
+                if nid in existing_empty or nid not in empty_nids
             ]
-            if empty_nids:
-                existing_empty: set = set()
-                for i in range(0, len(empty_nids), _IN_CHUNK):
-                    chunk = empty_nids[i : i + _IN_CHUNK]
-                    e_placeholders = ",".join(["?"] * len(chunk))
-                    cursor.execute(
-                        f"SELECT node_id FROM {self._t('nodes')} "
-                        f"WHERE graph_id = ? AND node_id IN ({e_placeholders})",
-                        [graph_id] + list(chunk),
-                    )
-                    existing_empty.update(row[0] for row in cursor.fetchall())
-                return [
-                    node_map[nid]
-                    for nid in node_ids
-                    if nid in existing_empty or nid not in empty_nids
-                ]
 
-            return [node_map[nid] for nid in node_ids if nid in node_map]
-
-        except Exception as e:
-            logger.error(f"Batch get_nodes failed: {str(e)}")
-            # Fallback to individual lookups (which might use Cypher fallback)
-            results = []
-            for nid in node_ids:
-                node = self._get_node_cypher_fallback(nid)
-                if node:
-                    results.append(node)
-            return results
+        return [node_map[nid] for nid in node_ids if nid in node_map]
 
     def _get_node_cypher_fallback(self, node_id: str) -> Optional[Dict[str, Any]]:
         """Original Cypher-based get_node implementation as safety fallback."""
@@ -694,7 +679,7 @@ class NodesEdgesMixin:
 
     def count_nodes(self, label: Optional[str] = None, graph: Optional[str] = None) -> int:
         """
-        Count the nodes in ``graph``, or those with ``label``; 0 on error.
+        Count the nodes in ``graph``, or those with ``label``. A failed query raises (4.6.0; it answered 0).
 
         ``graph`` omitted (or None, ``""``) is the default graph; before 4.6.0 this counted every graph (R249, as
         R219 did for ``node_count``). Raises ``ValueError`` for a graph name that cannot be one.
@@ -708,20 +693,16 @@ class NodesEdgesMixin:
         """
         gid = validate_graph_name(graph)
         cursor = self.conn.cursor()
-        try:
-            if label:
-                cursor.execute(
-                    f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_labels WHERE label = ? AND COALESCE(graph_id, '') = ?",
-                    [label, gid],
-                )
-            else:
-                cursor.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes WHERE COALESCE(graph_id, '') = ?", [gid])
+        if label:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_labels WHERE label = ? AND COALESCE(graph_id, '') = ?",
+                [label, gid],
+            )
+        else:
+            cursor.execute(f"SELECT COUNT(*) FROM {self._ivg_schema}.nodes WHERE COALESCE(graph_id, '') = ?", [gid])
 
-            result = cursor.fetchone()
-            return result[0] if result else 0
-        except Exception as e:
-            logger.error(f"Count nodes failed: {e}")
-            return 0
+        result = cursor.fetchone()
+        return result[0] if result else 0
 
     def get_node_ids_by_label(self, label: str) -> List[str]:
         """
@@ -793,9 +774,6 @@ class NodesEdgesMixin:
         try:
             cursor.execute(sql, params)
             return [row[0] for row in cursor.fetchall() if row and row[0]]
-        except Exception as e:
-            logger.error("get_node_ids_by_property(%s) failed: %s", key, e)
-            return []
         finally:
             cursor.close()
 
@@ -825,9 +803,6 @@ class NodesEdgesMixin:
         try:
             cursor.execute(sql, [key])
             return [(row[0], decode_typed_text(row[1])) for row in cursor.fetchall() if row and row[0]]
-        except Exception as e:
-            logger.error("get_property_pairs(%s) failed: %s", key, e)
-            return []
         finally:
             cursor.close()
 
@@ -845,9 +820,6 @@ class NodesEdgesMixin:
         try:
             cursor.execute(sql, [key])
             return [decode_typed_text(row[0]) for row in cursor.fetchall() if row and row[0] not in (None, "")]
-        except Exception as e:
-            logger.error("get_property_values(%s) failed: %s", key, e)
-            return []
         finally:
             cursor.close()
 
@@ -861,9 +833,6 @@ class NodesEdgesMixin:
         try:
             cursor.execute(sql, [key, like])
             return cursor.fetchone() is not None
-        except Exception as e:
-            logger.error("property_value_exists(%s LIKE %s) failed: %s", key, like, e)
-            return False
         finally:
             cursor.close()
 
@@ -888,9 +857,6 @@ class NodesEdgesMixin:
         try:
             cursor.execute(sql, [key, like])
             return [(row[0], decode_typed_text(row[1])) for row in cursor.fetchall() if row and row[0]]
-        except Exception as e:
-            logger.error("get_property_pairs_like(%s LIKE %s) failed: %s", key, like, e)
-            return []
         finally:
             cursor.close()
 
@@ -907,9 +873,6 @@ class NodesEdgesMixin:
         try:
             cursor.execute(sql, [key, f"%{field}%"])
             return [row[0] for row in cursor.fetchall() if row and row[0]]
-        except Exception as e:
-            logger.error("get_json_field_values(%s.%s) failed: %s", key, field, e)
-            return []
         finally:
             cursor.close()
 
@@ -924,9 +887,6 @@ class NodesEdgesMixin:
         try:
             cursor.execute(sql, [pattern])
             return [row[0] for row in cursor.fetchall() if row and row[0]]
-        except Exception as e:
-            logger.error("get_node_ids_like(%s) failed: %s", pattern, e)
-            return []
         finally:
             cursor.close()
 
@@ -949,9 +909,6 @@ class NodesEdgesMixin:
             cursor.execute(sql, params)
             row = cursor.fetchone()
             return int(row[0]) if row and row[0] else 0
-        except Exception as e:
-            logger.error("count_subjects_with_property(%s=%s) failed: %s", key, val, e)
-            return 0
         finally:
             cursor.close()
 

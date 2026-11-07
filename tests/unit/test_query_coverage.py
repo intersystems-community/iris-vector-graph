@@ -653,8 +653,8 @@ def test_execute_traversal_is_count():
     assert result["rows"] == [[2]]
 
 
-def test_execute_traversal_ivgresult_with_error():
-    """Exercises IVGResult with error (line 432)."""
+def test_execute_traversal_ivgresult_with_error_raises():
+    """A BFS IVGResult with .error set raises (4.6.0; it answered no rows)."""
     eng, conn, cur = make_engine()
     from iris_vector_graph.result import IVGResult
 
@@ -669,8 +669,8 @@ def test_execute_traversal_ivgresult_with_error():
     bfs_result = IVGResult(columns=[], rows=[], error="some error")
     eng._store.execute_bfs.return_value = bfs_result
     parsed = MagicMock()
-    result = eng._execute_traversal(traversal, sql_q, parsed, {})
-    assert result["rows"] == []
+    with pytest.raises(RuntimeError, match="one-hop traversal from 'n1' failed: some error"):
+        eng._execute_traversal(traversal, sql_q, parsed, {})
 
 
 # ---------------------------------------------------------------------------
@@ -1729,8 +1729,8 @@ def test_filter_nodes_by_post_where_with_match():
     assert "n1" in result
 
 
-def test_filter_nodes_by_post_where_query_exception():
-    """Filter query exception → include all in chunk (lines 1352-1353)."""
+def test_filter_nodes_by_post_where_query_exception_raises():
+    """A failed filter query raises (4.6.0; it let every target of the chunk through)."""
     eng, conn, cur = make_engine()
     eng._store.conn = conn
     cur.execute.side_effect = RuntimeError("query fail")
@@ -1741,15 +1741,14 @@ def test_filter_nodes_by_post_where_query_exception():
         "JOIN Graph_KG.nodes b ON 1=1\n"
         "WHERE b.name = 'Alice'"
     )
-    result = eng._filter_nodes_by_post_where(
-        ["n1", "n2"], "b", ["b.name = 'Alice'"], [], original_sql
-    )
-    # Exception → includes all
-    assert "n1" in result and "n2" in result
+    with pytest.raises(RuntimeError, match="query fail"):
+        eng._filter_nodes_by_post_where(
+            ["n1", "n2"], "b", ["b.name = 'Alice'"], [], original_sql
+        )
 
 
-def test_filter_nodes_by_post_where_outer_exception():
-    """Outer exception → return target_ids (lines 1355-1357)."""
+def test_filter_nodes_by_post_where_outer_exception_raises():
+    """A failure getting the cursor raises (4.6.0; it returned every target)."""
     eng, conn, cur = make_engine()
     eng._store.conn.cursor.side_effect = RuntimeError("cursor fail")
 
@@ -1759,10 +1758,10 @@ def test_filter_nodes_by_post_where_outer_exception():
         "JOIN Graph_KG.nodes b ON 1=1\n"
         "WHERE b.name = 'Alice'"
     )
-    result = eng._filter_nodes_by_post_where(
-        ["n1", "n2"], "b", ["b.name = 'Alice'"], [], original_sql
-    )
-    assert "n1" in result and "n2" in result
+    with pytest.raises(RuntimeError, match="cursor fail"):
+        eng._filter_nodes_by_post_where(
+            ["n1", "n2"], "b", ["b.name = 'Alice'"], [], original_sql
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2017,8 +2016,8 @@ def test_execute_var_length_cypher_bfsfastjsonsorted_empty():
         assert result["rows"] == []
 
 
-def test_execute_var_length_cypher_bfsfastjsonsorted_exception():
-    """BFSFastJsonSorted exception → empty result (lines 1614-1616)."""
+def test_execute_var_length_cypher_bfsfastjsonsorted_exception_raises():
+    """A BFSFastJsonSorted exception raises (4.6.0; it answered an empty result)."""
     eng, conn, cur = make_engine()
     sql_q = make_sql_query(
         sql="SELECT b.node_id AS b_id FROM Graph_KG.nodes",
@@ -2035,8 +2034,10 @@ def test_execute_var_length_cypher_bfsfastjsonsorted_exception():
     sql_q.parameters = [["n1"]]
 
     with patch("iris_vector_graph.schema._call_classmethod", side_effect=RuntimeError("fail")):
-        result = eng._execute_var_length_cypher(sql_q)
-        assert result["rows"] == []
+        with pytest.raises(
+            RuntimeError, match=r"var-length walk \(BFSFastJsonSorted\) from 'n1' failed: fail"
+        ):
+            eng._execute_var_length_cypher(sql_q)
 
 
 def test_execute_var_length_cypher_min_hops_filter():

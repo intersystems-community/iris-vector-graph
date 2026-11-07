@@ -12,6 +12,7 @@ Active SQL lives in `INFORMATION_SCHEMA.CURRENT_STATEMENTS`, with the text in
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from iris_vector_graph.engine import IRISGraphEngine
@@ -59,10 +60,12 @@ def test_engine_rows_keep_their_keys():
     }
 
 
-def test_engine_limit_must_be_an_integer():
+def test_engine_limit_not_an_integer_raises():
+    """A `limit` that is not an integer raises ValueError before any SQL runs (4.6.0; it answered [])."""
     eng, cur, iris_obj = _engine()
     with patch.object(eng, "_iris_obj", return_value=iris_obj):
-        assert eng.list_active_queries(limit="5; DROP TABLE x") == []
+        with pytest.raises(ValueError, match="invalid literal for int"):
+            eng.list_active_queries(limit="5; DROP TABLE x")
     cur.execute.assert_not_called()
 
 

@@ -206,12 +206,12 @@ def test_prov_require_rdflib_missing():
 # prov.py: _get_temporal_edges_window / _get_temporal_edges_for_nodes
 # ---------------------------------------------------------------------------
 
-def test_get_temporal_edges_window_no_iris():
-    """_get_temporal_edges_window with no IRIS → []."""
+def test_get_temporal_edges_window_no_iris_raises():
+    """_get_temporal_edges_window with no IRIS raises (4.6.0; it answered [])."""
     eng, cur = make_engine()
     eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
-    result = eng._get_temporal_edges_window(None, None)
-    assert result == []
+    with pytest.raises(Exception, match="no iris"):
+        eng._get_temporal_edges_window(None, None)
 
 
 def test_get_temporal_edges_for_nodes_filters():

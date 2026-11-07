@@ -2111,31 +2111,24 @@ class IRISGraphStore:
                 rows.append([_json.dumps(path), length])
             return IVGResult(columns=found.columns, rows=rows)
         predicates_json = _json.dumps(predicates) if predicates else ""
-        try:
-            path_json = str(
-                self._call_classmethod(
-                    "Graph.KG.Traversal",
-                    "ShortestPathJson",
-                    source_id,
-                    target_id,
-                    str(max_hops),
-                    predicates_json,
-                    direction,
-                    str(int(find_all)),
-                )
+        # A failure raises (4.6.0): a reading role refused the routines database got `<PROTECT>` here, and the
+        # handler answered no path, logged at WARNING only, with result.error None.
+        path_json = str(
+            self._call_classmethod(
+                "Graph.KG.Traversal",
+                "ShortestPathJson",
+                source_id,
+                target_id,
+                str(max_hops),
+                predicates_json,
+                direction,
+                str(int(find_all)),
             )
-            paths_raw = _json.loads(path_json) if path_json else []
-            if isinstance(paths_raw, dict):
-                paths = [paths_raw]
-            else:
-                paths = paths_raw
-            rows = [
-                [_json.dumps(p), p.get("length", len(p.get("nodes", [])) - 1)] for p in paths if p
-            ]
-            return IVGResult(columns=["path", "length"], rows=rows)
-        except Exception as e:
-            logger.warning("ShortestPath failed: %s", e)
-            return IVGResult(columns=["path", "length"], rows=[])
+        )
+        paths_raw = _json.loads(path_json) if path_json else []
+        paths = [paths_raw] if isinstance(paths_raw, dict) else paths_raw
+        rows = [[_json.dumps(p), p.get("length", len(p.get("nodes", [])) - 1)] for p in paths if p]
+        return IVGResult(columns=["path", "length"], rows=rows)
 
     # ── Analytics ─────────────────────────────────────────────────────────────
 
@@ -2888,21 +2881,19 @@ class IRISGraphStore:
         self, source_id: str, predicate: str, metric: str, ts_start: int, ts_end: int,
         graph: Optional[str] = None,
     ) -> IVGResult:
-        try:
-            val = self._call_classmethod(
-                "Graph.KG.TemporalIndex",
-                "GetAggregate",
-                validate_graph_name(graph),
-                source_id,
-                predicate,
-                metric,
-                str(ts_start),
-                str(ts_end),
-            )
-            return IVGResult(columns=["value"], rows=[[float(str(val))]])
-        except Exception as e:
-            logger.warning("get_temporal_aggregate failed: %s", e)
-            return IVGResult(columns=["value"], rows=[[0.0]])
+        # A failed call raises (4.6.0; it answered 0.0, logged at WARNING). GetAggregate answers "" for an empty
+        # window's min, max or avg and for an unknown metric: that is 0.0, as get_temporal_aggregate documents.
+        val = str(self._call_classmethod(
+            "Graph.KG.TemporalIndex",
+            "GetAggregate",
+            validate_graph_name(graph),
+            source_id,
+            predicate,
+            metric,
+            str(ts_start),
+            str(ts_end),
+        ))
+        return IVGResult(columns=["value"], rows=[[float(val) if val else 0.0]])
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

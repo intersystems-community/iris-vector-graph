@@ -218,8 +218,12 @@ that mix numbers and strings.
 
 **Changed (breaking)**
 
-What a 4.5.x caller must change, one line each; each change has its full entry under Changed or Fixed, below, and
-[docs/migration/v4.6.0.md](docs/migration/v4.6.0.md#breaking-changes) the same list.
+- **A Cypher read that fails comes back in `result.error`; it raised for weighted paths, variable-length patterns and
+  `shortestPath`.** If you caught the exception, pass `raise_on_error=True`.
+- `count_nodes`, `get_nodes` and the property readers (`get_node_ids_by_property`, `get_property_pairs` and the
+  rest) raise when their query fails; they answered `0` or `[]`. Catch the error where a failure is expected.
+  What a 4.5.x caller must change, one line each; each change has its full entry under Changed or Fixed, below, and
+  [docs/migration/v4.6.0.md](docs/migration/v4.6.0.md#breaking-changes) the same list.
 
 - Result lists, maps and paths are Python values: `execute_cypher`, Bolt and REST answer lists and dicts, nested ones
   too, instead of JSON text; a path is `{'nodes': [...], 'rels': [...]}`, a map projection a dict whose values keep
@@ -282,6 +286,20 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Changed**
 
+- **Every Cypher read failure comes back in `result.error`, raised or not, as USER_GUIDE §3 has always said.** A read
+  that IRIS refused or that failed on a route that calls a class method (weighted paths, variable-length patterns,
+  `shortestPath`) raised its error out of `execute_cypher` whatever `raise_on_error` said; now it is `result.error`
+  with no rows, and `raise_on_error=True` raises it as `RuntimeError`, the same as a failed read on the SQL path. A
+  write still raises `GraphWriteError`, and a typed error (`ClassesUnreadable`, a `ValueError` refusal) keeps its
+  type. A query of several statements (`CALL ...; MATCH ...`) stops at the first part that fails and answers its
+  error with no rows: it answered the other parts' rows as if that part had found nothing.
+- **A read whose query fails raises; it no longer answers an empty or zero value.** `count_nodes`, `get_nodes`,
+  `get_node_ids_by_property`, `get_property_pairs`, `get_property_values`, `property_value_exists`,
+  `get_property_pairs_like`, `get_json_field_values`, `get_node_ids_like`, `count_subjects_with_property`,
+  `get_reifications`, `get_kg_anchors`, `list_active_queries`, `get_temporal_aggregate` and the PROV-O export's temporal
+  edges logged the failure and answered `0`, `[]`, `False` or `0.0`, so a refused or broken query read as "no data".
+  They raise IRIS's error now. `get_nodes` no longer retries node by node through Cypher, which answered no node for
+  each one it could not read. An empty temporal window still reads `0` or `0.0`.
 - **A list, a map or a path in a result row answers the Python list or dict, not its JSON text.** `execute_cypher` and
   REST `/api/cypher` answered `RETURN [n.x, 'a']` as the string `'[1,"a"]'`, and so `keys()`, `labels()`, `nodes(p)`,
   comprehensions, slices, `+` of lists, map literals and projections, `properties()`, `collect()`, `range()`,
@@ -1577,6 +1595,15 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Fixed: the reading role**
 
+- **`shortestPath` refused by IRIS sets `result.error`.** A reading role without `R` on a split namespace's routines
+  database got `<PROTECT>` from `Graph.KG.Traversal` and an answer of no rows with `result.error` None, a WARNING the
+  only sign; the ADMIN_GUIDE lists `shortestPath` among the calls that raise there. It now fails as they do:
+  `result.error` holds the `<PROTECT>`, and `raise_on_error=True` raises it. The same holds for a failed walk under a
+  one-hop traversal or a variable-length count (they answered 0), for the last variable-length walk tier (no rows),
+  and for the filter on a pattern's far end, whose failure let every candidate through. The handlers kept answer the
+  same another way: the Arno reader to its Owner, BFS from Arno to ObjectScript to SQL, native Cypher to SQL, the HLL
+  count to the exact one, server-side KNN to client-side, and a store algorithm to its ObjectScript routine. Found by
+  the round-3 walkthrough.
 - **`status()` works for ADMIN_GUIDE's reading role**: it reported a failed class check per class, a schema-record
   probe failure and "class lookup failed" for the vector tables, which it read no HNSW state for; and a refused cache
   write warned on every call (now once, at INFO). <!-- R202, R247 -->
@@ -1607,6 +1634,10 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Fixed: development and test tooling**
 
+- **The parser watchdog's child runs BLAS on one thread.** Importing the parser imports numpy, and on a
+  128-core Linux host OpenBLAS's spinning threads spent 4.6 s of the watchdog's 5 s CPU budget before the parse began:
+  39 parses were killed "on time" in the dpgenai1 gate. `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS` and
+  `MKL_NUM_THREADS` are 1 in the child (0.4 s); the hang and runaway checks are unchanged.
 - **The TCK compares an answer's Python type.** The harness decoded any string a list or map expectation met, so a
   list answered as its JSON text passed, and a top-level integer matched its text and a float an IRIS `Decimal`:
   rescored over the R310 captures, 188 of 3896 scenarios passed only that way (158 lists and 26 maps as text, Decimal

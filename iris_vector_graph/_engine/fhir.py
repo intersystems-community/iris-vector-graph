@@ -404,7 +404,7 @@ class FhirMixin:
         self, icd_codes: List[str], bridge_type: str = "icd10_to_mesh"
     ) -> List[str]:
         """Deprecated since 4.1.0 (use ``fhir_resolve_concepts``): the existing node IDs that ``fhir_bridges``
-        maps ``icd_codes`` to under ``bridge_type``; ``[]`` when the query fails (logged as a warning).
+        maps ``icd_codes`` to under ``bridge_type``. A failed query raises (4.6.0; it answered ``[]``).
 
         .. deprecated:: 4.1.0
             Removed in 5.0. Use ``fhir_resolve_concepts`` over a FHIR named graph.
@@ -436,9 +436,6 @@ class FhirMixin:
                 cursor.execute(sql, chunk + [bridge_type])
                 results.extend(row[0] for row in cursor.fetchall())
             return results
-        except Exception as e:
-            logger.warning(f"get_kg_anchors failed: {e}")
-            return []
         finally:
             cursor.close()
 

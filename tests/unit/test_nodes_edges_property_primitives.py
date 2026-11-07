@@ -72,11 +72,12 @@ def test_get_node_ids_by_property_zero_limit_no_top():
     assert "TOP" not in cur.execute.call_args[0][0]
 
 
-def test_get_node_ids_by_property_error_returns_empty():
+def test_get_node_ids_by_property_error_raises():
+    """A failed query raises (4.6.0; it answered [])."""
     eng, cur = make_engine()
     cur.execute.side_effect = Exception("DB error")
-    result = eng.get_node_ids_by_property("key")
-    assert result == []
+    with pytest.raises(Exception, match="DB error"):
+        eng.get_node_ids_by_property("key")
 
 
 # ---------------------------------------------------------------------------
@@ -109,11 +110,12 @@ def test_get_property_pairs_basic():
     assert result == [("n1", "val1"), ("n2", "val2")]
 
 
-def test_get_property_pairs_error_returns_empty():
+def test_get_property_pairs_error_raises():
+    """A failed query raises (4.6.0; it answered [])."""
     eng, cur = make_engine()
     cur.execute.side_effect = Exception("fail")
-    result = eng.get_property_pairs("key")
-    assert result == []
+    with pytest.raises(Exception, match="fail"):
+        eng.get_property_pairs("key")
 
 
 # ---------------------------------------------------------------------------
@@ -133,11 +135,12 @@ def test_get_property_values_filters_none():
     assert "url1" in result and "url2" in result
 
 
-def test_get_property_values_error_returns_empty():
+def test_get_property_values_error_raises():
+    """A failed query raises (4.6.0; it answered [])."""
     eng, cur = make_engine()
     cur.execute.side_effect = Exception("fail")
-    result = eng.get_property_values("key")
-    assert result == []
+    with pytest.raises(Exception, match="fail"):
+        eng.get_property_values("key")
 
 
 # ---------------------------------------------------------------------------
@@ -161,10 +164,12 @@ def test_property_value_exists_uses_top_1():
     assert "TOP 1" in sql
 
 
-def test_property_value_exists_error_returns_false():
+def test_property_value_exists_error_raises():
+    """A failed query raises (4.6.0; it answered False)."""
     eng, cur = make_engine()
     cur.execute.side_effect = Exception("fail")
-    assert eng.property_value_exists("key", "val") is False
+    with pytest.raises(Exception, match="fail"):
+        eng.property_value_exists("key", "val")
 
 
 # ---------------------------------------------------------------------------
@@ -183,11 +188,12 @@ def test_get_property_pairs_like_with_limit():
     assert "TOP 10" in cur.execute.call_args[0][0]
 
 
-def test_get_property_pairs_like_error_returns_empty():
+def test_get_property_pairs_like_error_raises():
+    """A failed query raises (4.6.0; it answered [])."""
     eng, cur = make_engine()
     cur.execute.side_effect = Exception("fail")
-    result = eng.get_property_pairs_like("key", "pat%")
-    assert result == []
+    with pytest.raises(Exception, match="fail"):
+        eng.get_property_pairs_like("key", "pat%")
 
 
 # ---------------------------------------------------------------------------
@@ -209,11 +215,12 @@ def test_get_json_field_values_filters_none():
     assert None not in result
 
 
-def test_get_json_field_values_error_returns_empty():
+def test_get_json_field_values_error_raises():
+    """A failed query raises (4.6.0; it answered [])."""
     eng, cur = make_engine()
     cur.execute.side_effect = Exception("fail")
-    result = eng.get_json_field_values("key", "field")
-    assert result == []
+    with pytest.raises(Exception, match="fail"):
+        eng.get_json_field_values("key", "field")
 
 
 # ---------------------------------------------------------------------------
@@ -226,11 +233,12 @@ def test_get_node_ids_like_basic():
     assert "test-run:node1" in result
 
 
-def test_get_node_ids_like_error_returns_empty():
+def test_get_node_ids_like_error_raises():
+    """A failed query raises (4.6.0; it answered [])."""
     eng, cur = make_engine()
     cur.execute.side_effect = Exception("fail")
-    result = eng.get_node_ids_like("pat%")
-    assert result == []
+    with pytest.raises(Exception, match="fail"):
+        eng.get_node_ids_like("pat%")
 
 
 # ---------------------------------------------------------------------------
@@ -251,11 +259,12 @@ def test_count_subjects_with_property_key_and_val():
     assert "AND val = ?" in args[0]
 
 
-def test_count_subjects_with_property_error_returns_zero():
+def test_count_subjects_with_property_error_raises():
+    """A failed query raises (4.6.0; it answered 0)."""
     eng, cur = make_engine()
     cur.execute.side_effect = Exception("fail")
-    result = eng.count_subjects_with_property("key")
-    assert result == 0
+    with pytest.raises(Exception, match="fail"):
+        eng.count_subjects_with_property("key")
 
 
 def test_count_subjects_with_property_none_row():
@@ -379,10 +388,12 @@ def test_count_nodes_with_label():
     assert "rdf_labels" in sql
 
 
-def test_count_nodes_error_returns_zero():
+def test_count_nodes_error_raises():
+    """A failed query raises (4.6.0; it answered 0)."""
     eng, cur = make_engine()
     cur.execute.side_effect = Exception("fail")
-    assert eng.count_nodes() == 0
+    with pytest.raises(Exception, match="fail"):
+        eng.count_nodes()
 
 
 # ---------------------------------------------------------------------------
@@ -395,10 +406,11 @@ def test_get_nodes_empty_list():
     assert result == []
 
 
-def test_get_nodes_error_returns_empty():
+def test_get_nodes_error_raises():
+    """A failed batch read raises (4.6.0); it no longer retries node by node through Cypher."""
     eng, cur = make_engine()
     cur.execute.side_effect = Exception("fail")
-    # Fallback path calls _get_node_cypher_fallback per-node — mock to return None
     eng._get_node_cypher_fallback = MagicMock(return_value=None)
-    result = eng.get_nodes(["n1"])
-    assert result == []
+    with pytest.raises(Exception, match="fail"):
+        eng.get_nodes(["n1"])
+    eng._get_node_cypher_fallback.assert_not_called()

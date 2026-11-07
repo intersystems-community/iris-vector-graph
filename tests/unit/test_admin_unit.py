@@ -250,14 +250,15 @@ class TestListActiveQueries:
             result = eng.list_active_queries(limit=10)
         assert isinstance(result, list)
 
-    def test_enterprise_sql_error_returns_empty(self):
+    def test_enterprise_sql_error_raises(self):
+        """A failed listing query propagates (4.6.0; it answered [])."""
         eng, conn, cursor = _make_eng()
         iris_obj = MagicMock()
         iris_obj.classMethodValue.return_value = "1"  # Enterprise
         cursor.execute.side_effect = RuntimeError("no privilege")
         with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng.list_active_queries()
-        assert result == []
+            with pytest.raises(RuntimeError, match="no privilege"):
+                eng.list_active_queries()
 
 
 # ---------------------------------------------------------------------------

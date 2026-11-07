@@ -303,7 +303,8 @@ class TestExecuteTraversal:
         assert result.columns == ["cnt"]
         assert result.rows[0][0] == 2
 
-    def test_ivg_result_with_error(self):
+    def test_ivg_result_with_error_raises(self):
+        """A BFS answer with .error set raises (4.6.0; it answered no rows)."""
         eng, conn, cur = make_engine()
         err_result = IVGResult(columns=["id", "hops"], rows=[], error="fail")
         eng._store.execute_bfs.return_value = err_result
@@ -312,8 +313,8 @@ class TestExecuteTraversal:
             "source_id": "n1", "predicates": [],
             "direction": "out", "is_count": False, "return_col": "id",
         }
-        result = eng._execute_traversal(traversal, self._make_sql_query(), None, {})
-        assert result.rows == []
+        with pytest.raises(RuntimeError, match="one-hop traversal from 'n1' failed: fail"):
+            eng._execute_traversal(traversal, self._make_sql_query(), None, {})
 
     def test_ivg_result_no_error_ids(self):
         eng, conn, cur = make_engine()
@@ -699,21 +700,26 @@ class TestExecuteVarLengthCypherExtra:
         eng._nkg_dirty = False
         sq = self._make_sq(src_var="n", params=[])
         with patch.object(eng, "_detect_arno", return_value=False):
+            # BFSFastJsonSorted answers an empty walk
             with patch("iris_vector_graph.schema._call_classmethod",
-                       side_effect=Exception("no iris")):
+                       return_value="SORTED:0") as mock_call:
                 result = eng._execute_var_length_cypher(sq, {"n": "mynode"})
-        # Should fail gracefully and return empty
         assert isinstance(result, IVGResult)
+        # the walk started at the source_var's parameter
+        assert mock_call.call_args[0][2:4] == ("BFSFastJsonSorted", "mynode")
 
     def test_source_from_first_iter_value(self):
         eng, conn, cur = make_engine()
         eng._nkg_dirty = False
         sq = self._make_sq(src_var=None, params=[])
         with patch.object(eng, "_detect_arno", return_value=False):
+            # BFSFastJsonSorted answers an empty walk
             with patch("iris_vector_graph.schema._call_classmethod",
-                       side_effect=Exception("no iris")):
+                       return_value="SORTED:0") as mock_call:
                 result = eng._execute_var_length_cypher(sq, {"x": "anynode"})
         assert isinstance(result, IVGResult)
+        # with no source_var, the walk started at the first parameter's value
+        assert mock_call.call_args[0][2:4] == ("BFSFastJsonSorted", "anynode")
 
     def test_count_path_returns_count(self):
         eng, conn, cur = make_engine()
@@ -1145,7 +1151,8 @@ class TestFilterNodesByPostWhere:
         )
         assert "n1" in result
 
-    def test_exception_returns_all(self):
+    def test_exception_raises(self):
+        """A failure getting the cursor raises (4.6.0; it kept every target)."""
         eng, conn, cur = make_engine()
         conn.cursor.side_effect = Exception("db error")
         sql = (
@@ -1153,12 +1160,13 @@ class TestFilterNodesByPostWhere:
             "JOIN nodes b ON 1=1\n"
             "WHERE a.x = 1"
         )
-        result = eng._filter_nodes_by_post_where(
-            ["n1", "n2"], "b", ["b.name = ?"], ["X"], sql
-        )
-        assert set(result) == {"n1", "n2"}
+        with pytest.raises(Exception, match="db error"):
+            eng._filter_nodes_by_post_where(
+                ["n1", "n2"], "b", ["b.name = ?"], ["X"], sql
+            )
 
-    def test_chunk_query_failure_includes_chunk(self):
+    def test_chunk_query_failure_raises(self):
+        """A failed chunk query raises (4.6.0; it let the chunk's targets through)."""
         eng, conn, cur = make_engine()
         mock_cur = MagicMock()
         mock_cur.execute.side_effect = Exception("sql fail")
@@ -1169,11 +1177,10 @@ class TestFilterNodesByPostWhere:
             "JOIN nodes b ON 1=1\n"
             "WHERE a.x = 1"
         )
-        result = eng._filter_nodes_by_post_where(
-            ["n1", "n2"], "b", ["b.name = ?"], ["X"], sql
-        )
-        # On failure, chunk is added to filtered
-        assert set(result) == {"n1", "n2"}
+        with pytest.raises(Exception, match="sql fail"):
+            eng._filter_nodes_by_post_where(
+                ["n1", "n2"], "b", ["b.name = ?"], ["X"], sql
+            )
 
 
 # ---------------------------------------------------------------------------

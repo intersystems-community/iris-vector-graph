@@ -524,12 +524,13 @@ class TestIRISGraphStoreUnit:
             result = store.execute_temporal_window_query("n1", "CITED", 0, 9999999)
         assert result.columns == ["source", "predicate", "target", "timestamp", "weight"]
 
-    def test_get_temporal_aggregate_returns_zero_on_error(self):
+    def test_get_temporal_aggregate_error_raises(self):
+        """A failed GetAggregate call raises (4.6.0; it answered 0.0)."""
         store, conn, cursor = self._make_store()
         from unittest.mock import patch
         with patch.object(store, "_call_classmethod", side_effect=Exception("no agg")):
-            result = store.get_temporal_aggregate("n1", "CITED", "count", 0, 9999999)
-        assert result.rows == [[0.0]]
+            with pytest.raises(Exception, match="no agg"):
+                store.get_temporal_aggregate("n1", "CITED", "count", 0, 9999999)
 
     def test_close_is_noop(self):
         store, conn, cursor = self._make_store()

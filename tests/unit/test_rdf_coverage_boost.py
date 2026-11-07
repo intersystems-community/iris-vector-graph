@@ -287,7 +287,8 @@ class TestLoadShapesGraphErrors:
 
 class TestProvWindowErrorPath:
 
-    def test_iris_error_returns_empty_list(self):
+    def test_iris_error_raises(self):
+        """An IRIS failure propagates (4.6.0; it answered [])."""
         from iris_vector_graph.engine import IRISGraphEngine
 
         conn = MagicMock()
@@ -298,5 +299,5 @@ class TestProvWindowErrorPath:
         engine._store = MagicMock()
         engine._iris_obj = MagicMock(side_effect=Exception("IRIS not available"))
 
-        result = engine._get_temporal_edges_window(None, None)
-        assert result == []
+        with pytest.raises(Exception, match="IRIS not available"):
+            engine._get_temporal_edges_window(None, None)

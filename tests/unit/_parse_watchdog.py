@@ -15,6 +15,7 @@ Never call the parser on a suspect query in the calling process; use
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -26,6 +27,10 @@ MEM_LIMIT_MB = 500
 TIME_LIMIT_S = 5.0
 WALL_LIMIT_S = 60.0
 POLL_S = 0.1
+#: The child imports the parser, which imports numpy: an OpenBLAS build starts a thread per core and spins them, and
+#: the CPU bound counts every thread (4.6 s of a 5 s budget on a 128-core host, before any parse). The parser needs
+#: no BLAS, so the child runs it on one thread whatever the caller asks (test_460_parse_watchdog_blas_threads.py).
+ONE_BLAS_THREAD = {"OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
 
 _PARSE_CHILD = r"""
 import json, sys
@@ -140,6 +145,7 @@ def run_guarded(
         [sys.executable, "-c", code, arg],
         stdin=subprocess.DEVNULL,
         cwd=REPO_ROOT,  # so the child imports this checkout's parser
+        env={**os.environ, **ONE_BLAS_THREAD},
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

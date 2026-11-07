@@ -980,14 +980,17 @@ class TestVarLengthCypherBFSPaths:
         assert result.rows == []
 
     def test_bfs_fallback_sorted_tag(self):
-        """Lines 1600-1603: BFSFastJsonSorted returns SORTED: tag."""
+        """Lines 1600-1603: BFSFastJsonSorted returns SORTED: tag, read back by ReadBFSResults."""
         eng, conn, cur = make_engine()
         with patch.object(eng, "_detect_arno", return_value=False), \
              patch("iris_vector_graph.schema._call_classmethod",
-                   side_effect=["SORTED:xyz", json.dumps([{"o": "n2", "step": 1}])]):
-            sq = self._make_sq()
+                   side_effect=["SORTED:xyz", json.dumps([{"o": "n2", "step": 1}])]) as mock_ccm:
+            # a row cap sends a SORTED: tag to ReadBFSResults (with none, it streams pages)
+            sq = self._make_sq("FETCH FIRST 10 ROWS ONLY")
             result = eng._execute_var_length_cypher(sq, {})
         assert isinstance(result.rows, list)
+        assert [c.args[2] for c in mock_ccm.call_args_list] == ["BFSFastJsonSorted", "ReadBFSResults"]
+        assert mock_ccm.call_args.args[3] == "xyz"
 
     def test_bfs_fallback_empty(self):
         """Line 1613: BFSFastJsonSorted returns non-SORTED, non-empty → empty list."""
@@ -998,15 +1001,17 @@ class TestVarLengthCypherBFSPaths:
             result = eng._execute_var_length_cypher(sq, {})
         assert result.rows == []
 
-    def test_bfs_fallback_exception(self):
-        """Line 1614-1616: BFSFastJsonSorted raises → IVGResult empty."""
+    def test_bfs_fallback_exception_raises(self):
+        """Line 1614-1616: BFSFastJsonSorted raises → RuntimeError (4.6.0; it answered an empty IVGResult)."""
         eng, conn, cur = make_engine()
         with patch.object(eng, "_detect_arno", return_value=False), \
              patch("iris_vector_graph.schema._call_classmethod",
                    side_effect=RuntimeError("fail")):
             sq = self._make_sq()
-            result = eng._execute_var_length_cypher(sq, {})
-        assert result.rows == []
+            with pytest.raises(
+                RuntimeError, match=r"var-length walk \(BFSFastJsonSorted\) from 'src_node' failed: fail"
+            ):
+                eng._execute_var_length_cypher(sq, {})
 
 
 # ---------------------------------------------------------------------------
@@ -1663,15 +1668,16 @@ class TestFilterNodesByPostWhere:
         )
         assert result == target_ids
 
-    def test_outer_exception_returns_original(self):
+    def test_outer_exception_raises(self):
+        """A failure getting the cursor raises (4.6.0; it returned the targets unfiltered)."""
         eng, conn, cur = make_engine()
         store = MagicMock()
         store.conn.cursor.side_effect = RuntimeError("fail")
         eng._store = store
         target_ids = ["n1", "n2"]
         sql = "SELECT x\nFROM t c\nJOIN Graph_KG.nodes c1 ON 1=1\nWHERE c1.name = ?"
-        result = eng._filter_nodes_by_post_where(target_ids, "c1", ["c1.name = ?"], ["Alice"], sql)
-        assert result == target_ids
+        with pytest.raises(RuntimeError, match="fail"):
+            eng._filter_nodes_by_post_where(target_ids, "c1", ["c1.name = ?"], ["Alice"], sql)
 
 
 class TestRouteVarLengthAdditional:

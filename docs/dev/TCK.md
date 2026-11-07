@@ -312,6 +312,30 @@ The vendored features also carry `@skipGrammarCheck` (22 scenarios) and
 `@skipStyleCheck` (11 scenarios). Both are for openCypher's own grammar and
 style tooling, not for engines. Those scenarios run and count normally.
 
+### Environment-dependent scenarios
+
+A few scenarios expect an answer that depends on the host, not on IVG. They are listed in
+`tests/tck/environment_dependent.txt`, one per line as `<scenario key> | <reason>`; `summarize.py` refuses an entry
+with no reason. A listed scenario that fails is still eligible and failed, so the number stays honest, and the
+summary also names it on its own line:
+
+```text
+environment-dependent failures: 1 (tests/tck/environment_dependent.txt)
+  ENV Temporal2.Temporal2 - Create Temporal Values from a String::[6] ...
+```
+
+List a scenario there only when both answers are right for their host, never to hide an IVG defect. The one listed:
+
+- **Temporal2 [6]**, `datetime('1818-07-21T21:40:32.142[Europe/Stockholm]')`. IVG resolves a named zone with
+  Python's `zoneinfo`, which reads the host's tz database (`/usr/share/zoneinfo`) before the `tzdata` package; IVG
+  holds no offsets of its own. A mainline tz build links Europe/Stockholm to Europe/Berlin and answers the TCK's
+  `+00:53:28`: macOS (2026e) and the `tzdata` wheel (2025.2 and 2026.6) do. Debian and Ubuntu build their `tzdata`
+  with `backzone`, which keeps Stockholm's own 1818 offset, and answer `+01:12:12` (Ubuntu 24.04, 2026e). Measured
+  2026-11-07, on the laptop and on dpgenai1. The same tz version can answer either way: the build decides, and a later
+  tz release can move this one historical offset again. So on Debian or Ubuntu IVG answers Stockholm's own mean
+  time of 1818 from the host's database, which is correct for that host and not a defect. IVG does not pin `tzdata`
+  to satisfy the test.
+
 ## What a pass does and does not verify
 
 Since spec 229 the harness is strict by default. At `937d4b7` a pass checks the

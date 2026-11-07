@@ -126,6 +126,7 @@ def test_raise_on_error_reaches_every_part():
 
 
 def test_an_exception_in_a_part_is_not_swallowed():
+    """The failing part is the answer: its error, no rows, and the later parts do not run; raise_on_error raises it."""
     eng, ran = _engine()
 
     def _boom(parsed, parameters, procedures=None):
@@ -133,8 +134,10 @@ def test_an_exception_in_a_part_is_not_swallowed():
         raise RuntimeError("part failed")
 
     eng._execute_parsed = _boom
+    r = eng.execute_cypher("CALL db.labels(); MATCH (n) RETURN n", {})
+    assert r.rows == [] and "part failed" in r.error and len(ran) == 1
     with pytest.raises(RuntimeError, match="part failed"):
-        eng.execute_cypher("CALL db.labels(); MATCH (n) RETURN n", {})
+        eng.execute_cypher("CALL db.labels(); MATCH (n) RETURN n", {}, raise_on_error=True)
 
 
 def test_procedures_reach_every_part():
