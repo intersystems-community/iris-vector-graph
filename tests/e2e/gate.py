@@ -105,6 +105,7 @@ GROUPS: Dict[str, Group] = {
     "r303": Group("IVG_R303_NAMESPACE", "303", "name"),
     "nullgraph": Group("IVG_UPGRADE_NULL_NS", "NUL", "name"),
     "mcporder": Group("IVG_MCP_ORDER_NAMESPACE", "MCP", "name"),
+    "r316upg": Group("IVG_R316_UPG_NS", "316U", "name"),
 }
 #: Namespace variables an E2E module cannot be given per run, and why (tests/unit/test_460_gate_namespace_vars.py).
 SESSION_NAMESPACES: Dict[str, str] = {

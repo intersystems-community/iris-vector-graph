@@ -95,6 +95,7 @@ def test_each_group_has_its_own_suffix():
     ("test_460_r173_refusal_snapshot_e2e.py", "r173"),
     ("test_degree_cache_live.py", "paros"),
     ("test_460_mcp_toolset_compile_order_e2e.py", "mcporder"),
+    ("test_460_r316_registry_kind_upgrade_e2e.py", "r316upg"),
 ])
 def test_a_module_reading_one_needs_its_group(name, group):
     assert group in gate.needs((E2E / name).read_text())
