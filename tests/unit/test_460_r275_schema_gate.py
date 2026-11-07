@@ -99,7 +99,7 @@ def test_the_schedule_interleaves_sides_within_each_run_and_rotates_their_order(
 def test_the_paths_are_fr_020a_and_r275():
     assert set(gate.PATHS) == {
         "node_write_row", "edge_write_row", "node_write_bulk", "edge_write_bulk", "bare_node_retire", "graph_erase",
-        "temporal_edge_write", "cypher_one_hop", "cypher_var_length", "pagerank", "ledger_commit",
+        "temporal_edge_write", "cypher_one_hop", "cypher_var_length", "pagerank", "pagerank_cached", "ledger_commit",
         "collect_node_property", "nkg_first_read_after_erase",
     }
     assert gate.THRESHOLD == 0.05 and gate.MIN_RUNS == 5

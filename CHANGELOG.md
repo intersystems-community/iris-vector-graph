@@ -289,6 +289,12 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   GraphQL answered `RETURN '{"a":1}'` as a map, and Bolt `RETURN '1e5'` as 100000.0). A whole node is still its three
   columns of JSON text. **What to do:** drop `json.loads` on such a value (it raises `TypeError` on a list).
   <!-- R311 -->
+- **A repeated PageRank call is answered from the cache without reading the node table.** Since R306 every
+  `kg_PAGERANK()` call, a cached one too, first listed the default graph's nodes with no edge (a scan of the node
+  table, 46 ms at 20,000 nodes), because that list was part of the cache key. The key now holds the node table's row
+  count and largest row id, and the list is read only when PageRank is computed: a cached call took 58.7 ms and takes
+  3.3 ms (a42db224: 1.9 ms). Computing PageRank still reads the list, about 50% more than a42db224 at 20,000 nodes.
+  <!-- R313 -->
 - **Setup on a non-default IVG Schema tunes that schema's tables.** `initialize_schema()` ran `TUNE TABLE Graph_KG.*`
   whatever the engine's IVG Schema was, so a namespace set up with `schema_prefix="IVGALT"` had its own tables never
   tuned, and its status listed `Graph_KG.*` under `tuned`. A failed `TUNE TABLE` of a table that is there is now a

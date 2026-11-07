@@ -150,6 +150,22 @@ class AlgorithmsMixin:
 
         return named_graph_with_edges(self.conn)
 
+    def _node_set_token(self) -> Optional[str]:
+        """The node table's row count and largest row id, ``"count:max"``, or None when it cannot be read.
+
+        Adding or removing a node moves it (a row id is never reused), so with the adjacency token the algorithm cache
+        already checks it says when the default graph's edgeless nodes may have changed, for a fraction of reading them
+        (0.8 ms against 46 ms at 20,000 nodes; 4.6.0 R313). Any graph's node moves it: that only costs a recompute."""
+        try:
+            cur = self.conn.cursor()
+            cur.execute(f"SELECT COUNT(*), MAX(%ID) FROM {self._t('nodes')}")
+            count, top = cur.fetchone()
+            return f"{int(count or 0)}:{int(top or 0)}"
+        except Exception as exc:  # noqa: BLE001 - said; the list then keys the entry, as before R313
+            logger.warning("PageRank: the node table's row count could not be read (%s); reading its nodes with "
+                           "no edge for the cache key", exc)
+            return None
+
     def _loners(self, graph: Optional[str] = "") -> Dict[str, bool]:
         """The graph's nodes with no edge to another node, ``{id: has_self_loop}`` (4.6.0 R306): the adjacency the
         algorithms read lists none of them, or (triangles, k-core, Leiden) not those whose only edges are
@@ -688,12 +704,19 @@ class AlgorithmsMixin:
         # the nodes with no edge take part (4.6.0 R306), each as a node with no out-edge
         from iris_vector_graph._edgeless import edgeless as _edgeless_of
 
-        edgeless = _edgeless_of(self._loners())
+        token = self._node_set_token()
         if self._store_capabilities.get("pagerank", True):
-            result = (self._store.execute_pagerank(damping, max_iterations, edgeless) if edgeless
-                      else self._store.execute_pagerank(damping, max_iterations))
+            if token is not None:
+                # the loners are read on a cache miss only (4.6.0 R313); the token keys the entry instead
+                result = self._store.execute_pagerank(damping, max_iterations,
+                                                      loners=lambda: _edgeless_of(self._loners()), node_token=token)
+            else:
+                edgeless = _edgeless_of(self._loners())
+                result = (self._store.execute_pagerank(damping, max_iterations, edgeless) if edgeless
+                          else self._store.execute_pagerank(damping, max_iterations))
             if not result.error:
                 return [(r[0], float(r[1])) for r in result.rows]
+        edgeless = _edgeless_of(self._loners())
         from iris_vector_graph.schema import _call_classmethod
         raw = str(_call_classmethod(self.conn, "Graph.KG.PageRank", "PageRankGlobalJson",
                                     damping, max_iterations, *((json.dumps(edgeless),) if edgeless else ())))

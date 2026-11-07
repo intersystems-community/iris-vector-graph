@@ -41,7 +41,7 @@ THRESHOLD = 0.05
 MIN_RUNS = 5
 SIDES = ("base", "default", "alt")
 COMPARED = ("default", "alt")
-#: FR-020a's paths, then R275's two.
+#: FR-020a's paths (PageRank computed, and answered by the cache), then R275's two.
 PATHS = (
     "node_write_row",
     "edge_write_row",
@@ -53,6 +53,7 @@ PATHS = (
     "cypher_one_hop",
     "cypher_var_length",
     "pagerank",
+    "pagerank_cached",
     "ledger_commit",
     "collect_node_property",
     "nkg_first_read_after_erase",
@@ -64,7 +65,7 @@ NOTES = {
 }
 #: Paths whose answer changed by design since a42db224: a different answer is reported, not failed.
 #: pagerank: 4.6.0 scores every node, a node with no edge too (R225, R306).
-ANSWER_MAY_DIFFER = {"pagerank"}
+ANSWER_MAY_DIFFER = {"pagerank", "pagerank_cached"}
 DEFAULT_OUT = Path.home() / ".cache" / "ivg-bench" / "spec262" / "gate"
 
 

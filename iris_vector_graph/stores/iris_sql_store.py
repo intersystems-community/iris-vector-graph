@@ -2270,10 +2270,22 @@ class IRISGraphStore:
             logger.warning("PPR failed: %s", e)
             return IVGResult(columns=["id", "score"], rows=[], error=str(e)[:200])
 
-    def execute_pagerank(self, damping: float, max_iterations: int, edgeless: Sequence[str] = ()) -> IVGResult:
+    def execute_pagerank(self, damping: float, max_iterations: int, edgeless: Sequence[str] = (), *,
+                         loners: Optional[Callable[[], Sequence[str]]] = None,
+                         node_token: Optional[str] = None) -> IVGResult:
         """Global PageRank of the default graph. ``edgeless``: its nodes with no edge, which take part as nodes with
-        no out-edge (4.6.0 R306). They are in the cache key: writing a node with no edge moves no adjacency token."""
+        no out-edge (4.6.0 R306). They are in the cache key: writing a node with no edge moves no adjacency token.
+
+        Or ``loners`` (a call answering that list) with ``node_token`` (the node table's row count and largest row id):
+        the token is in the key instead, and the list is read on a miss only (4.6.0 R313: reading it on every call,
+        a hit too, cost a scan of the node table)."""
         params: Dict[str, Any] = {"damping": damping, "max_iterations": max_iterations}
+        if loners is not None and node_token is not None:
+            params["nodes"] = node_token
+            return self._cached_algorithm(
+                "pagerank", None, params, ["id", "score"],
+                lambda: self._execute_pagerank(damping, max_iterations, loners()),
+            )
         if edgeless:
             params["edgeless"] = sorted(edgeless)
         return self._cached_algorithm(

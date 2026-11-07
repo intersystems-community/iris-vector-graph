@@ -207,9 +207,20 @@ class Side:
                            lambda rows: sum(int(r[0][0]) for r in rows))
 
     def pagerank(self, run):
-        # a repeat is served from the algorithm cache: each run computes, as a first call does
+        # the computation, as a first call makes it: the algorithm cache off (its shared global and the process's
+        # front layer both answer a repeat), on every side the same way (IVG_DISABLE_ALGO_CACHE, read per call)
         self.settle()
-        self.native.kill("^IVG.AlgoCache")
+        os.environ["IVG_DISABLE_ALGO_CACHE"] = "1"
+        try:
+            secs, scores = self.timed(lambda: self.e.kg_PAGERANK())
+        finally:
+            os.environ.pop("IVG_DISABLE_ALGO_CACHE", None)
+        return secs, len(scores or [])
+
+    def pagerank_cached(self, run):
+        """A repeat call, answered by the algorithm cache: what an application calling PageRank twice pays."""
+        self.settle()
+        self.e.kg_PAGERANK()
         secs, scores = self.timed(lambda: self.e.kg_PAGERANK())
         return secs, len(scores or [])
 
