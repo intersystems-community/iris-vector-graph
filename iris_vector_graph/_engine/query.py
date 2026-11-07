@@ -3131,7 +3131,7 @@ class QueryMixin:
             return IVGResult(columns=out_cols, rows=[], metadata=sql_query.query_metadata)
 
         # 4.6.1: remove this step, measured unreachable: a RETURN of the hop's relationship variable expands in SQL since
-        # 4.6.0 R294 (translator._vlp_bfs_answers).
+        # 4.6.0 R294, and with a relationship property map since R308 (translator._vlp_bfs_answers).
         # Step 5: RETURN r, one row per path: the path's relationships as the SQL route gives them (CY_VLP_PATHS), a
         # JSON list of {"type", "props"}, each edge's qualifiers read by the row it walked. It was [[":TYPE"], ...]
         # (4.6.0 R294).

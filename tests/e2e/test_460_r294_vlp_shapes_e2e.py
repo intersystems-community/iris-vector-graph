@@ -8,10 +8,12 @@ Three gaps fixes44 left after R291 (measured 2026-11-05 on 2026.3.0AI, IVG460FZ2
   (R273's rule for fixed-length patterns), with the null row when there is none, so SQL (CY_VLP_PATHS) answers it.
 - `RETURN r` of a named path's hop from a start pinned by id went to the engine's labeled route, which built
   `[[":knows"], ...]` (and `RETURN b.name AS n, r` answered `r` alone): the RETURN names the hop's relationship
-  variable, which the route does not read, so it expands in SQL. Where the labeled route still answers `RETURN r` (a
-  relationship property map SQL does not check, `{w: 1.5}`), it gives SQL's shape: a JSON list of {"type", "props"}.
+  variable, which the route does not read, so it expands in SQL. With a relationship property map (`{w: 1.5}`) the
+  labeled route answered `RETURN r` in SQL's shape, a list of {"type", "props"}; since R308 that read expands in SQL
+  too.
 - With two parallel relationships of one type, the path-function route read each hop's qualifiers by its ends and
-  type, so both paths showed the first one's: each hop now reads the row it walked.
+  type, so both paths showed the first one's: each hop now reads the row it walked. (Since R308 a named path from an
+  id runs in SQL too, so both spellings below run there.)
 
 The graph, worked by hand (label R294V), in the default graph in multigraph mode for the test (spec 234; set back
 after): a -knows {tag: 'one'}-> b, a -knows {tag: 'seven'}-> b, b -knows {tag: 'two'}-> c. The knows
@@ -153,10 +155,10 @@ def test_the_labeled_route_answers_return_r_in_the_sql_shape(engine):
     assert _bag([r[0] for r in rows]) == _bag([[_rel(1.5, "hop")], [_rel(1.5, "hop"), _rel(1.5, "hop")]])
 
 
-# ------------------------------------------------------------------ parallel relationships on the path-function route
+# ------------------------------------------------------- parallel relationships (the path-function route's, before R308)
 
 def test_each_hop_reads_the_relationship_it_walked(engine):
-    """`(a {node_id: ...})` with relationships(p) is the engine's path-function route (R291); by label, SQL."""
+    """`(a {node_id: ...})` with relationships(p) was the engine's path-function route (R291); since R308 both run in SQL."""
     want = _bag([["b", p] if len(p) == 1 else ["c", p] for p in PATHS_FROM_A])
     for match in ("MATCH p = (a {node_id: 'r294a'})-[:knows*1..2]->(b) ",
                   "MATCH p = (a:R294V)-[:knows*1..2]->(b) WHERE a.name = 'a' "):
