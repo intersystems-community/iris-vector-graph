@@ -623,12 +623,11 @@ role can only read:
   namespace, the call still makes the application and grants the rest. It then returns an error status that names the
   routine. The routes that call that routine fail until `initialize_schema()` creates it and you run `CreateWebApp`
   again.
-- SELECT on each other node-vector table `embedding_registry` lists when `CreateWebApp` runs: after setup
-  `kg_NodeEmbeddings_optimized` and `kg_EdgeEmbeddings`, which setup records there for the default graph (measured on
-  2026.3.0AI and on Community 2026.1), and each named graph's vector route (`kg_emb_<hash>`). `/vectorSearch` and
-  `/hybridSearch` read a named graph's vectors there. A route made later, by a graph's first vector, is not
-  granted: a search of that graph fails with a privilege error that names the table. Run `CreateWebApp` again to grant
-  it.
+- SELECT on each named graph's vector route (`kg_emb_<hash>`) that `embedding_registry` lists when `CreateWebApp`
+  runs. `/vectorSearch` and `/hybridSearch` read a named graph's vectors there. A route made later, by a graph's first
+  vector, is not granted: a search of that graph fails with a privilege error that names the table. Run
+  `CreateWebApp` again to grant it. No route reads `kg_NodeEmbeddings_optimized` or `kg_EdgeEmbeddings`, so the role
+  is granted neither (measured on 2026.3.0AI and on Community 2026.1).
 
 Running `CreateWebApp` again resets the role and the application to exactly this. The role loses any other SQL
 privilege it holds in the IVG Schema, whoever granted it, and any role granted to it. The application gets this

@@ -46,7 +46,10 @@ ClassMethod getVectorTable(graph As %String = "", modelKey As %String = "") As %
     sql = (
         "SELECT table_name FROM Graph_KG.embedding_registry "
         "WHERE COALESCE(graph_id, '') = COALESCE(?, '') AND COALESCE(model_key, '') = COALESCE(?, '') "
-        "AND COALESCE(kind, 'node') = 'node'"
+        "AND COALESCE(kind, 'node') = 'node' "
+        # the default graph has two node rows, kg_NodeEmbeddings and kg_NodeEmbeddings_optimized (a 3.x layout): the
+        # one the vectors are in answers, as in the engine's _route_preference (4.6.0 R316)
+        "ORDER BY CASE WHEN UPPER(table_name) = 'KG_NODEEMBEDDINGS' THEN 0 ELSE 1 END"
     )
     rows = pyops.ReadRows("getVectorTable", sql, (graph_id, model), "Graph_KG.embedding_registry", "", 1)
     if rows is None:
@@ -107,7 +110,8 @@ ClassMethod getExpectedDimension(graph As %String = "", modelKey As %String = ""
     declared = (
         "SELECT dimension FROM Graph_KG.embedding_registry "
         "WHERE COALESCE(graph_id, '') = COALESCE(?, '') AND COALESCE(model_key, '') = COALESCE(?, '') "
-        "AND COALESCE(kind, 'node') = 'node'"
+        "AND COALESCE(kind, 'node') = 'node' "
+        "ORDER BY CASE WHEN UPPER(table_name) = 'KG_NODEEMBEDDINGS' THEN 0 ELSE 1 END"
     )
     rows = pyops.ReadRows("getExpectedDimension", declared, (graph_id, model), "Graph_KG.embedding_registry", "", 1)
     if rows is None:

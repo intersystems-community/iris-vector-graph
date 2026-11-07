@@ -1413,6 +1413,14 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Fixed: vectors and embeddings**
 
+- **Setup records `kg_EdgeEmbeddings` as the edge-vector table it is.** Setup registered each vector table of an
+  install that predates the registry (`kg_NodeEmbeddings`, `kg_NodeEmbeddings_optimized`, `kg_EdgeEmbeddings`) as a
+  node route of the default graph, so the REST routes' reader of the default graph's vector table and width
+  (`Graph.KG.PyOps.getVectorTable`, `getExpectedDimension`) had three rows to choose from, in no order, one of them
+  keyed `(s, p, o_id)`. Setup now records `kg_EdgeEmbeddings` as an edge route and repairs the row an earlier setup
+  wrote, and those readers take `kg_NodeEmbeddings` first, as the engine does. The `/kg` role is unchanged: no route
+  reads `kg_NodeEmbeddings_optimized` or `kg_EdgeEmbeddings`, so it is granted neither (ADMIN_GUIDE section 4 said it
+  was). **What to do:** run `initialize_schema()`. <!-- R316 -->
 - **KNN, vector search and retrieve read a named graph's or model's own embedding table.** The store's `execute_knn_vec`
   and `CALL ivg.vector.search` with a vector, with a seed node or with text, and `CALL ivg.retrieve` read
   `kg_NodeEmbeddings` whatever the graph and model, so a routed graph's vectors were never searched (SQLCODE -257 at

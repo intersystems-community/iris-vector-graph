@@ -176,6 +176,9 @@ ROUTE_KIND_NODE = "node"
 #: The value an edge route records.
 ROUTE_KIND_EDGE = "edge"
 
+#: The table every edge vector written before routing is in (spec 230): an edge route at the default graph.
+LEGACY_EDGE_TABLE = "kg_EdgeEmbeddings"
+
 #: Spec 227 (FR-019, FR-021) and spec 230 (FR-006): the columns an existing registry
 #: gains on upgrade. The first four let a route describe its own index and recall;
 #: ``kind`` says which kind of vector it holds.
@@ -1306,7 +1309,10 @@ class SchemaMixin:
                     dtype=dtype,
                 )
                 try:
-                    self._insert_identity(cursor, name, "", adopted, "adopted")
+                    # kg_EdgeEmbeddings is keyed (s, p, o_id): an edge route. Recorded as the default kind, node, it
+                    # was a third row answering the default graph's node route, in no order (4.6.0 R316).
+                    kind = ROUTE_KIND_EDGE if name == LEGACY_EDGE_TABLE else ROUTE_KIND_NODE
+                    self._insert_identity(cursor, name, "", adopted, "adopted", kind=kind)
                 except Exception as e:
                     # A concurrent writer got there first. Its row stands.
                     logger.debug("Adoption of %s lost the race: %s", name, e)
@@ -1327,6 +1333,23 @@ class SchemaMixin:
                 except Exception:
                     pass
         return outcomes
+
+    def _repair_legacy_edge_route_kind(self, cursor) -> None:
+        """Record `kg_EdgeEmbeddings`' registry row as the edge route it is, where an earlier setup's adoption recorded
+        it as a node route (4.6.0 R316). A registry with no `kind` column (a pre-230 one whose ADD COLUMN did not
+        take), or none at all, is left as it is."""
+        try:
+            cursor.execute(
+                f"UPDATE {self._registry_table()} SET kind = 'edge' "
+                f"WHERE table_name = '{LEGACY_EDGE_TABLE}' AND COALESCE(kind, 'node') = 'node'"
+            )
+        except Exception as e:
+            # -29: no kind column; -30: no registry. Anything else is a failure.
+            if not any(f"SQLCODE: <{c}>" in str(e) or getattr(e, "sqlcode", None) == c for c in (-29, -30)):
+                raise
+            logger.warning("%s's registry row is left as it is: %s", LEGACY_EDGE_TABLE, e)
+        else:
+            self.conn.commit()
 
     def enforce_embedding_identity(
         self,
@@ -2431,6 +2454,7 @@ class SchemaMixin:
         # the migration below so the recorded expectation exists before a width can move,
         # and so an installation that predates the registry needs no operator action.
         self.adopt_embedding_identities(cursor)
+        self._repair_legacy_edge_route_kind(cursor)
 
         # 4. Bring every vector column to the configured dimension.
         #

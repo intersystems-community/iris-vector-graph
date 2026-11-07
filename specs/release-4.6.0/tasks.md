@@ -430,6 +430,10 @@ Streams: **FIX** (A), **DOC** (C), **DT** (D), **NW** (E), **REL** (F). IDs are 
   GraphQL, MCP tools), nested ones included; strings the query builds stay strings; the TCK harness compares Python
   types (187 scenarios had passed on decoded text or Decimal); Tom's breaking-change decision (fixes64, merged
   b58f267a; CHANGELOG tags renumbered from R311 in e14f4acc)
+- [x] R316 [FIX] Setup's adoption records `kg_EdgeEmbeddings` as kind `edge` (it was `node`, a third default-graph
+  node row) and repairs an earlier setup's row; PyOps reads `kg_NodeEmbeddings` first; ADMIN_GUIDE section 4 no longer
+  says the `/kg` role reads `kg_NodeEmbeddings_optimized` and `kg_EdgeEmbeddings` (no route does; checked per table
+  with CheckPrivilege on 2026.3.0AI and Community 2026.1) (fixes82, walkthrough round 3)
 
 **Deferred to 4.6.1** (scope freeze at R303, Tom 2026-11-05; found after the freeze, below the bar of security, data
 loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
