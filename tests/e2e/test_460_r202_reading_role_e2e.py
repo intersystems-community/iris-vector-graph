@@ -294,6 +294,21 @@ def test_without_the_routines_database_the_class_methods_are_refused_and_sql_sti
     assert '"id":"a"' in cur.fetchone()[0]
 
 
+SHORTEST = "MATCH p = shortestPath((a {node_id: 'a'})-[*]->(d {node_id: 'd'})) RETURN [n IN nodes(p) | n.node_id]"
+
+
+def test_without_the_routines_database_shortest_path_sets_the_error_instead_of_answering_no_rows(split):
+    """Round-3 walkthrough: shortestPath, refused `<PROTECT>` on Graph.KG.Traversal, answered no rows with
+    `result.error` None (a WARNING was the only sign). It now fails as the guide says the refused calls do: the error
+    is the result's, `raise_on_error=True` raises it, and the guide's role answers the path."""
+    _, readers, _ = split
+    refused = readers["old"].execute_cypher(SHORTEST)
+    assert refused.rows == [] and refused.error and "<PROTECT>" in str(refused.error), (refused.rows, refused.error)
+    with pytest.raises(RuntimeError, match="PROTECT"):
+        readers["old"].execute_cypher(SHORTEST, raise_on_error=True)
+    assert readers["guide"].execute_cypher(SHORTEST, raise_on_error=True).rows == [[["a", "b", "c", "d"]]]
+
+
 def test_without_the_routines_database_khop_raises_instead_of_answering_no_nodes(split):
     """R050, the lead's follow-up: the class dictionary is in the routines database too, and refused it answered that
     no class exists, so the engine took IVG for not deployed and khop() answered []. A refusal now raises, naming the
