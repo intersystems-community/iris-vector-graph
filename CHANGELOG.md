@@ -1225,8 +1225,16 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   `VARCHAR` with no length, which IRIS makes 30 characters: `WITH n.title + '-abcdefghijklmnopqrstuvwxyz0123456789'
 AS s RETURN {a: s}` answered `{'a': 'Alien-abcdefghijklmnopqrstuvwx'}`, and a list in a map was cut mid-element,
   so its text did not parse. String `+`, `toString()` and `coalesce()` cut each operand at 4,096 characters, where a
-  property holds up to 64,000. No cast in the translated SQL has a length under IRIS's longest string now. Measured on
+  property holds up to 64,000. Those casts are to VARCHAR(3641144), IRIS's longest string, now, and a test fails on an unsized one. Measured on
   2026.3.0AI and Community 2026.1. <!-- fixes80 -->
+- **A procedure's list, map or path column answers the Python value.** `CALL ivg.shortestPath.weighted(...) YIELD
+path, totalCost` answered `path` as its JSON text (`'{"nodes":["alien","brazil"],"rels":["LIKES"],...}'`), from the
+  engine's handler and from the translated `CALL` alike, and `RETURN path.nodes` answered the list's text. Each is now
+  the dict of the path's `nodes`, `rels`, `costs`, `length` and `totalCost`, or the list, through `execute_cypher`,
+  REST, Bolt and GraphQL. `CALL apoc.meta.schema() YIELD value` answered an `IVGResult` object (REST sent its fields,
+  Bolt its `repr`); it is now a map of each label and relationship type to its `type` and `properties`. The other
+  procedures already answered their lists and maps as Python values; a test per procedure now checks each column's
+  type. **What to do:** drop `json.loads` on a weighted path. <!-- R314 -->
 - **A map literal spells a property as `RETURN x.p` reads it.** `RETURN {k: x.p}` answered the API's number text
   `'0'` as the number 0 where `RETURN x.p`, `[x.p]` and `x {.p}` answer the string, and wrote the strings `'.95'` and
   `'007'` as bare numbers and a newline or `$Char(0)` unescaped, so the map's JSON did not parse; a relationship's

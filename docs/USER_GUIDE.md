@@ -534,6 +534,8 @@ r.rows[0][0]
 finds the cheapest path by edge weight, in the `USE GRAPH` graph; without one, in each graph with edges, a row per
 graph that has a path. The defaults are
 `'weight'`, 9999, 10, `'out'` and every relationship type; `maxHops` bounds the path's relationships (0 for no bound).
+`path` is a dict: `nodes` (the node IDs, from `from` to `to`), `rels` (the relationship types), `costs` (each
+relationship's weight), `length` and `totalCost`, so `path.nodes` is a list. Before 4.6.0 it was the dict's JSON text.
 An edge's weight is its `weight` property (`create_edge(..., weight=...)`, or `{weight: 2.5}` in Cypher), the one
 property the adjacency index stores, so `weightProp` must be `'weight'`: any other name is an error, not a search by
 that property. An edge without one costs 1.0, and `r.weight` reads it as null; `r.weight` reads a weight given to

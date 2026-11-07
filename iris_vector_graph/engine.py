@@ -1213,7 +1213,9 @@ class IRISGraphEngine(
             if result_str == "{}":
                 continue
             path_obj = _json.loads(result_str)
-            rows.append([result_str, float(path_obj.get("totalCost", 0))])
+            # the path as the dict of its keys (nodes, rels, costs, length, totalCost), as the translated CALL answers
+            # it: 4.6.0 R314, it answered the JSON text
+            rows.append([path_obj, float(path_obj.get("totalCost", 0))])
         return IVGResult(columns=["path", "totalCost"], rows=rows)
 
     def _proc_db_labels(self, proc) -> Optional[Dict[str, Any]]:
@@ -1341,13 +1343,17 @@ class IRISGraphEngine(
             ),
             _proc(
                 "dbms.procedures",
-                "dbms.procedures() :: (name :: STRING, signature :: STRING, description :: STRING)",
+                "dbms.procedures() :: (name :: STRING, signature :: STRING, description :: STRING, mode :: STRING, "
+                "admin :: BOOLEAN, option :: MAP, defaultBuiltInRoles :: STRING, isDeprecated :: BOOLEAN, "
+                "worksOnSystem :: BOOLEAN, argumentDescription :: LIST)",
                 "List procedures",
                 "DBMS",
             ),
             _proc(
                 "dbms.functions",
-                "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING)",
+                "dbms.functions() :: (name :: STRING, signature :: STRING, description :: STRING, aggregating :: BOOLEAN, "
+                "defaultBuiltInRoles :: LIST, isDeprecated :: BOOLEAN, argumentDescription :: LIST, "
+                "returnDescription :: STRING, category :: STRING)",
                 "List functions",
                 "DBMS",
             ),
@@ -1359,7 +1365,7 @@ class IRISGraphEngine(
             ),
             _proc(
                 "dbms.security.showCurrentUser",
-                "dbms.security.showCurrentUser() :: (username :: STRING, roles :: LIST)",
+                "dbms.security.showCurrentUser() :: (username :: STRING, roles :: LIST, flags :: LIST)",
                 "Current user",
                 "DBMS",
             ),
@@ -1559,8 +1565,19 @@ class IRISGraphEngine(
         )
 
     def _proc_apoc_meta_schema(self, proc) -> Optional[Dict[str, Any]]:
-        result = self._try_system_procedure(type("P", (), {"procedure_name": "apoc.meta.data"})())
-        return IVGResult(columns=["value"], rows=[[result or {}]])
+        """``CALL apoc.meta.schema() YIELD value``: one map, each label and relationship type of ``apoc.meta.data``
+        to ``{"type": "node" | "relationship", "properties": {name: {"type", "indexed", "unique", "existence"}}}``.
+        Before 4.6.0 (R314) ``value`` was ``apoc.meta.data``'s IVGResult object, not a map."""
+        data = self._proc_apoc_meta_data(proc)
+        schema: Dict[str, Any] = {}
+        for row in data.rows:
+            r = dict(zip(data.columns, row))
+            entry = schema.setdefault(r["label"], {"type": r["elementType"], "properties": {}})
+            if r["property"] is not None:
+                entry["properties"][r["property"]] = {
+                    "type": r["type"], "indexed": r["index"], "unique": r["unique"], "existence": r["existence"],
+                }
+        return IVGResult(columns=["value"], rows=[[schema]])
 
     def _try_system_procedure(
         self, proc, parameters=None, graph=None

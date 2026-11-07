@@ -22,7 +22,6 @@ cost-only search (`YIELD totalCost`, `DijkstraCost`) and the translation (`... W
 from __future__ import annotations
 
 import contextlib
-import json
 import uuid
 
 import pytest
@@ -30,11 +29,11 @@ import pytest
 pytestmark = [pytest.mark.e2e]
 
 ROUTES = {
-    "handler": ("YIELD path, totalCost", lambda r: [(json.loads(row[0])["nodes"], float(row[1])) for row in r.rows]),
+    "handler": ("YIELD path, totalCost", lambda r: [(row[0]["nodes"], float(row[1])) for row in r.rows]),
     "cost": ("YIELD totalCost", lambda r: [float(row[0]) for row in r.rows]),
     "translated": (
         "YIELD path, totalCost WITH path, totalCost RETURN path, totalCost",
-        lambda r: [(json.loads(row[0])["nodes"], float(row[1])) for row in r.rows],
+        lambda r: [(row[0]["nodes"], float(row[1])) for row in r.rows],
     ),
 }
 

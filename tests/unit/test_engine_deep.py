@@ -134,7 +134,7 @@ class TestExecuteCypherProcedures:
                 "CALL ivg.shortestPath.weighted($from, $to, 'weight', 5) YIELD path, totalCost RETURN path, totalCost",
                 parameters={"from": "n1", "to": "n2"}
             )
-        assert r.rows == [[answer, 1.5]]
+        assert r.rows == [[{"nodes": ["n1", "n2"], "totalCost": 1.5}, 1.5]]  # the path's dict (4.6.0 R314)
 
     def test_ivg_shortestpath_weighted_no_path(self):
         with patch("iris_vector_graph.engine._call_classmethod", return_value="{}"):

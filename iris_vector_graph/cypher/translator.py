@@ -1605,6 +1605,11 @@ class TranslationContext:
         self.container_kind_vars: Dict[str, str] = (
             {} if parent is None else dict(getattr(parent, "container_kind_vars", {}))
         )
+        # Variable -> {key: 'list' / 'map' / None} for a map a CALL yields whose keys are known (a weighted path's
+        # nodes, rels and costs, procedure_signatures.PATH_KEYS): `path.nodes` is a list (4.6.0 R314)
+        self.yield_key_kinds: Dict[str, Dict[str, Optional[str]]] = (
+            {} if parent is None else dict(getattr(parent, "yield_key_kinds", {}))
+        )
         # WITH alias -> value kind (see _literal_value_kind) when the alias was bound
         # to a literal or a parameter; used to type-check dynamic subscripts.
         self.with_value_kinds: Dict[str, str] = (
@@ -2131,12 +2136,35 @@ def translate_procedure_call(proc: ast.CypherProcedureCall, context: Translation
     renames = _yield_renames(proc)
     if not renames:
         handler(proc, context)
-        return
-    # `YIELD node AS n`: the handler sees the columns' own names and binds them; the names are then moved to the
-    # aliases, and the CTE gains each alias as a column (4.6.0 R167: the alias pair was bound as a variable, so `n`
-    # was undefined)
-    handler(dataclasses.replace(proc, yield_items=[orig for orig, _ in _yield_pairs(proc)]), context)
-    _bind_yield_aliases(renames, context)
+    else:
+        # `YIELD node AS n`: the handler sees the columns' own names and binds them; the names are then moved to the
+        # aliases, and the CTE gains each alias as a column (4.6.0 R167: the alias pair was bound as a variable, so `n`
+        # was undefined)
+        handler(dataclasses.replace(proc, yield_items=[orig for orig, _ in _yield_pairs(proc)]), context)
+        _bind_yield_aliases(renames, context)
+    _mark_yielded_containers(proc, context)
+
+
+#: a yielded column's signature type -> the container kind its JSON text is (`_container_kind`)
+_YIELD_CONTAINER_KINDS = {"LIST": "list", "MAP": "map", "PATH": "map"}
+
+
+def _mark_yielded_containers(proc, context) -> None:
+    """Mark each yielded LIST, MAP or PATH column (procedure_signatures) as the list or map it holds, so a RETURN or
+    WITH of it, or of a key of its map, answers the Python list or dict (4.6.0 R314: `YIELD path ... RETURN path`
+    answered the path's JSON text)."""
+    from .procedure_signatures import path_keys, signature
+
+    name = _IVG_PROCEDURE_SPELLINGS.get(proc.procedure_name, proc.procedure_name)
+    types = dict(signature(name) or ())
+    for column, var in _yield_pairs(proc):
+        kind = _YIELD_CONTAINER_KINDS.get(types.get(column))
+        if kind is None:
+            continue
+        context.container_kind_vars[var] = kind
+        keys = path_keys(name, column)
+        if keys:
+            context.yield_key_kinds[var] = {k: _YIELD_CONTAINER_KINDS.get(t) for k, t in keys.items()}
 
 
 def _yield_pairs(proc) -> list:
@@ -20032,6 +20060,9 @@ def _container_kind(e, context) -> Optional[str]:
         if e.name in {vl.get("rel_var") for vl in getattr(context, "var_length_paths", None) or ()}:
             return "list"  # a variable-length relationship's list of relationships
         return getattr(context, "container_kind_vars", {}).get(e.name)
+    if isinstance(e, ast.PropertyReference):
+        # a key of a map a CALL yields (`path.nodes` of ivg.shortestPath.weighted, 4.6.0 R314)
+        return (getattr(context, "yield_key_kinds", {}).get(e.variable) or {}).get(e.property_name)
     if isinstance(e, ast.CaseExpression):
         kinds = {_container_kind(w.result, context) for w in e.when_clauses}
         if e.else_result is not None and not (isinstance(e.else_result, ast.Literal) and e.else_result.value is None):
@@ -29092,6 +29123,11 @@ def translate_with_clause(with_clause, context):
             context.container_kind_vars[alias] = _ck  # a list or map carried to a RETURN (4.6.0 R311)
         else:
             context.container_kind_vars.pop(alias, None)
+        _keys = context.yield_key_kinds.get(item.expression.name) if isinstance(item.expression, ast.Variable) else None
+        if _keys:
+            context.yield_key_kinds[alias] = _keys  # a yielded map carried on: its keys still known (4.6.0 R314)
+        else:
+            context.yield_key_kinds.pop(alias, None)
         # a collect() of lists (4.6.0 R273): an UNWIND of it must not hand JSON_TABLE a one-element list of a list
         _nested = getattr(context, "nested_list_vars", None)
         if _nested is None:

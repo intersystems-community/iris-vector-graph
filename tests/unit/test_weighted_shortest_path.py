@@ -1,4 +1,3 @@
-import json
 import os
 import uuid
 
@@ -62,7 +61,7 @@ class TestWeightedShortestPathE2E:
         )
         result = self.engine.execute_cypher(q)
         assert len(result["rows"]) == 1, f"Expected 1 row, got {result['rows']}"
-        path_json = json.loads(result["rows"][0][0])
+        path_json = result["rows"][0][0]
         total_cost = result["rows"][0][1]
         assert abs(total_cost - 2.0) < 0.01, f"Expected totalCost=2.0, got {total_cost}"
         assert C in path_json["nodes"], f"Expected C in path, got {path_json['nodes']}"
@@ -88,7 +87,7 @@ class TestWeightedShortestPathE2E:
         )
         result = self.engine.execute_cypher(q)
         assert len(result["rows"]) == 1
-        path_json = json.loads(result["rows"][0][0])
+        path_json = result["rows"][0][0]
         assert path_json["length"] == 0
         assert path_json["totalCost"] == 0.0
 

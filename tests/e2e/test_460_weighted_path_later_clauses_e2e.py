@@ -11,7 +11,6 @@ alone it is a, b, d at cost 4. The nodes are also rows in `nodes`, for the MATCH
 from __future__ import annotations
 
 import contextlib
-import json
 import uuid
 
 import pytest
@@ -81,5 +80,6 @@ def test_the_path_carried_through_with(g):
     _, ids = g
     r = _run(g, "WITH path, totalCost RETURN path, totalCost", ", ['R']")
     assert len(r.rows) == 1
-    path = json.loads(r.rows[0][0]) if isinstance(r.rows[0][0], str) else r.rows[0][0]
+    path = r.rows[0][0]  # a dict (4.6.0 R314: it was the JSON text)
+    assert isinstance(path, dict), path
     assert path["nodes"] == [ids["a"], ids["b"], ids["d"]] and float(r.rows[0][1]) == 4.0

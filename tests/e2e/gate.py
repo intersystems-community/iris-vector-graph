@@ -120,6 +120,10 @@ SESSION_NAMESPACES: Dict[str, str] = {
         "plugin can scope a variable to a module, and its session fixtures drop and rebuild it (setup_namespace) "
         "for every run, so a run never reads another's; that namespace is the FHIR suite's own"
     ),
+    "IVG_R314_NAMESPACE": (
+        "a namespace on another server (IVG_R314_HOST and IVG_R314_PORT, tests/e2e/test_460_r314_call_yield_values_e2e"
+        ".py), set up there by whoever runs it, so that both builds can be run against one file; unset, the file skips"
+    ),
 }
 #: The variables read only by the files they name, so a module that reads one needs that group.
 _BY_VAR = {g.var: name for name, g in GROUPS.items() if g.var != "IVG_NAMESPACE"}
