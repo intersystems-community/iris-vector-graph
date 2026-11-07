@@ -580,7 +580,7 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   whose 4.5.x grant was copied, and a user holding SELECT and no EXECUTE, were refused (-99) a query they ran on 4.5.1.
   Each `initialize_schema()` gives EXECUTE on every read-path function, one a later release adds included, to each user
   or role holding SELECT on `Graph_KG.rdf_props` (on the table or the schema; a column grant does not count) or EXECUTE
-  on one read-path function. The read path is derived from what each function reads: the 62 functions that read nothing
+  on one read-path function. The read path is derived from what each function reads: the 63 functions that read nothing
   outside the caller's SQL privileges (`CY_*`, `CY_VLP_*` included, `CypherFn_*`, `JSON_*`, `LIST_*`, `STR_SPLIT`,
   `REGEX_MATCH`, `RAND`, `NEWID`, `Percentile_*`). The `kg_*` algorithms and searches, `MatchEdges` and `DijkstraPath`
   are not on it. `initialize_schema()`'s reply and its dry run list each grant as `read_path_grants`, with the privilege
@@ -748,7 +748,7 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 - **A list predicate reads an empty list, map or string element**: IRIS's `JSON_TABLE` drops `[]` and reads `""` as
   null, so `any(e IN [r.p] WHERE e IS NOT NULL)` of an empty `r.p` answered false. A new function, `CY_LIST_SRC`,
   spells such an element for it. **What to do:** run `initialize_schema()`, which creates both functions (with
-  `CY_JSON_LISTMAP` and `CY_JSON_TYPED`, below, setup has 55 routines). <!-- R307 -->
+  `CY_JSON_LISTMAP` and `CY_JSON_TYPED`, below, setup has 56 routines in 4.6.0). <!-- R307 -->
 - **`+` over a string that is a duration's text concatenates**: `n.p + 1` of the string `'P1D'` answered `'01:00'`, and
   `'' + 'a'` started with `\u0000`. <!-- R307 -->
 - **`duration('PT36H')` is `PT36H`**: hours rolled into days (`P1DT12H`), where openCypher keeps them apart (the TCK
@@ -996,7 +996,7 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   `WITH [3, 1.5] AS l UNWIND l AS x RETURN x` answered `'3'`, `'1.5'` under intersystems-irispython 5.4.1 and `3`,
   `Decimal('1.5')` under 5.4.0; so did arithmetic over `x`, a `WITH` of it, and an `UNWIND` of `collect(n.p)`. Each now
   answers the JSON value (`3`, `1.5`, `1.0` a float, a list or map element as the list or map), through a new SQL
-  function, `CY_JSON_TYPED`; setup creates 55 routines. A boolean or empty-string element still reads as `'1'`/`'0'` or
+  function, `CY_JSON_TYPED`; setup creates 56 routines in 4.6.0. A boolean or empty-string element still reads as `'1'`/`'0'` or
   null
   ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md#an-unwound-boolean-or-empty-string-of-a-list-built-at-run-time-reads-as-1-0-or-null)).
   The value matrix has an `unwind` reader. <!-- R310 -->

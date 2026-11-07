@@ -373,11 +373,11 @@ Every key of the dictionary `initialize_schema()` returns, and of the one `initi
 | `warnings`               | run         | what you must act on, each also logged at WARNING                                                                                                                                                                                                                                                |
 
 `routines` counts the 56 functions and procedures setup creates with `CREATE OR REPLACE` statements, and nothing else.
-`INFORMATION_SCHEMA.ROUTINES` lists 107 in the IVG Schema after setup, as the inventory does: those 55; 29 that IVG's
-classes project (`Graph.KG.SqlProcs`: the 18 `CypherFn_*`, `Percentile_PCONT`, `Percentile_PDISC`, `JSON_KEYS`,
+`INFORMATION_SCHEMA.ROUTINES` lists 108 in the IVG Schema after setup, as the inventory does: those 56; 28 that IVG's
+classes project (`Graph.KG.SqlProcs`: the 17 `CypherFn_*`, `Percentile_PCONT`, `Percentile_PDISC`, `JSON_KEYS`,
 `kg_BM25`, `kg_IVF`, `MatchEdges`, `MatchEdgesAllGraphs`, `DijkstraPath`, `backfill_temporal_rows`,
 `rebuild_edge_indices` and `ledger_records`), compiled with the classes; 6 that IRIS makes for the two iFind indexes
-(`docs_idxdocstextifind*` and `rdfprops_idxpropsvalifind*`: `Find`, `Highlight`, `Rank`); and 17 `*_Extent` procedures
+(`docs_idxdocstextifind*` and `rdfprops_idxpropsvalifind*`: `Find`, `Highlight`, `Rank`); and 18 `*_Extent` procedures
 IRIS makes for the tables. Before 4.6.0 (R050) the reply spelled them in upper case (`KG_PPR`).
 
 ---
