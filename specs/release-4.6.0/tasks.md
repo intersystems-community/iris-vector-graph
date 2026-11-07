@@ -455,8 +455,6 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   as null (scout of fixes68's `json_table_text`; not run)
 - An `UNWIND` of a parameter list longer than 900 elements or holding a non-scalar goes through `JSON_TABLE`, where a
   `''` element reads as null (the 900-element UNION path R310 added keeps it) (fixes68 scout; not run)
-- The literal shortestPath JSON (`literal_paths_json`) spells a `''` node id or relationship property as `""`, which
-  `JSON_TABLE` reads as null (fixes68 scout)
 
 **Gate A**: R003–R016 and R056–R311 tests green; unit suite green; TCK areas from R005 green.
 
