@@ -65,6 +65,11 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
 - (2026-11-06) The Cypher-literal SQL injection (4.0.0-4.5.1, fixed 5b03b8a8) is disclosed with 4.6.0 (Tom): a private
   GitHub security advisory and a heads-up to opsreview, both drafted for Tom to send when 4.6.0 publishes, plus the
   CHANGELOG Security entry. Nothing is sent without his word.
+- (2026-11-06, evening) Result lists and maps are Python values in 4.6.0 (Tom): execute_cypher, Bolt and REST answer
+  real lists and dicts, nested ones included, instead of the documented JSON text. A breaking change: CHANGELOG "Changed
+  (breaking)" with the migration (drop `json.loads` on result values), docs and doc tests updated, and a line in the
+  opsreview heads-up (fixes67). Stored property strings that spell a list or map stay KNOWN_ISSUES: data on disk keeps
+  its stored form, so no storage marker in 4.6.0.
 
 ## Doc-test conventions (layer 1, workstream D)
 
