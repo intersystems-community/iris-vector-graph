@@ -1,7 +1,8 @@
 """4.6.0 R313, live: PageRank's cached answer follows the node set, now that the loners are read on a miss only.
 
 A node written with no edge moves no adjacency token, so the cache entry is keyed by the node table's row count and
-largest row id: adding one, or removing one, must give a new answer that scores it (or not), never the stored one.
+largest row id: every way of adding a node, and every way of removing one (a raw SQL DELETE too), must give a new
+answer that scores it (or not), never the stored one.
 The R306 algorithm oracle (`test_460_r306_algorithm_oracle_e2e.py -k pagerank`) checks the scores against networkx.
 
 The namespace is `IVG_NAMESPACE` (an IVG460* scratch namespace with IVG set up); its default graph is erased first.
@@ -55,3 +56,64 @@ def test_a_node_losing_its_last_edge_is_scored_as_a_loner(engine):
     assert ids(engine) == ["pr:a", "pr:b", "pr:c"]
     engine.execute_cypher("MATCH (c {id: 'pr:c'})-[r:PR]->() DELETE r", raise_on_error=True)
     assert ids(engine) == ["pr:a", "pr:b", "pr:c"]
+
+
+def _ledger_insert(eng, node_id):
+    from iris_vector_graph.ledger import Changeset
+
+    eng.ledger.enable()
+    try:
+        cs = Changeset(actor="r313", actor_type="system")
+        cs.create_node(node_id)
+        eng.ledger.commit(cs)
+    finally:
+        eng.ledger.disable()
+
+
+def _sql_insert(eng, node_id):
+    cur = eng.conn.cursor()
+    cur.execute(f"INSERT INTO {eng._t('nodes')} (node_id, graph_id) VALUES (?, '')", [node_id])
+    eng.conn.commit()
+
+
+INSERTS = {
+    "create_node": lambda eng, i: eng.create_node(i),
+    "bulk_create_nodes": lambda eng, i: eng.bulk_create_nodes([{"id": i}]),
+    "cypher CREATE": lambda eng, i: eng.execute_cypher("CREATE (:R313 {id: $i})", {"i": i}, raise_on_error=True),
+    "ledger commit": _ledger_insert,
+    "SQL INSERT": _sql_insert,
+}
+
+
+@pytest.mark.parametrize("how", sorted(INSERTS))
+def test_every_way_of_adding_a_node_is_seen_by_a_cached_pagerank(engine, how):
+    assert ids(engine) == ["pr:a", "pr:b"]
+    assert ids(engine) == ["pr:a", "pr:b"]  # cached
+    INSERTS[how](engine, "pr:new")
+    assert ids(engine) == ["pr:a", "pr:b", "pr:new"]
+
+
+DELETES = {
+    "delete_node": lambda eng, i: eng.delete_node(i),
+    "delete_nodes_by_prefix": lambda eng, i: eng.delete_nodes_by_prefix(i),
+    "cypher DETACH DELETE": lambda eng, i: eng.execute_cypher("MATCH (n {id: $i}) DETACH DELETE n", {"i": i},
+                                                              raise_on_error=True),
+}
+
+
+@pytest.mark.parametrize("how", sorted(DELETES))
+def test_every_ivg_way_of_removing_a_node_is_seen_by_a_cached_pagerank(engine, how):
+    engine.create_node("pr:gone")
+    assert ids(engine) == ["pr:a", "pr:b", "pr:gone"]
+    assert ids(engine) == ["pr:a", "pr:b", "pr:gone"]  # cached
+    DELETES[how](engine, "pr:gone")
+    assert ids(engine) == ["pr:a", "pr:b"]
+
+
+def test_a_raw_sql_delete_of_a_bare_node_is_seen_by_a_cached_pagerank(engine):
+    engine.create_node("pr:gone")
+    assert ids(engine) == ["pr:a", "pr:b", "pr:gone"]
+    cur = engine.conn.cursor()
+    cur.execute(f"DELETE FROM {engine._t('nodes')} WHERE node_id = 'pr:gone'")
+    engine.conn.commit()
+    assert ids(engine) == ["pr:a", "pr:b"]
