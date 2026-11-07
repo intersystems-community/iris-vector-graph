@@ -265,7 +265,10 @@ engine.execute_cypher(
   strings, and so does a stored list holding NaN or an infinity (`[NaN]` is not JSON), which `get_node()` answered as
   the list before 4.6.0. Filters and `ORDER BY` read the stored text, as before. Only a stored property does this: a
   string the query builds (a literal, a parameter, a `WITH` of one, a string function, an `UNWIND` of a list the
-  query holds) answers the string, on `execute_cypher`, REST and Bolt and inside a list or map (4.6.0).
+  query holds) answers the string, on `execute_cypher`, REST and Bolt and inside a list or map (4.6.0). In `ORDER BY`,
+  though, a string that spells a number or a list sorts as one, stored or not, for the same reason (the sort key reads
+  the text): `UNWIND ['7', '10', 'a', '[1]'] AS v RETURN v ORDER BY v` answers `'[1]', 'a', '7', '10'` (openCypher:
+  `'10', '7', '[1]', 'a'`), each still the string; `ORDER BY toString(v)` gives the text order.
 - **Cause:** neither store records a type the readers can rely on (see the entry above): a boolean is stored as the
   text `true` or `false` and a list or map as its JSON, the same as those strings, and IRIS SQL keeps the empty string
   as `$Char(0)`. Data on disk keeps its stored form, so 4.6.0 adds no type marker to it. A later release could mark
@@ -309,17 +312,6 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 - **Versions:** all 4.x. A fix is planned for 4.6.1.
 - **Workaround:** read what you need through the path: `[x IN nodes(p) | x.name]`, `[x IN nodes(p) | labels(x)]`,
   `[r IN relationships(p) | properties(r)]`, or `RETURN a, b` and the relationship variable.
-
-### A string that spells a number or a list sorts as one, and a literal list mixing lists and booleans reads them as text
-
-- **Symptom:** `UNWIND ['7', '10', 'a', '[1]'] AS v RETURN v ORDER BY v` answers `'[1]', 'a', '7', '10'` (openCypher:
-  `'10', '7', '[1]', 'a'`): a string that spells a number sorts as the number and one that spells a list as a list,
-  each still answered as the string. And an `UNWIND` of a literal list holding a list or map beside a boolean or such a
-  string reads those as JSON_TABLE's text: `UNWIND [1, ['a'], false] AS v RETURN v` answers `false` as `'0'`, and
-  `UNWIND ['[1]', ['a'], 1] AS v` the string `'[1]'` as the list `[1]`. Both measured on 4.5.x and 4.6.0 alike.
-- **Cause:** the sort key and `JSON_TABLE` read each element as its text; a list of scalars only is read from its
-  values (4.6.0), a list holding a list is not.
-- **Workaround:** keep lists and booleans in separate lists, or `ORDER BY toString(v)` for a text order.
 
 ### A list predicate over a list holding a stored NaN fails
 
