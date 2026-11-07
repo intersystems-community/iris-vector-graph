@@ -22,6 +22,12 @@ import pytest
 
 from tests.e2e import ns460alt as alt
 
+def _js(v):
+    """A list, map or path value: the Python value (4.6.0 R311), or the JSON text the variable-length BFS routes
+    (`_execute_var_length_labeled*`) still build for their own rows."""
+    return json.loads(v) if isinstance(v, str) else v
+
+
 pytestmark = [pytest.mark.e2e, *alt.requires_namespace]
 
 G = "g282"
@@ -126,12 +132,12 @@ def test_a_property_of_the_end_is_read_in_its_graph(engine):
 
 def test_relationships_carry_their_graphs_properties(engine):
     query = SRC + "RETURN b, relationships(p) AS r"
-    assert [json.loads(v) for v in _col(engine, query, "r", graph=G)] == [[_rel(9)]]
-    assert sorted((json.loads(v) for v in _col(engine, query, "r")), key=repr) == sorted(
+    assert [_js(v) for v in _col(engine, query, "r", graph=G)] == [[_rel(9)]]
+    assert sorted((_js(v) for v in _col(engine, query, "r")), key=repr) == sorted(
         [[_rel(1)], [_rel(1), _rel(2)], [_rel(9)]], key=repr)
 
 
 def test_return_p_without_use_graph_answers_every_graphs_paths(engine):
     _, rows = _rows(engine, SRC + "RETURN p, b.name AS n")
-    assert sorted((tuple(json.loads(p)["nodes"]), n) for p, n in rows) == [
+    assert sorted((tuple(_js(p)["nodes"]), n) for p, n in rows) == [
         (("a1", "b1"), "B-def"), (("a1", "b1"), "B-g"), (("a1", "b1", "c1"), "C-def")]

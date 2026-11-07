@@ -168,7 +168,7 @@ def test_graph_source_through_api(fhir_engine, run, monkeypatch):
     search.assert_not_called()
     assert body["anchor_source"] == "graph"
     assert body["anchors"] == [{"id": i, "graph": GRAPH} for i in _want(run, key)]
-    assert json.loads(body["rows"][0][0]) == _want(run, key)  # list values come back JSON-encoded
+    assert body["rows"][0][0] == _want(run, key)  # 4.6.0 R311: a list value is the list
 
 
 def test_absent_patient_uses_bridge(fhir_engine, monkeypatch):
@@ -188,7 +188,7 @@ def test_absent_patient_uses_bridge(fhir_engine, monkeypatch):
     assert kg.call_args.args[1] == ["J45", "E11.9"]
     assert body["anchor_source"] == "fhir_bridge"
     assert body["anchors"] == [{"id": "DOID:2841", "graph": None}, {"id": "DOID:9352", "graph": None}]
-    assert json.loads(body["rows"][0][0]) == ["DOID:2841", "DOID:9352"]
+    assert body["rows"][0][0] == ["DOID:2841", "DOID:9352"]
 
 
 def test_anchors_json_roundtrip(fhir_engine, run):

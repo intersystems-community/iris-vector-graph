@@ -32,7 +32,6 @@ Nodes (label L180N, each created by `create_node(properties={"k": 1, "keep": "x"
 from __future__ import annotations
 
 import contextlib
-import json
 import uuid
 
 import pytest
@@ -76,14 +75,14 @@ def _rel_props(g, t):
         g, "MATCH (:L180 {id: $a})-[r:T180]->(:L180 {id: $t}) RETURN properties(r)", {"a": ids["a"], "t": ids[t]}
     )
     assert len(rows) == 1, rows
-    return json.loads(rows[0][0])  # properties() answers the map as JSON text
+    return rows[0][0]  # 4.6.0 R311: properties() answers the dict
 
 
 def _node_props(g, n):
     _, ids = g
     rows = _run(g, "MATCH (n:L180N) WHERE n.id = $id RETURN properties(n)", {"id": ids[n]})
     assert len(rows) == 1, rows
-    return json.loads(rows[0][0])  # properties() answers the map as JSON text
+    return rows[0][0]  # 4.6.0 R311: properties() answers the dict
 
 
 REL = "MATCH (:L180 {id: $a})-[r:T180]->(:L180 {id: $t}) "
@@ -162,4 +161,4 @@ def test_node_replace_with_a_map_parameter(g):
     _run(g, NODE + "SET n = $m", {"id": ids["n5"], "m": {"id": ids["n5"], "a": 1}})
     assert _node_props(g, "n5") == {"id": ids["n5"], "a": 1}
     rows = _run(g, NODE + "RETURN labels(n)", {"id": ids["n5"]})
-    assert [json.loads(r[0]) for r in rows] == [["L180N"]]  # labels() answers JSON text
+    assert [r[0] for r in rows] == [["L180N"]]  # 4.6.0 R311: labels() answers the list

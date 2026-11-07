@@ -6,7 +6,6 @@ Both features must produce correct results from the SQL layer alone —
 no Python post-processing — so they work identically from ObjectScript,
 embedded Python, and external Python callers.
 """
-import json
 import pytest
 from iris_vector_graph.engine import IRISGraphEngine
 
@@ -56,7 +55,7 @@ class TestPatternComprehension:
             {"id": "pc_d1"},
         )
         assert r["rows"], "Expected non-empty result"
-        names = sorted(json.loads(r["rows"][0][0]))
+        names = sorted(r["rows"][0][0])  # 4.6.0 R311: the list itself
         assert names == ["PTGS1", "PTGS2", "PTGS3"]
 
     def test_collect_node_id(self, engine):
@@ -64,7 +63,7 @@ class TestPatternComprehension:
             "MATCH (d:Drug {node_id:$id}) RETURN [(d)-[:HAS_GENE]->(g) | g.node_id] AS ids",
             {"id": "pc_d1"},
         )
-        ids = sorted(json.loads(r["rows"][0][0]))
+        ids = sorted(r["rows"][0][0])
         assert ids == ["pc_g1", "pc_g2", "pc_g3"]
 
     def test_empty_when_no_matches(self, engine):
@@ -73,7 +72,7 @@ class TestPatternComprehension:
             {"id": "pc_d1"},
         )
         raw = r["rows"][0][0] if r["rows"] else None
-        result = json.loads(raw) if raw else []
+        result = raw or []
         assert result == []
 
     def test_inline_in_match(self, engine):
@@ -84,7 +83,7 @@ class TestPatternComprehension:
         assert r["rows"]
         row = r["rows"][0]
         assert row[0] == "Aspirin"
-        assert sorted(json.loads(row[1])) == ["PTGS1", "PTGS2", "PTGS3"]
+        assert sorted(row[1]) == ["PTGS1", "PTGS2", "PTGS3"]
 
 
 @pytest.mark.requires_database

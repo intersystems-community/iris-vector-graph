@@ -39,7 +39,6 @@ Each read runs through an SQL-path engine and a native one (native_cypher=True),
 
 from __future__ import annotations
 
-import json
 import math
 
 import pytest
@@ -252,6 +251,7 @@ def test_a_create_raises_only_for_the_rows_its_match_reads(engines):
         sql.execute_cypher("MATCH (n:K297) CREATE (:KD297 {v: n.k * 2, w: n.k - 1, x: n.missing * 2})",
                            raise_on_error=True)
         got = sql.execute_cypher("MATCH (m:KD297) RETURN m.v, m.w, keys(m)", raise_on_error=True).rows
-        assert sorted([v, w, sorted(json.loads(k))] for v, w, k in got) == [[4, 1, ["v", "w"]], [6, 2, ["v", "w"]]]
+        # 4.6.0 R311: keys(m) answers the list itself, not its JSON text
+        assert sorted([v, w, sorted(k)] for v, w, k in got) == [[4, 1, ["v", "w"]], [6, 2, ["v", "w"]]]
     finally:
         sql.execute_cypher("MATCH (m:KD297) DETACH DELETE m", raise_on_error=True)

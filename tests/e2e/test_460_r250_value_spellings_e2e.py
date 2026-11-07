@@ -21,7 +21,6 @@ So:
 from __future__ import annotations
 
 import contextlib
-import json
 import uuid
 
 import pytest
@@ -113,7 +112,7 @@ def test_properties_of_a_relationship(g, k, want, via):
     q = f"MATCH (:T250 {{id: $h}})-[r:W250]->(b:T250 {{id: $t}}) {via} properties(r) AS p"
     for path, rows in _both(e, q, {"h": h, "t": t[k]}).items():
         assert len(rows) == 1 and rows[0][0] is not None, (path, rows)
-        got = json.loads(rows[0][0])
+        got = rows[0][0]  # 4.6.0 R311: properties(r) answers the dict
         assert {x: (v, type(v).__name__) for x, v in got.items()} == {
             x: (v, type(v).__name__) for x, v in want.items()
         }, path

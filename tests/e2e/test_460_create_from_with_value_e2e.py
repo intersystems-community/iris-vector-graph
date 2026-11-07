@@ -9,7 +9,6 @@ By hand: each case makes node `<run>_<case>` labelled `LC<run>` with `{id: <that
 
 from __future__ import annotations
 
-import json
 import uuid
 
 import pytest
@@ -36,7 +35,7 @@ def _run(e, q, params=None):
 
 def _node(e, label, nid):
     rows = _run(e, f"MATCH (n:{label}) WHERE n.id = $id RETURN labels(n), properties(n)", {"id": nid})
-    return [[json.loads(a), json.loads(b)] for a, b in rows]
+    return [[a, b] for a, b in rows]  # 4.6.0 R311: labels() and properties() answer the list and the dict
 
 
 def test_with_parameter_create(g):

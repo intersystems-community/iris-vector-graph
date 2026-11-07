@@ -20,7 +20,6 @@ Every case builds its own nodes (ids and labels unique to the run) and is worked
 from __future__ import annotations
 
 import contextlib
-import json
 import uuid
 
 import pytest
@@ -58,7 +57,7 @@ def g(iris_connection):
 def _props(run_q, nid):
     rows = run_q("MATCH (n) WHERE n.id = $id RETURN properties(n)", {"id": nid})
     assert len(rows) == 1, rows
-    props = json.loads(rows[0][0])  # properties() answers the map as JSON text
+    props = dict(rows[0][0])  # 4.6.0 R311: properties() answers the dict
     props.pop("id")
     return props
 
@@ -90,7 +89,7 @@ def test_label_added_after_the_filter_key_changes(g):
     nid, label = node("lb", k=1)
     run_q(f"MATCH (n:{label} {{k: 1}}) WHERE n.id = $id SET n.k = 2, n:Extra186", {"id": nid})
     rows = run_q("MATCH (n) WHERE n.id = $id RETURN labels(n)", {"id": nid})
-    assert sorted(json.loads(rows[0][0])) == sorted([label, "Extra186"])
+    assert sorted(rows[0][0]) == sorted([label, "Extra186"])
 
 
 def test_remove_label_then_set(g):
@@ -98,7 +97,7 @@ def test_remove_label_then_set(g):
     nid, label = node("rl")
     run_q(f"MATCH (n:{label}) WHERE n.id = $id REMOVE n:{label} SET n.q = 3", {"id": nid})
     rows = run_q("MATCH (n) WHERE n.id = $id RETURN labels(n), n.q", {"id": nid})
-    assert [[json.loads(rows[0][0]), rows[0][1]]] == [[[], 3]]
+    assert [[rows[0][0], rows[0][1]]] == [[[], 3]]
 
 
 def test_cross_product_sets_every_bound_node(g):
@@ -117,7 +116,7 @@ def test_relationship_two_items(g):
     assert e.create_edge(a, "T186", t, qualifiers={"k": 1})
     run_q(f"MATCH (:{label} {{id: $a}})-[r:T186 {{k: 1}}]->() SET r.k = 2, r.q = 3", {"a": a})
     rows = run_q(f"MATCH (:{label} {{id: $a}})-[r:T186]->() RETURN properties(r)", {"a": a})
-    assert [json.loads(r[0]) for r in rows] == [{"k": 2, "q": 3}]
+    assert [r[0] for r in rows] == [{"k": 2, "q": 3}]
 
 
 def test_merge_on_match_two_items(g):

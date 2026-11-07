@@ -33,6 +33,12 @@ import uuid
 
 import pytest
 
+def _js(v):
+    """A list, map or path value: the Python value (4.6.0 R311), or the JSON text the variable-length BFS routes
+    (`_execute_var_length_labeled*`) still build for their own rows."""
+    return json.loads(v) if isinstance(v, str) else v
+
+
 pytestmark = [pytest.mark.e2e]
 
 
@@ -120,9 +126,10 @@ def test_a_returned_node_reads_its_stored_types(g, shape, who):
 @pytest.mark.parametrize(
     "shape, pick",
     [
-        ("MATCH (n:T248 {id: $id}) RETURN collect(n) AS v", lambda v: json.loads(v)[0]),
-        ("MATCH (n:T248 {id: $id}) RETURN [n] AS v", lambda v: json.loads(v)[0]),
-        ("MATCH (n:T248 {id: $id}) RETURN {m: n} AS v", lambda v: json.loads(v)["m"]),
+        # 4.6.0 R311: the list and the map are answered as Python values
+        ("MATCH (n:T248 {id: $id}) RETURN collect(n) AS v", lambda v: v[0]),
+        ("MATCH (n:T248 {id: $id}) RETURN [n] AS v", lambda v: v[0]),
+        ("MATCH (n:T248 {id: $id}) RETURN {m: n} AS v", lambda v: v["m"]),
     ],
 )
 def test_a_node_inside_a_list_or_map_reads_its_stored_types(g, shape, pick):
@@ -153,7 +160,7 @@ def test_properties_of_a_node_reads_its_stored_types(g):
     e, ids, key = g
     for who, want in (("c", _c_props(ids, key)), ("a", None)):
         for path, rows in _both(e, "MATCH (n:T248 {id: $id}) RETURN properties(n) AS p", {"id": ids[who]}).items():
-            got = json.loads(rows[0][0])
+            got = rows[0][0]  # 4.6.0 R311: properties(n) is the dict
             if want is None:  # an API-written number-shaped text reads as the number (KNOWN_ISSUES, R168)
                 assert _typed(got) == _typed({"id": ids["a"], "f": 0.95, "i": 29, key: 0.95}), path
             else:
@@ -163,7 +170,7 @@ def test_properties_of_a_node_reads_its_stored_types(g):
 def test_a_map_literal_over_properties_is_json_with_the_stored_types(g):
     e, ids, _ = g
     for path, rows in _both(e, "MATCH (n:T248 {id: $id}) RETURN {f: n.f, g: n.g, i: n.i} AS m", {"id": ids["c"]}).items():
-        assert _typed(json.loads(rows[0][0])) == _typed({"f": 0.95, "g": 5.0, "i": 29}), path
+        assert _typed(rows[0][0]) == _typed({"f": 0.95, "g": 5.0, "i": 29}), path
 
 
 def test_a_variable_length_path_and_target_read_their_stored_types(g):
@@ -173,7 +180,7 @@ def test_a_variable_length_path_and_target_read_their_stored_types(g):
     # and this read them from objects that are no longer there (fixes48: TypeError, string indices). A path node's
     # properties are read through the node, with their stored types.
     for path, rows in _both(e, "MATCH p = (a:T248 {id: $a})-[:R248*1..2]->(t) RETURN p", {"a": ids["a"]}).items():
-        assert json.loads(rows[0][0]) == {"nodes": [ids["a"], ids["c"]], "rels": ["R248"]}, path
+        assert _js(rows[0][0]) == {"nodes": [ids["a"], ids["c"]], "rels": ["R248"]}, path
     q = "MATCH p = (a:T248 {id: $a})-[:R248*1..2]->(t) UNWIND nodes(p) AS x RETURN x.id, properties(x)"
     for path, rows in _both(e, q, {"a": ids["a"]}).items():
         got = {r[0]: (json.loads(r[1]) if isinstance(r[1], str) else r[1]) for r in rows}

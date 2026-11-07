@@ -13,7 +13,6 @@ The graph, by hand: two nodes labelled `LA<run>`, `{k: 1}` and `{k: 2}`, the fir
 
 from __future__ import annotations
 
-import json
 import uuid
 
 import pytest
@@ -68,7 +67,7 @@ def test_labels_of_a_renamed_node(g, alias):
     e, label, _ = g
     r = e.execute_cypher(f"MATCH (n:{label}) WITH n AS {alias} RETURN labels({alias})")
     assert r.error is None, r.error
-    assert [json.loads(row[0]) for row in r.rows] == [[label], [label]]
+    assert [row[0] for row in r.rows] == [[label], [label]]  # 4.6.0 R311: labels() is the list
 
 
 @pytest.mark.parametrize("alias", ALIASES)

@@ -37,6 +37,12 @@ import pytest
 
 from tests.e2e import ns460alt as alt
 
+def _js(v):
+    """A list, map or path value: the Python value (4.6.0 R311), or the JSON text the variable-length BFS routes
+    (`_execute_var_length_labeled*`) still build for their own rows."""
+    return json.loads(v) if isinstance(v, str) else v
+
+
 pytestmark = [pytest.mark.e2e, *alt.requires_namespace]
 
 
@@ -82,7 +88,7 @@ def _same(engines, q):
 
 def _ws(rels):
     """A relationship list's w values, each with its type: [(1.5, 'float'), (7, 'int')]."""
-    return [(r["props"]["w"], type(r["props"]["w"]).__name__) for r in json.loads(rels)]
+    return [(r["props"]["w"], type(r["props"]["w"]).__name__) for r in _js(rels)]
 
 
 # ── the null row's aggregates ────────────────────────────────────────────────
@@ -91,7 +97,7 @@ def _ws(rels):
 def test_the_null_row_counts_itself_and_no_value(engines):
     assert _same(engines, "OPTIONAL MATCH (a:L298 {name: 'c'})-[:knows]->(b) RETURN b.name, count(*)") == [[None, 1]]
     assert _same(engines, "OPTIONAL MATCH (a:L298 {name: 'c'})-[:knows]->(b) RETURN b.name, count(b), "
-                          "collect(b.name), count(DISTINCT b)") == [[None, 0, "[]", 0]]
+                          "collect(b.name), count(DISTINCT b)") == [[None, 0, [], 0]]  # 4.6.0 R311: the list
     assert _same(engines, "OPTIONAL MATCH (a:L298 {name: 'c'})-[:knows]->(b) RETURN count(*), count(b)") == [[1, 0]]
 
 
@@ -107,7 +113,7 @@ def test_a_match_still_counts_its_rows(engines):
         ["b", 1], ["d", 1]]
     assert _same(engines, "OPTIONAL MATCH (a:L298 {name: 'a'})-[:knows]->(b) RETURN count(*), count(b)") == [[2, 2]]
     assert _same(engines, "MATCH (a:L298 {name: 'c'}) OPTIONAL MATCH (a)-[:knows]->(b) "
-                          "RETURN a.name, count(b), count(*), collect(b.name)") == [["c", 0, 1, "[]"]]
+                          "RETURN a.name, count(b), count(*), collect(b.name)") == [["c", 0, 1, []]]
 
 
 # ── a relationship number stored as text reads as the number ─────────────────
@@ -166,7 +172,7 @@ def test_a_boolean_property_map_is_a_boolean_not_one(engines):
     # b -flag {f: true}-> g -flag {f: false}-> h, g -flag {f: 1}-> k, x -flag {f: true}-> k
     assert _same(engines, "MATCH (s:L298 {name: 'b'})-[:flag*1..2 {f: true}]->(t) RETURN t.name") == [["g"]]
     rows = _same(engines, "MATCH (s:L298 {name: 'b'})-[r*1..2 {f: true}]->(t) RETURN t.name, r")
-    assert [[n, [x["props"]["f"] for x in json.loads(r)]] for n, r in rows] == [["g", [True]]], rows
+    assert [[n, [x["props"]["f"] for x in _js(r)]] for n, r in rows] == [["g", [True]]], rows
     assert _same(engines, "MATCH (s:L298 {name: 'g'})-[:flag*1..2 {f: false}]->(t) RETURN t.name") == [["h"]]
     assert _same(engines, "MATCH (s:L298 {name: 'b'})-[:flag*1..2 {f: false}]->(t) RETURN t.name") == []
     assert _same(engines, "MATCH (s:L298 {name: 'g'})-[:flag*1..2 {f: 1}]->(t) RETURN t.name") == [["k"]]

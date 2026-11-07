@@ -14,7 +14,6 @@ before and after.
 
 from __future__ import annotations
 
-import json
 
 import pytest
 
@@ -58,4 +57,4 @@ def test_the_value_through_a_with_is_stored(engine):
     engine.execute_cypher(MATCHED + "WITH a, b, a.name AS w, a.k AS k CREATE (a)-[:W306 {w: w, k: k}]->(b)",
                           raise_on_error=True)
     r = engine.execute_cypher("MATCH (:Z306)-[r:W306]->() RETURN properties(r)", raise_on_error=True)
-    assert [json.loads(row[0]) for row in r.rows] == [{"w": "a", "k": 5}]
+    assert [row[0] for row in r.rows] == [{"w": "a", "k": 5}]  # 4.6.0 R311: the dict

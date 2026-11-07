@@ -18,7 +18,6 @@ The graph, by hand (ids unique to the run): `a {x: 'hello', z: 1}`, `b {x: 42, s
 
 from __future__ import annotations
 
-import json
 import uuid
 
 import pytest
@@ -54,7 +53,7 @@ def _run(e, q, params=None):
 def _props(e, nid):
     rows = _run(e, "MATCH (n) WHERE n.id = $id RETURN properties(n)", {"id": nid})
     assert len(rows) == 1, rows
-    p = json.loads(rows[0][0])
+    p = dict(rows[0][0])  # 4.6.0 R311: properties(n) is the dict
     p.pop("id")
     return p
 

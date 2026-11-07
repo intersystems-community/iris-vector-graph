@@ -23,7 +23,6 @@ C `{k: 5, keep: 'x'}`, and for MERGE / CREATE one node M with another label. Wor
 from __future__ import annotations
 
 import contextlib
-import json
 import uuid
 
 import pytest
@@ -72,7 +71,7 @@ def g(iris_connection):
 def _props(run_q, nid):
     rows = run_q("MATCH (n) WHERE n.id = $id RETURN properties(n)", {"id": nid})
     assert len(rows) == 1, rows
-    props = json.loads(rows[0][0])
+    props = dict(rows[0][0])  # 4.6.0 R311: properties(n) is the dict
     props.pop("id")
     return props
 
@@ -111,7 +110,7 @@ def test_label_after_with(g):
     run_q(f"MATCH (n:{label} {{k: 1}}) SET n.k = 2 WITH n SET n:Extra208")
     for nid, want in ((a, [label, "Extra208"]), (b, [label, "Extra208"]), (c, [label])):
         rows = run_q("MATCH (n) WHERE n.id = $id RETURN labels(n)", {"id": nid})
-        assert sorted(json.loads(rows[0][0])) == sorted(want), nid
+        assert sorted(rows[0][0]) == sorted(want), nid
 
 
 def test_delete_after_with(g):
@@ -168,6 +167,6 @@ def test_node_merged_after_with_has_its_label(g):
     try:
         run_q(f"MATCH (n:{label} {{k: 1}}) WITH n MERGE (c:{c})")
         rows = run_q(f"MATCH (c:{c}) RETURN labels(c)")
-        assert [json.loads(r[0]) for r in rows] == [[c]]
+        assert [r[0] for r in rows] == [[c]]
     finally:
         run_q(f"MATCH (c:{c}) DETACH DELETE c")

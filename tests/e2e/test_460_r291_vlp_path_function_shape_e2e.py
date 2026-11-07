@@ -22,6 +22,12 @@ import pytest
 
 from tests.e2e import ns460alt as alt
 
+def _js(v):
+    """A list, map or path value: the Python value (4.6.0 R311), or the JSON text the variable-length BFS routes
+    (`_execute_var_length_labeled*`) still build for their own rows."""
+    return json.loads(v) if isinstance(v, str) else v
+
+
 pytestmark = [pytest.mark.e2e, *alt.requires_namespace]
 
 NODES = (("r291a", "a"), ("r291b", "b"), ("r291c", "c"))
@@ -112,31 +118,31 @@ def test_both_ends_and_the_length(routes):
 def test_a_node_and_the_relationships(routes):
     cols, rows = _same(routes("RETURN b, relationships(p) AS r"))
     assert cols == ["b_id", "b_labels", "b_props", "r"]
-    assert [(r[0], json.loads(r[3])) for r in rows] == [("r291b", [R1]), ("r291c", [R1, R2])]
+    assert [(r[0], _js(r[3])) for r in rows] == [("r291b", [R1]), ("r291c", [R1, R2])]
 
 
 def test_a_property_and_the_relationships(routes):
     cols, rows = _same(routes("RETURN b.name AS n, relationships(p) AS r"))
     assert cols == ["n", "r"]
-    assert [(r[0], json.loads(r[1])) for r in rows] == [("b", [R1]), ("c", [R1, R2])]
+    assert [(r[0], _js(r[1])) for r in rows] == [("b", [R1]), ("c", [R1, R2])]
 
 
 def test_the_relationships_alone_unaliased(routes):
     cols, rows = _same(routes("RETURN relationships(p)"))
     assert cols == ["relationships(p)"]
-    assert sorted(json.loads(r[0]) for r in rows) == sorted([[R1], [R1, R2]])
+    assert sorted(_js(r[0]) for r in rows) == sorted([[R1], [R1, R2]])
 
 
 def test_a_property_and_the_nodes(routes):
     cols, rows = _same(routes("RETURN b.name AS n, nodes(p) AS ns"))
     assert cols == ["n", "ns"]
-    assert [(r[0], json.loads(r[1])) for r in rows] == [("b", ["r291a", "r291b"]), ("c", ["r291a", "r291b", "r291c"])]
+    assert [(r[0], _js(r[1])) for r in rows] == [("b", ["r291a", "r291b"]), ("c", ["r291a", "r291b", "r291c"])]
 
 
 def test_the_path_and_a_property(routes):
     cols, rows = _same(routes("RETURN p, b.name AS n"))
     assert cols == ["p", "n"]
-    assert sorted(((json.loads(r[0]), r[1]) for r in rows), key=lambda x: x[1]) == [
+    assert sorted(((_js(r[0]), r[1]) for r in rows), key=lambda x: x[1]) == [
         ({"nodes": ["r291a", "r291b"], "rels": ["knows"]}, "b"),
         ({"nodes": ["r291a", "r291b", "r291c"], "rels": ["knows", "knows"]}, "c"),
     ]

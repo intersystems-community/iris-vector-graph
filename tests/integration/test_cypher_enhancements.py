@@ -15,6 +15,9 @@ def _cleanup_test_nodes(engine):
 
 
 def _parse_labels(raw):
+    # `n_labels` is JSON text; labels(n) answers the list (4.6.0 R311)
+    if isinstance(raw, list):
+        return raw
     return json.loads(raw) if raw else []
 
 
@@ -30,7 +33,9 @@ def _parse_props(raw):
 
 def _parse_properties_map(raw):
     """properties(n)/properties(r) returns a Cypher map (spec 203, Graph9 [1]):
-    decode it as one, not the internal key/value list `_parse_props` handles."""
+    decode it as one, not the internal key/value list `_parse_props` handles. 4.6.0 R311: it answers the dict."""
+    if isinstance(raw, dict):
+        return raw
     return json.loads(raw) if raw else {}
 
 

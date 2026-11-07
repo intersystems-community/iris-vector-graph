@@ -13,7 +13,6 @@ nodes labelled X<run> with a Cypher CREATE: A `{name: 'A', name2: 'B'}`, B `{nam
 from __future__ import annotations
 
 import contextlib
-import json
 import uuid
 
 import pytest
@@ -44,7 +43,7 @@ def g(iris_connection):
 
 def _stored(run_q, label):
     rows = run_q(f"MATCH (n:{label}) RETURN properties(n)")
-    return sorted((json.loads(r[0]) for r in rows), key=lambda p: p["name2"])
+    return sorted((r[0] for r in rows), key=lambda p: p["name2"])  # 4.6.0 R311: properties(n) is the dict
 
 
 _B = {"name": "B", "name2": "C"}
@@ -70,4 +69,4 @@ def test_return_the_node(g):
     """Set5 [4]'s own RETURN n."""
     run_q, label = g
     rows = run_q(f"MATCH (n:{label} {{name: 'A'}}) SET n += {{name: null}} RETURN properties(n)")
-    assert [json.loads(r[0]) for r in rows] == [{"name2": "B"}]
+    assert [r[0] for r in rows] == [{"name2": "B"}]

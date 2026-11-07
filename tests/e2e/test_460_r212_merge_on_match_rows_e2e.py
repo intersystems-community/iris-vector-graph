@@ -19,7 +19,6 @@ by hand from the rule (a node there before: ON MATCH; the node MERGE creates: ON
 from __future__ import annotations
 
 import contextlib
-import json
 import uuid
 
 import pytest
@@ -60,7 +59,7 @@ def g(iris_connection):
 def _c(run_q, c):
     """[(labels, properties)] of every C node."""
     rows = run_q(f"MATCH (n:{c}) RETURN labels(n), properties(n)")
-    return [(sorted(json.loads(lb)), json.loads(pr)) for lb, pr in rows]
+    return [(sorted(lb), pr) for lb, pr in rows]  # 4.6.0 R311: the list and the dict
 
 
 @pytest.mark.parametrize(
