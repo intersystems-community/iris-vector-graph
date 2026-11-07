@@ -33,11 +33,12 @@ that mix numbers and strings.
 - **A string literal in a Cypher comparison can no longer change the SQL.** The translator pasted a WHERE comparison's
   string literal into the SQL without doubling its quotes, so a literal holding a quote closed itself: `'it\'s'`
   failed, and a crafted literal could add SQL, for example `WHERE n.name = 'x\' OR \'1\'=\'1'` matched every row,
-  past the WHERE and a `USE GRAPH` scope, within the caller's SQL privileges. Present since 4.0.0. An application that
-  passes user text as a `$parameter` was not affected; one that formats user text into a Cypher literal was.
-  **What to do:** upgrade; pass user input as parameters. <!-- R307 -->
+  past the WHERE and a `USE GRAPH` scope, within the caller's SQL privileges. Present since 4.0.0. A WHERE comparison
+  whose value came in as a `$parameter` was not affected by this one; other parameter sites were (next entry: an
+  anchor's `{id: $p}` on 3.0.0 to 4.2.x, and `keys($m)`). **What to do:** upgrade; pass user input as parameters.
+  <!-- R307 -->
 - **No other Cypher text or parameter value can change the SQL either.** After R307 more places were found where a
-  name, a literal or a parameter reached the SQL as written: a battery of 647 queries, now
+  name, a literal or a parameter reached the SQL as written: a battery of 662 queries, now
   `tests/unit/test_460_r311_translator_quote_state.py`, found 107 breakouts on the 4.6.0 work and 155 on 4.5.1 (R307's included), and
   finds none now. From a `$parameter`: `keys($m)` and `size(keys($m))` pasted the map's keys, and
   `(a {id: $p})-[:T]->()` pasted `$p`'s value, by default from 3.0.0 to 4.2.x and under `IVG_EDGESCAN=1` since 4.3.0,
@@ -866,7 +867,7 @@ range(0, size(ns) - 1) AS i ...` failed `-400 <SUBSCRIPT>` once the list's JSON 
   Match4 [4] failed this way and wrote nothing. The list is now computed as a column of the stage. <!-- R310 -->
 - **A property of a collected node is read in the node's graph.** Over every graph, `MATCH (n:L) WITH collect(n) AS
 ns UNWIND ns AS x RETURN x.k` answered one graph's value for each graph holding the node id; so did `ns[i].k` and
-  a `WITH` of either. A collected node's JSON now carries its graph (`"_graph"`, last), which the read uses.
+a `WITH` of either. A collected node's JSON now carries its graph (`"_graph"`, last), which the read uses.
   <!-- R310 -->
 - **`embed_nodes` embeds an id given twice once.** With the id in two of the 500-id selections it was embedded twice.
   <!-- R310 -->
