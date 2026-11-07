@@ -71,3 +71,9 @@ def test_pairs_with_a_graph_and_no_row_capture_no_graph():
     assert graphs["v1"] == {}
     out = _expand_captured("DELETE FROM t WHERE s IN (__IDS_v1__) AND graph_id = __GRAPH_v1__", captured, graphs)
     assert out == ["DELETE FROM t WHERE s IN (NULL) AND graph_id = NULL"]
+
+
+def test_json_table_text_spells_the_empty_string_as_nul():
+    from iris_vector_graph.stores.iris_sql_store import json_table_text
+
+    assert [json_table_text(v) for v in ("", None, "\x00", "a", 0, False)] == ["\x00", None, "\x00", "a", 0, False]

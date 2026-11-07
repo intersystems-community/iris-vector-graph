@@ -103,3 +103,23 @@ def test_under_use_graph_only_that_graphs_rows(seeded):
     rows = _run(seeded, f"USE GRAPH '{G}' MATCH (n:L68) WITH n.k AS k, n SET n.r = k RETURN n.name, n.r, k")
     assert rows == [["A", 30, 30]]
     assert _stored(seeded, "r") == [(G, "A", 30)]
+
+
+@pytest.mark.parametrize("builder", ["pinned", "snapshot"])
+def test_json_table_reads_back_empty_null_and_the_marker_as_written(engine, builder):
+    """The three cases of `json_table_text`: '' reads back '' (it was NULL), a real NULL stays NULL, and a value that is
+    the marker itself ($Char(0)) reads back '', which is what IRIS SQL calls it anyway; another string is itself."""
+    from iris_vector_graph.stores.iris_sql_store import _pinned_stage_sql, _stage_snapshot_sql
+
+    rows = [["", 1], [None, 2], ["\x00", 3], ["a", 4]]
+    if builder == "pinned":
+        body = _pinned_stage_sql(["v", "i"], rows)
+        sql = f"SELECT x.v, x.i FROM ({body}) x ORDER BY x.i"
+    else:
+        live = "SELECT 1 AS i UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4"
+        body = _stage_snapshot_sql("S", ["v"], ["v", "i"], rows)
+        sql = f"WITH S__live AS ({live}) SELECT x.v, x.i FROM ({body}) x ORDER BY x.i"
+    cur = engine.conn.cursor()
+    cur.execute(sql)
+    got = [(v, int(i)) for v, i in cur.fetchall()]
+    assert got == [("", 1), (None, 2), ("", 3), ("a", 4)]
