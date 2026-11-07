@@ -272,17 +272,17 @@ def upload_and_compile(
         if not batch:
             continue
         spec = ",".join(f"{n}.cls" for n in batch)
-        # A method generator may read another class of the batch (%AI.ToolSet's
-        # %Discover reads Graph.KG.MCPTools); CompileList compiles every class it
-        # can, so a second pass finds those compiled. Only its errors count.
+        # A method generator may read another class of the batch (%AI.ToolSet's %Discover reads Graph.KG.MCPTools,
+        # which Graph.KG.MCPToolSet declares with DependsOn). For a dependency not declared, CompileList compiles
+        # every class it can, so a second pass finds those compiled. Only its errors count.
         for _ in range(2):
             status = iris_obj.classMethodValue("%SYSTEM.OBJ", "CompileList", spec, "ck-d")
             if _ok(iris_obj, status):
                 break
         else:
-            # Build 154 fails the batch on Graph.KG.MCPToolSet ("MCPTools has not had inheritance
-            # resolved") although every class compiles alone, so compile them one at a time before
-            # calling the deploy failed.
+            # Build 154 failed the batch on Graph.KG.MCPToolSet ("MCPTools has not had inheritance
+            # resolved", before its DependsOn) although every class compiles alone, so compile them one at
+            # a time before calling the deploy failed.
             for name in batch:
                 one = iris_obj.classMethodValue("%SYSTEM.OBJ", "CompileList", f"{name}.cls", "ck-d")
                 if not _ok(iris_obj, one):

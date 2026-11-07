@@ -1475,6 +1475,11 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Fixed: setup, upgrade and deploy**
 
+- **The class deploy no longer fails at random on `Graph.KG.MCPToolSet`.** Its generators read `Graph.KG.MCPTools`, and
+  nothing told the compiler so: a multi-process compile of the package could run them first (ERROR #5289, "MCPTools ...
+  has not had inheritance resolved"), and on a fresh container it often did. `MCPToolSet` now declares
+  `DependsOn = Graph.KG.MCPTools`. The TCK namespace deploy no longer calls that error "known" and skips the class, and
+  the test fixtures no longer drop deploy errors that name it. Found by the dpgenai1 sharded gate.
 - **Setup on a non-default IVG Schema tunes that schema's tables.** `initialize_schema()` ran `TUNE TABLE Graph_KG.*`
   whatever the engine's IVG Schema was, so a namespace set up with `schema_prefix="IVGALT"` had its own tables never
   tuned, and its status listed `Graph_KG.*` under `tuned`. A failed `TUNE TABLE` of a table that is there is now a

@@ -1482,9 +1482,7 @@ def ivg_236_scratch():
         from iris_vector_graph._engine import class_deploy as _cd
 
         result = _cd.deploy_packaged_classes(probe)
-        # Graph.KG.MCPToolSet needs Graph.KG.MCPTools, which iris_src does not ship:
-        # a known, harmless compile error (scripts/tck/deploy_namespace.py says the same).
-        errors = [e for e in (result.errors if result is not None else []) if "MCPTool" not in e]
+        errors = list(result.errors if result is not None else [])
         if errors:
             raise RuntimeError(f"{ns} class deploy failed: {errors}")
         # the setup functions the translated SQL calls (GRAPH_KG.CY_TYPED does not exist without them, R287)

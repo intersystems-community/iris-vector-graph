@@ -33,10 +33,6 @@ def _endpoint() -> tuple[str, int]:
         return "localhost", int(os.environ.get("IVG_PORT", "31972"))
 
 
-# Needs Graph.KG.MCPTools, which is not in iris_src: known, harmless.
-KNOWN_UNCOMPILED = frozenset({"Graph.KG.MCPToolSet"})
-
-
 def recompile_stale(irisobj, names: list[str], skip=frozenset()) -> list[str]:
     """Recompile every class of `names` that is not up to date; answer those still not up to date.
 
@@ -45,8 +41,7 @@ def recompile_stale(irisobj, names: list[str], skip=frozenset()) -> list[str]:
     on this server (R272: on Community the MCP classes, which name %AI classes it lacks).
     """
     def stale():
-        return [n for n in names if n not in KNOWN_UNCOMPILED and n not in skip
-                and not irisobj.classMethodValue("%SYSTEM.OBJ", "IsUpToDate", n)]
+        return [n for n in names if n not in skip and not irisobj.classMethodValue("%SYSTEM.OBJ", "IsUpToDate", n)]
 
     todo = stale()
     if todo:
@@ -106,13 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         if not irisobj.classMethodValue("%SYSTEM.Status", "IsOK", st):
             err += irisobj.classMethodValue("%SYSTEM.Status", "GetErrorText", st) + "\n"
     ok = not err
-    if not ok:
-        # Graph.KG.MCPToolSet needs Graph.KG.MCPTools, which is not in iris_src: known, harmless.
-        if all("MCPTool" in line or "%AI.ToolSet" in line for line in err.splitlines() if "ERROR" in line):
-            ok = True
-            print("compile: only the known Graph.KG.MCPToolSet error")
-        else:
-            print("COMPILE ERR", err[:2000])
+    if not ok:  # before the schema exists a class with embedded SQL over its tables fails; step 2 recompiles it
+        print("COMPILE ERR", err[:2000])
     print(f"classes: {len(names)} loaded, first compile {'ok' if ok else 'FAILED'}")
 
     # 2. schema, the way the TCK harness initialises it
@@ -146,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
     if left:
         print("NOT COMPILED after the schema:", ", ".join(left))
     else:
-        print("classes: every class up to date (but the known", ", ".join(sorted(KNOWN_UNCOMPILED)) + ")")
+        print("classes: every class up to date")
 
     # 3. CY_* / LIST_CONCAT / STR_SPLIT UDFs
     from iris_vector_graph.schema import GraphSchema

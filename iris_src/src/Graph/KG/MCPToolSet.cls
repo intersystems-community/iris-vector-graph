@@ -1,5 +1,8 @@
 /// ToolSet grouping all Graph.KG knowledge graph tools with audit policy.
-Class Graph.KG.MCPToolSet Extends %AI.ToolSet
+/// DependsOn: %AI.ToolSet's %Discover and %Invoke generators read the classes the Definition includes, so those
+/// compile first; without it a multi-process compile of the package could run them before Graph.KG.MCPTools had its
+/// inheritance resolved (ERROR #5289, at random).
+Class Graph.KG.MCPToolSet Extends %AI.ToolSet [ DependsOn = Graph.KG.MCPTools ]
 {
 
 XData Definition [ MimeType = application/xml ]
