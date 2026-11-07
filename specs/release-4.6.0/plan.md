@@ -70,6 +70,10 @@ R001 branch + version ─┬─ A (fixes, small, independent) ──────
   (breaking)" with the migration (drop `json.loads` on result values), docs and doc tests updated, and a line in the
   opsreview heads-up (fixes67). Stored property strings that spell a list or map stay KNOWN_ISSUES: data on disk keeps
   its stored form, so no storage marker in 4.6.0.
+- (2026-11-06, late) Scope cut (Tom, "this stuff goes really slowly"): the four branches in flight finish
+  (460-cmptypes, 460-fixes67, 460-fixes68, 460-sec-translator). After them a new finding goes into 4.6.0 only if it is
+  security, data loss, or a wrong answer in a basic query; anything else goes to KNOWN_ISSUES (with a workaround) and the
+  4.6.1 list. Merges are batched, with one shared gate per batch.
 
 ## Doc-test conventions (layer 1, workstream D)
 
