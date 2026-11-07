@@ -328,8 +328,9 @@ def _fresh_setup(monkeypatch, grants_per_object=0):
 #: Round trips a fresh setup makes on this fake, measured 2026-11-07 (fixes74): 515, of which 256 load the 64 classes
 #: (4 each). The grant reads before fixes74 (a Native call per privilege cell) made 954 here, and 62,554 with 200
 #: grants on each object; on dpgenai1 they made 23,191 in setup's first ten minutes. A release that ships more classes
-#: or routines moves this by 4 a class and about 1 a routine: measure again and say so here.
-FRESH_SETUP_ROUND_TRIPS = 515
+#: or routines moves this by 4 a class and about 1 a routine: measure again and say so here. 516 since be6cd07c (one
+#: more %Dictionary.CompiledClass %ExistsId, the MCPToolSet DependsOn change).
+FRESH_SETUP_ROUND_TRIPS = 516
 
 
 def test_a_fresh_setup_makes_a_fixed_number_of_round_trips(monkeypatch):
