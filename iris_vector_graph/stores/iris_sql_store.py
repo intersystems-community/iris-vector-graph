@@ -383,6 +383,18 @@ def _column_sql_type(values: list) -> str:
     return "VARCHAR(32000)"
 
 
+def json_table_text(v):
+    """`v` as a JSON document fed to IRIS's JSON_TABLE must spell it, for the column to read back `v`.
+
+    JSON_TABLE reads a JSON `""` as NULL, and `"\\u0000"` as the empty string (`$Char(0)`, IRIS SQL's ''). So '' is
+    written as `"\\u0000"`; a real null stays JSON null and reads NULL; any other value is itself. A string that is a
+    lone $Char(0) is IRIS's '' already, so the two cannot be told apart and need not be. The one spelling of '' for a
+    row set read back through JSON_TABLE (4.6.0: a WITH stage read back after a SET lined its rows up on the default
+    graph's '', which came back NULL, and answered no row).
+    """
+    return "\x00" if v == "" else v
+
+
 def _pinned_stage_sql(colnames: list, rows: list) -> str:
     """The body of `<stage> AS (…)` that reads back the rows `__pin_stage__ <stage>` read (4.6.0 R208).
 
@@ -392,7 +404,9 @@ def _pinned_stage_sql(colnames: list, rows: list) -> str:
     if not rows:
         nulls = ", ".join(f"CAST(NULL AS VARCHAR(1)) AS {quote_identifier(c)}" for c in colnames)
         return f"SELECT {nulls} WHERE 1 = 0"
-    doc = json.dumps([{f"c{i}": _json_number(r[i]) for i in range(len(colnames))} for r in rows], default=str)
+    doc = json.dumps(
+        [{f"c{i}": json_table_text(_json_number(r[i])) for i in range(len(colnames))} for r in rows], default=str
+    )
     columns = ", ".join(
         f"c{i} {_column_sql_type([r[i] for r in rows])} PATH '$.c{i}'" for i in range(len(colnames))
     )
@@ -506,7 +520,7 @@ def _stage_snapshot_sql(stage: str, cols: list, colnames: list, rows: list) -> s
 
     used = snap + keys
     quoted = [quote_identifier(c) for c in colnames]
-    doc = json.dumps([{f"k{i}": _jv(r[i]) for i in used} for r in rows], default=str)
+    doc = json.dumps([{f"k{i}": json_table_text(_jv(r[i])) for i in used} for r in rows], default=str)
     columns = ", ".join(f"{quoted[i]} {_sql_type(i)} PATH '$.k{i}'" for i in used)
     select = ", ".join(f'{"s" if i in snap else "l"}.{q} AS {q}' for i, q in enumerate(quoted))
     sql = (

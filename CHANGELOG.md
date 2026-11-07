@@ -913,6 +913,13 @@ AS x RETURN k, count(x)`, and the same with `DISTINCT`, any aggregate after the 
   literals, and IRIS refuses 1000 literals in one statement at Prepare. The ids are now inlined in chunks of at most
   900 literals. `embed_nodes(node_ids=...)` over 1000 or more ids failed the same way (`-1`) and now selects them a
   run at a time. <!-- R310 -->
+- **A `SET` from a `WITH` column, with no `USE GRAPH`, writes each node in its own graph: data written wrong.** In a
+  namespace with a named graph, `MATCH (n:L) WITH n.k AS k, n SET n.r = k` wrote a named graph's node's `r` into the
+  default graph (a property row with no node there), and a `RETURN` after it answered no row: the stage's rows, read
+  back through `JSON_TABLE`, were lined up on the node's graph, and `JSON_TABLE` reads the default graph's `''` (and
+  any empty string a stage column holds) as NULL. **Finding affected rows:** `SELECT p.graph_id, p.s, p."key" FROM
+Graph_KG.rdf_props p WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes n WHERE n.node_id = p.s AND n.graph_id =
+p.graph_id)` lists property rows with no node in their graph.
 - **A write with no `USE GRAPH` changed nodes in graphs it did not match: data written wrong.** Since 4.0.0, where two
   graphs hold the same node id, a Cypher `SET`, `REMOVE`, `DELETE` / `DETACH DELETE` or relationship `SET` with no
   `USE GRAPH` found its nodes through labels and properties joined on the id alone, so

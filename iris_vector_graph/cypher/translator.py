@@ -11172,7 +11172,10 @@ def _set_pair_key(context, target, other: str, target_id=None, other_edge=False,
     graph = None
     if target_id is None and context.graph_context is None and _carries_row_graphs(context):
         m = re.fullmatch(r"(\w+)\.node_id", first)
-        graph = f"{m.group(1)}.graph_id" if m else None
+        # a node a WITH stage carries holds its graph in the stage's `__g_<var>` column (R226): without it, `WITH n.k
+        # AS k, n SET n.r = k` wrote a named graph's node's r into the default graph
+        stage_col = _stage_graph_cols(context).get((alias, var))
+        graph = f"{m.group(1)}.graph_id" if m else (f"{alias}.{stage_col}" if stage_col else None)
     select = f"SELECT {first}, {second}" + (f", {graph}" if graph else "")
     cte, subquery, subparams = context.build_dml_subquery(select_override=select)
     key = _capture_key(context, cte, subquery, subparams, prefix="v", sentinel="__capture_pairs__")
