@@ -7,7 +7,7 @@ nothing and appended an empty ``QueryPart`` to a list, growing to about
 that parses untrusted Cypher (the Bolt server, the REST API).
 
 Every query here is parsed in a child process under a watchdog that kills
-it above 500 MB or after 5 s (``_parse_watchdog``).  Never call the parser
+it above 500 MB, after 5 s of CPU, or after 60 s of wall clock (``_parse_watchdog``).  Never call the parser
 on one of these in the test process: a regression would take the machine
 with it, and macOS ignores ``RLIMIT_AS``.
 """
@@ -19,6 +19,7 @@ import pytest
 from tests.unit._parse_watchdog import (
     run_guarded_parse,
     self_test_alloc,
+    self_test_sleep,
     self_test_spin,
 )
 
@@ -39,11 +40,24 @@ class TestWatchdogItself:
     def test_kills_runaway_allocation(self):
         r = self_test_alloc()
         assert r.status == "KILLED: memory"
-        assert r.elapsed_s < 5
+        assert r.cpu_s < 5
 
     def test_kills_runaway_loop_on_time(self):
         r = self_test_spin(time_limit_s=1.0)
         assert r.status == "KILLED: time"
+        # killed on the CPU it spent, not on the wall clock (a loaded machine stretches the wall clock, not this)
+        assert r.cpu_s >= 1.0
+
+    def test_waiting_is_not_parsing_time(self):
+        """A child that sleeps past the CPU bound spends no CPU: it is not killed on time. Under full-suite load a
+        parse waited longer than 5 s of wall clock for the CPU and failed (4.6.0), so the bound is on CPU."""
+        r = self_test_sleep(seconds=1.5, time_limit_s=1.0)
+        assert r.status == "done", r.status
+        assert r.cpu_s < 1.0
+
+    def test_kills_a_true_hang_on_the_wall_clock(self):
+        r = self_test_sleep(seconds=30, time_limit_s=1.0, wall_limit_s=1.5)
+        assert r.status == "KILLED: hang"
 
     def test_lets_a_normal_parse_finish(self):
         r = run_guarded_parse("MATCH (a) RETURN a.id AS i")
@@ -216,3 +230,10 @@ class TestUseGraphInsideABranch:
         )
         assert out["outcome"] == "ok"
         assert out["main"]["graph"] == "g"
+
+
+@pytest.mark.parametrize("text, seconds", [("0:01.50", 1.5), ("01:02:03", 3723.0), ("2-00:00:01", 172801.0)])
+def test_ps_cpu_time_text_without_psutil(text, seconds):
+    from tests.unit._parse_watchdog import _ps_seconds
+
+    assert _ps_seconds(text) == seconds
