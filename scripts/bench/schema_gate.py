@@ -24,14 +24,16 @@ Any argument this script does not know is passed to every worker.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import math
 import os
+import re
 import statistics
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -104,6 +106,10 @@ class Verdict:
     runs: List[Optional[float]]
     base_runs: List[Optional[float]]
     allowed: bool = False
+    #: runs (by index) that overlapped a Write Daemon stall on this side or the base's; excluded from `median`
+    stalled_runs: List[int] = field(default_factory=list)
+    #: the median of every run, stalled ones included (None when no run was excluded)
+    median_all: Optional[float] = None
 
 
 def slower_than_allowed(base: float, cand: float, threshold: float = THRESHOLD) -> bool:
@@ -124,12 +130,17 @@ def _check_runs(runs: Optional[Sequence[Optional[float]]], min_runs: int, who: s
 
 
 def compare(timings: Dict[str, Dict[str, List[Optional[float]]]], threshold: float = THRESHOLD,
-            min_runs: int = MIN_RUNS, answers: Optional[Dict[str, Dict[str, list]]] = None) -> List[Verdict]:
+            min_runs: int = MIN_RUNS, answers: Optional[Dict[str, Dict[str, list]]] = None,
+            spans: Optional[Dict[str, Dict[str, list]]] = None, windows: Sequence[tuple] = ()) -> List[Verdict]:
     """One verdict per (path, compared side): its median against the base's median of the same path.
 
     `answers` (side -> path -> one answer per run, a count the timed body produced) guards the comparison: a side
-    whose answers are not the base's did other work, and its path fails, unless the path is in ANSWER_MAY_DIFFER."""
-    answers = answers or {}
+    whose answers are not the base's did other work, and its path fails, unless the path is in ANSWER_MAY_DIFFER.
+
+    `spans` (side -> path -> one (start, end) epoch pair per run) and `windows` (write_daemon_windows): a run that
+    overlaps a stall, on its side or the base's, is left out of both medians. When leaving them out changes the
+    verdict, or leaves fewer than `min_runs`, the path fails as "rerun needed": a stall decides nothing."""
+    answers, spans = answers or {}, spans or {}
     paths = sorted({p for side in timings.values() for p in side})
     out = []
     for path in paths:
@@ -141,29 +152,134 @@ def compare(timings: Dict[str, Dict[str, List[Optional[float]]]], threshold: flo
                 out.append(Verdict(path, side, False, problem, None, None, None, list(runs or []),
                                    list(base_runs or [])))
                 continue
-            med, base_med = statistics.median(runs), statistics.median(base_runs)
-            ratio = med / base_med if base_med else math.inf
-            slow = slower_than_allowed(base_med, med, threshold)
-            reason = (f"{(ratio - 1) * 100:+.1f}% against {BASE_COMMIT}: slower than the {threshold:.0%} allowed"
-                      if slow else f"{(ratio - 1) * 100:+.1f}%")
-            ok, allowed = not slow, False
-            if slow and path in ALLOWED:
-                entry = ALLOWED[path]
-                if slower_than_allowed(base_med, med, 2 * entry["cost"]):
-                    reason += (f", more than twice its allowed cost (+{entry['cost']:.0%}, {entry['fix']}): "
-                               "a new regression")
-                else:
-                    ok, allowed = True, True
-                    reason = (f"{(ratio - 1) * 100:+.1f}%: allowed (by design: {entry['fix']}; documented cost "
-                              f"+{entry['cost']:.0%}, {entry['reason']})")
-            base_ans, side_ans = answers.get("base", {}).get(path), answers.get(side, {}).get(path)
-            if base_ans is not None and side_ans is not None and base_ans != side_ans:
-                by_design = path in ANSWER_MAY_DIFFER
-                reason += (f"; answer {side_ans} where the base answered {base_ans}"
-                           + (" (different by design)" if by_design else ": not the same work"))
-                ok = ok and by_design
-            out.append(Verdict(path, side, ok, reason, med, base_med, ratio, list(runs), list(base_runs), allowed))
+            stalled = sorted(_stalled(spans.get(side, {}).get(path), windows)
+                             | _stalled(spans.get("base", {}).get(path), windows))
+            if stalled:
+                verdict_all = _verdict(path, side, runs, base_runs, threshold, answers)
+                clean = [r for i, r in enumerate(runs) if i not in stalled]
+                base_clean = [r for i, r in enumerate(base_runs) if i not in stalled]
+                if min(len(clean), len(base_clean)) < min_runs:
+                    out.append(Verdict(path, side, False,
+                                       f"rerun needed: {len(clean)} runs left after leaving out the {len(stalled)} "
+                                       f"that overlapped a Write Daemon stall (the gate needs {min_runs})",
+                                       None, None, None, list(runs), list(base_runs), False, stalled,
+                                       verdict_all.median))
+                    continue
+                verdict = _verdict(path, side, clean, base_clean, threshold, answers)
+                verdict.runs, verdict.base_runs = list(runs), list(base_runs)
+                verdict.stalled_runs, verdict.median_all = stalled, verdict_all.median
+                if verdict.ok != verdict_all.ok:
+                    verdict.ok = False
+                    verdict.reason = (f"rerun needed: {verdict.reason} without the {len(stalled)} runs that overlapped "
+                                      f"a Write Daemon stall, {verdict_all.reason} with them")
+                out.append(verdict)
+                continue
+            out.append(_verdict(path, side, runs, base_runs, threshold, answers))
     return out
+
+
+def _verdict(path, side, runs, base_runs, threshold, answers) -> Verdict:
+    """One path on one side against the base, from runs already checked for count and failures."""
+    med, base_med = statistics.median(runs), statistics.median(base_runs)
+    ratio = med / base_med if base_med else math.inf
+    slow = slower_than_allowed(base_med, med, threshold)
+    reason = (f"{(ratio - 1) * 100:+.1f}% against {BASE_COMMIT}: slower than the {threshold:.0%} allowed"
+              if slow else f"{(ratio - 1) * 100:+.1f}%")
+    ok, allowed = not slow, False
+    if slow and path in ALLOWED:
+        entry = ALLOWED[path]
+        if slower_than_allowed(base_med, med, 2 * entry["cost"]):
+            reason += (f", more than twice its allowed cost (+{entry['cost']:.0%}, {entry['fix']}): "
+                       "a new regression")
+        else:
+            ok, allowed = True, True
+            reason = (f"{(ratio - 1) * 100:+.1f}%: allowed (by design: {entry['fix']}; documented cost "
+                      f"+{entry['cost']:.0%}, {entry['reason']})")
+    base_ans, side_ans = answers.get("base", {}).get(path), answers.get(side, {}).get(path)
+    if base_ans is not None and side_ans is not None and base_ans != side_ans:
+        by_design = path in ANSWER_MAY_DIFFER
+        reason += (f"; answer {side_ans} where the base answered {base_ans}"
+                   + (" (different by design)" if by_design else ": not the same work"))
+        ok = ok and by_design
+    return Verdict(path, side, ok, reason, med, base_med, ratio, list(runs), list(base_runs), allowed)
+
+
+# ------------------------------------------------------------------------------------------------- Write Daemon stalls
+_WD_LINE = re.compile(r"^(\d\d)/(\d\d)/(\d\d)-(\d\d):(\d\d):(\d\d):(\d{3}) .*(?:WriteDaemon Alert: Write Daemon "
+                      r"(?:still on pass \d+ after ([\d.]+) seconds|(completed a pass))|(\[WriteDaemon\.Started\]))")
+
+
+def write_daemon_windows(log_text: str) -> List[tuple]:
+    """`(start, end)` epoch seconds (UTC, as messages.log writes them) of each Write Daemon stall the system monitor
+    reported: from "still on pass N after S seconds" (its time less S) to the next "completed a pass" or Write Daemon
+    start (a restart); `end` is None for a stall still open. Repeated alerts for one stall make one window."""
+    windows: List[list] = []
+    open_window: Optional[list] = None
+    for line in log_text.splitlines():
+        m = _WD_LINE.match(line)
+        if not m:
+            continue
+        mo, d, y, hh, mi, ss, ms, after, done, started = m.groups()
+        done = done or started  # a restart ends a stall too
+        ts = datetime.datetime(2000 + int(y), int(mo), int(d), int(hh), int(mi), int(ss), int(ms) * 1000,
+                               tzinfo=datetime.timezone.utc).timestamp()
+        if done:
+            if open_window is not None:
+                open_window[1] = ts
+                open_window = None
+            continue
+        start = ts - float(after)
+        if open_window is None:
+            open_window = [start, None]
+            windows.append(open_window)
+        else:
+            open_window[0] = min(open_window[0], start)
+    return [tuple(w) for w in windows]
+
+
+def _stalled(spans: Optional[Sequence[tuple]], windows: Sequence[tuple]) -> set:
+    out = set()
+    for i, span in enumerate(spans or []):
+        if not span:
+            continue
+        a, b = span
+        for start, end in windows:
+            if a <= (end if end is not None else math.inf) and b >= start:
+                out.add(i)
+    return out
+
+
+def preflight_problems(swap_used_mb: float, wd_open: bool, max_swap_mb: float = 1024) -> List[str]:
+    """Why the gate should not start: a container VM swapping (timings would be the VM's) or a Write Daemon stall
+    still open (IRIS's)."""
+    problems = []
+    if swap_used_mb > max_swap_mb:
+        problems.append(f"the container's VM has {swap_used_mb:.0f} MB in swap (over {max_swap_mb:.0f}): "
+                        "timings would measure the VM")
+    if wd_open:
+        problems.append("a Write Daemon stall is open in messages.log (no 'completed a pass' after the last alert)")
+    return problems
+
+
+def container_text(container: str, *cmd: str) -> str:
+    """The stdout of `cmd` run in the container (`docker exec`), "" when it cannot run."""
+    try:
+        r = subprocess.run(["docker", "exec", container, *cmd], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout if r.returncode == 0 else ""
+
+
+def container_swap_mb(container: str) -> float:
+    """Swap in use on the container's VM, in MB (`free -m`); 0 when it cannot be read."""
+    for line in container_text(container, "free", "-m").splitlines():
+        if line.lower().startswith("swap:"):
+            parts = line.split()
+            return float(parts[2]) if len(parts) > 2 else 0.0
+    return 0.0
+
+
+MESSAGES_LOG = "/usr/irissys/mgr/messages.log"
 
 
 def gate_passes(verdicts: Sequence[Verdict]) -> bool:
@@ -205,6 +321,9 @@ def render_markdown(verdicts: Sequence[Verdict], meta: dict) -> str:
     for v in verdicts:
         change = "-" if v.ratio is None else f"{(v.ratio - 1) * 100:+.1f}%"
         note = f" ({NOTES[v.path]})" if v.path in NOTES else ""
+        if v.stalled_runs:
+            note += (f"; runs {v.stalled_runs} left out (a Write Daemon stall), median of all runs "
+                     f"{_fmt(v.median_all)}")
         lines.append(f"| {v.path} | {v.side} | {_fmt(v.base_median)} | {_fmt(v.median)} | {change} | "
                      f"{('allowed (by design)' if v.allowed else 'ok') if v.ok else 'FAIL: ' + v.reason}{note} |")
     for v in verdicts:
@@ -260,6 +379,10 @@ def parse(argv):
     p.add_argument("--alt-ns", default="IVG460FXGALT")
     p.add_argument("--alt-schema", default="IVGALT")
     p.add_argument("--dry-plan", action="store_true", help="print the sides, paths and interleaved order; run nothing")
+    p.add_argument("--container", default=os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise"))
+    p.add_argument("--max-swap-mb", type=float, default=1024)
+    p.add_argument("--no-iris-checks", action="store_true",
+                   help="skip the container checks (VM swap, Write Daemon stalls): the harness's own tests")
     return p.parse_known_args(argv)
 
 
@@ -285,14 +408,23 @@ def main(argv=None) -> int:
         print(f"no {BASE_COMMIT} checkout at {args.base_code}: run scripts/fixtures/build_release_namespace.py "
               f"{BASE_COMMIT} {args.base_ns} first", file=sys.stderr)
         return 2
+    if not args.no_iris_checks:
+        windows_now = write_daemon_windows(container_text(args.container, "cat", MESSAGES_LOG))
+        problems = preflight_problems(container_swap_mb(args.container), bool(windows_now and windows_now[-1][1] is None),
+                                      args.max_swap_mb)
+        if problems:
+            print("the gate did not start: " + "; ".join(problems), file=sys.stderr)
+            return 2
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    started, t0 = time.strftime("%Y-%m-%dT%H:%M:%S%z"), time.monotonic()
+    started, t0, t0_wall = time.strftime("%Y-%m-%dT%H:%M:%S%z"), time.monotonic(), time.time()
     workers: Dict[str, Worker] = {}
     meta_sides: Dict[str, dict] = {}
     timings: Dict[str, Dict[str, List[Optional[float]]]] = {s: {p: [] for p in paths} for s in SIDES}
     answers: Dict[str, Dict[str, list]] = {s: {p: [] for p in paths} for s in SIDES}
+    spans: Dict[str, Dict[str, list]] = {s: {p: [] for p in paths} for s in SIDES}
     errors: List[dict] = []
+    stopped = None
     try:
         for side, (code, ns, schema) in sides.items():
             workers[side] = Worker(side, args.python, args.worker, code, ns, schema, args.scale, extra)
@@ -301,26 +433,42 @@ def main(argv=None) -> int:
                 print(f"{side}: setup failed: {answer.get('error')}", file=sys.stderr)
                 return 2
             meta_sides[side] = {"namespace": ns, "schema": schema, "code": code, "version": answer.get("version")}
-        for run, path, side in schedule(paths, SIDES, args.runs):
+        for k, (run, path, side) in enumerate(schedule(paths, SIDES, args.runs)):
+            sent = time.time()
             answer = workers[side].ask({"op": "run", "path": path, "run": run})
+            # the timed body's own wall-clock span when the worker says it, else the whole request's
+            spans[side][path].append((answer.get("t0", sent), answer.get("t1", time.time())))
             if answer.get("ok"):
                 timings[side][path].append(float(answer["seconds"]))
                 answers[side][path].append(answer.get("answer"))
             else:
                 timings[side][path].append(None)
                 errors.append({"side": side, "path": path, "run": run, "error": answer.get("error")})
+            if not args.no_iris_checks and k % 15 == 14 and "Pausing users" in container_text(
+                    args.container, "tail", "-n", "200", MESSAGES_LOG):
+                stopped = "the Write Daemon paused users (messages.log): the gate stopped"
+                print(stopped, file=sys.stderr)
+                break
     finally:
         for w in workers.values():
             w.close()
-    verdicts = compare(timings, answers=answers)
+    windows = ([] if args.no_iris_checks
+               else write_daemon_windows(container_text(args.container, "cat", MESSAGES_LOG)))
+    verdicts = compare(timings, answers=answers, spans=spans, windows=windows)
     meta = {"base_commit": BASE_COMMIT, "runs": args.runs, "scale": args.scale, "started": started,
-            "elapsed_s": round(time.monotonic() - t0, 1), "sides": meta_sides}
-    passed = gate_passes(verdicts)
+            "elapsed_s": round(time.monotonic() - t0, 1), "sides": meta_sides,
+            "write_daemon_stalls": [[time.strftime("%H:%M:%SZ", time.gmtime(a)),
+                                     time.strftime("%H:%M:%SZ", time.gmtime(b)) if b else "open"]
+                                    for a, b in windows if b is None or b >= t0_wall],
+            "stopped": stopped}
+    passed = gate_passes(verdicts) and stopped is None
     (out / "gate.json").write_text(json.dumps(
         {"passed": passed, "threshold": THRESHOLD, **meta, "verdicts": verdicts_json(verdicts), "errors": errors,
-         "timings": timings, "answers": answers}, indent=2))
+         "timings": timings, "answers": answers, "spans": spans}, indent=2))
     (out / "gate.md").write_text(render_markdown(verdicts, meta))
     print(render_markdown(verdicts, meta))
+    if stopped:
+        return 3
     return 0 if passed else 1
 
 

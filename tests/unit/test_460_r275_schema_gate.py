@@ -138,7 +138,7 @@ def _run_gate(tmp_path, slow):
     worker.write_text(FAKE_WORKER)
     out = tmp_path / "gate"
     argv = ["--out", str(out), "--runs", "5", "--paths", "cypher_one_hop,pagerank",
-            "--worker", str(worker), "--python", sys.executable, "--base-code", str(tmp_path), "--fake", json.dumps(slow)]
+            "--worker", str(worker), "--python", sys.executable, "--base-code", str(tmp_path), "--no-iris-checks", "--fake", json.dumps(slow)]
     return gate.main(argv), out
 
 
@@ -172,7 +172,7 @@ def test_exactly_five_percent_slower_passes_end_to_end(tmp_path):
 
 
 def test_a_missing_base_checkout_is_refused_before_anything_runs(tmp_path):
-    assert gate.main(["--out", str(tmp_path / "g"), "--base-code", str(tmp_path / "absent")]) == 2
+    assert gate.main(["--out", str(tmp_path / "g"), "--base-code", str(tmp_path / "absent"), "--no-iris-checks"]) == 2
     assert not (tmp_path / "g" / "gate.json").exists()
 
 
@@ -277,3 +277,102 @@ def test_cached_pagerank_is_allowed_up_to_twice_its_cost():
     past = gate.compare(timings([1.0] * 5, default=[1.0 + 2 * cost + 0.01] * 5, path="pagerank_cached"))
     assert next(x for x in within if x.side == "default").allowed
     assert not next(x for x in past if x.side == "default").ok
+
+
+# --- Write Daemon stalls: runs inside one are IRIS's, not the code's ---------------------------------------------
+WD_LOG = """\
+11/07/26-06:03:02:324 (926) 2 [Utility.Event] [SYSTEM MONITOR] WriteDaemon Alert: Write Daemon still on pass 168 after 91.1 seconds.
+11/07/26-06:03:32:511 (926) 0 [Utility.Event] [SYSTEM MONITOR] WriteDaemon Alert: Write Daemon completed a pass.
+11/07/26-06:10:25:663 (1472) 3 [Generic.Event] Process 1472 caught signal 11.
+11/07/26-06:13:04:351 (952) 2 [Utility.Event] [SYSTEM MONITOR] WriteDaemon Alert: Write Daemon still on pass 6 after 132.5 seconds.
+"""
+
+
+def _utc(hms):
+    import datetime
+
+    h, m, s = (float(x) for x in hms.split(":"))
+    return datetime.datetime(2026, 11, 7, int(h), int(m), tzinfo=datetime.timezone.utc).timestamp() + s
+
+
+def test_write_daemon_windows_start_at_the_stall_and_end_at_the_completed_pass():
+    windows = gate.write_daemon_windows(WD_LOG)
+    assert len(windows) == 2
+    (s1, e1), (s2, e2) = windows
+    assert abs(s1 - (_utc("06:03:02.324") - 91.1)) < 1e-3 and abs(e1 - _utc("06:03:32.511")) < 1e-3
+    assert abs(s2 - (_utc("06:13:04.351") - 132.5)) < 1e-3 and e2 is None  # still open: no completed pass yet
+
+
+def test_a_run_overlapping_a_stall_is_marked_and_the_verdict_is_given_both_ways():
+    t = timings([1.0] * 7, default=[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 9.0])
+    spans = {s: {"p": [(100.0 + 10 * i, 101.0 + 10 * i) for i in range(7)]} for s in gate.SIDES}
+    windows = [(160.5, 162.0)]  # overlaps run 6 on every side
+    v = {x.side: x for x in gate.compare(t, spans=spans, windows=windows)}
+    d = v["default"]
+    assert d.stalled_runs == [6] and d.ok  # without the stalled run the median is level
+    assert d.median_all is not None and d.median == 1.0
+
+
+def test_excluding_stalled_runs_that_changes_the_verdict_or_leaves_too_few_says_rerun():
+    t = timings([1.0] * 7, default=[1.2, 1.2, 1.2, 1.2, 1.0, 1.0, 1.0])
+    spans = {s: {"p": [(10.0 * i, 10.0 * i + 1) for i in range(7)]} for s in gate.SIDES}
+    windows = [(0.0, 31.0)]  # runs 0-3 inside: three left, fewer than MIN_RUNS
+    d = next(x for x in gate.compare(t, spans=spans, windows=windows) if x.side == "default")
+    assert not d.ok and "rerun" in d.reason
+
+
+def test_the_gate_refuses_to_start_on_an_open_stall_or_a_swapping_vm():
+    assert gate.preflight_problems(swap_used_mb=40897, wd_open=False)
+    assert gate.preflight_problems(swap_used_mb=0, wd_open=True)
+    assert gate.preflight_problems(swap_used_mb=100, wd_open=False) == []
+
+
+def test_a_stall_that_decides_the_verdict_says_rerun():
+    t = timings([1.0] * 7, default=[1.0, 1.0, 1.0, 1.3, 1.3, 1.3, 1.3])
+    spans = {s: {"p": [(10.0 * i, 10.0 * i + 1) for i in range(7)]} for s in gate.SIDES}
+    # every run: median 1.3, a fail; without the two stalled runs: median 1.0, a pass
+    d = next(x for x in gate.compare(t, spans=spans, windows=[(49.5, 61.5)]) if x.side == "default")
+    assert d.stalled_runs == [5, 6] and not d.ok and "rerun needed" in d.reason
+
+
+def test_a_restart_closes_an_open_stall():
+    log = WD_LOG + "11/07/26-06:20:00:000 (901) 0 [WriteDaemon.Started] Write daemon started.\n"
+    assert gate.write_daemon_windows(log)[-1][1] == _utc("06:20:00")
+
+
+def test_the_report_says_which_runs_a_stall_left_out():
+    t = timings([1.0] * 7)
+    spans = {s: {"p": [(10.0 * i, 10.0 * i + 1) for i in range(7)]} for s in gate.SIDES}
+    v = gate.compare(t, spans=spans, windows=[(60.5, 61.5)])
+    md = gate.render_markdown(v, {"runs": 7})
+    assert "left out" in md and "[6]" in md
+
+
+def test_main_refuses_to_start_on_a_swapping_vm_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(gate, "container_swap_mb", lambda c: 40897.0)
+    monkeypatch.setattr(gate, "container_text", lambda c, *cmd: "")
+    code = gate.main(["--out", str(tmp_path / "g"), "--base-code", str(tmp_path)])
+    assert code == 2 and "swap" in capsys.readouterr().err and not (tmp_path / "g").exists()
+
+
+def test_main_marks_runs_inside_a_stall_from_messages_log(tmp_path, monkeypatch):
+    """End to end with the fake worker: a stall window covering the whole run leaves every run out: rerun needed."""
+    monkeypatch.setattr(gate, "container_swap_mb", lambda c: 0.0)
+    state = {"calls": 0}
+
+    def text(container, *cmd):
+        state["calls"] += 1
+        if cmd[0] == "cat" and state["calls"] > 1:  # the read after the runs: a stall over all of them
+            import time as _t
+            stamp = _t.strftime("%m/%d/%y-%H:%M:%S:000", _t.gmtime(_t.time() + 1))
+            return f"{stamp} (1) 2 [Utility.Event] [SYSTEM MONITOR] WriteDaemon Alert: Write Daemon still on pass 1 after 3600.0 seconds.\\n"
+        return ""
+
+    monkeypatch.setattr(gate, "container_text", text)
+    worker = tmp_path / "fake_worker.py"
+    worker.write_text(FAKE_WORKER)
+    code = gate.main(["--out", str(tmp_path / "g"), "--runs", "5", "--paths", "cypher_one_hop", "--worker", str(worker),
+                      "--python", sys.executable, "--base-code", str(tmp_path), "--fake", "{}"])
+    report = json.loads((tmp_path / "g" / "gate.json").read_text())
+    assert code == 1 and all("rerun needed" in v["reason"] for v in report["verdicts"])
+    assert report["write_daemon_stalls"] and all(v["stalled_runs"] == [0, 1, 2, 3, 4] for v in report["verdicts"])

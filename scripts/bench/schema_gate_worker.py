@@ -117,9 +117,12 @@ class Side:
 
     # ---- the paths: each returns (the timed body's seconds, an answer the gate compares across the sides)
     def timed(self, fn):
+        self.wall = [time.time(), None]  # the body's wall-clock span, for the gate's Write Daemon check
         t = time.perf_counter()
         result = fn()
-        return time.perf_counter() - t, result
+        secs = time.perf_counter() - t
+        self.wall[1] = time.time()
+        return secs, result
 
     def count(self, q, params=None):
         return int(self.cy(q, params)[0][0])
@@ -289,7 +292,8 @@ def main():
                 answer = side.setup(req.get("paths") or [])
             elif req["op"] == "run":
                 seconds, result = getattr(side, req["path"])(req.get("run", 0))
-                answer = {"ok": True, "path": req["path"], "seconds": seconds, "answer": result}
+                answer = {"ok": True, "path": req["path"], "seconds": seconds, "answer": result,
+                          "t0": side.wall[0], "t1": side.wall[1]}
             else:
                 answer = {"ok": False, "error": f"unknown op {req['op']!r}"}
         except Exception as e:  # reported to the gate, which records the run as failed (never as a timing)
