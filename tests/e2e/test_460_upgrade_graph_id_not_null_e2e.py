@@ -13,7 +13,7 @@ of the seed), upgrades with this checkout, and checks:
   the default graph, and `USE GRAPH ''` answers it too;
 * the seed's own default-graph edges (n1-knows->n2, n2-knows->n3) answer the same.
 
-Namespace IVG460FX68B, dropped and built anew per release (IVG_UPGRADE_NULL_NS names another IVG460FX*).
+Namespace IVG_UPGRADE_NULL_NS (the E2E gate names one per run), dropped and built anew per release.
 """
 
 from __future__ import annotations
@@ -28,7 +28,9 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.e2e, ns262.requires_container]
 
-NS = os.environ.get("IVG_UPGRADE_NULL_NS", "IVG460FX68B")
+NS = os.environ.get("IVG_UPGRADE_NULL_NS", "")
+if not NS:  # the E2E gate names one per run (tests/e2e/gate.py GROUPS); never a fixed default
+    pytest.skip("set IVG_UPGRADE_NULL_NS to a scratch namespace of this run", allow_module_level=True)
 TABLES = ("nodes", "rdf_labels", "rdf_props", "rdf_edges", "kg_NodeEmbeddings")
 #: the releases whose rdf_edges column takes a NULL graph (2.20), and the ones whose does not (they upgrade the same)
 RELEASES = ("v2.20.0", "v3.2.0", "v4.5.1")
