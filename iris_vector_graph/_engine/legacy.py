@@ -76,60 +76,70 @@ def present_legacy_objects(conn, iris_obj, with_grants: bool = True) -> List[Dic
         item = {
             "kind": entry["kind"], "sql_name": entry["sql_name"], "class_name": entry["class_name"],
             "replacement": entry["replacement"], "present": True, "removed": False,
-            "class_present": entry["class_name"] in classes,
+            "class_present": entry["class_name"] in classes, "grants": [],
         }
-        item["grants"] = direct_grants(iris_obj, entry["sql_name"]) if entry["sql_name"] and with_grants else []
         found.append(item)
+    if with_grants:
+        grants = grants_by_object(conn, [i["sql_name"] for i in found if i["sql_name"]])  # one read for all of them
+        for item in found:
+            if item["sql_name"]:
+                item["grants"] = _direct(grants[item["sql_name"]])
     return found
 
 
-def grants_on(iris_obj, sql_name: str) -> List[Dict[str, Any]]:
-    """Every privilege on `sql_name` a user or role holds, read through `%Library.SQLCatalogPriv:SQLAllPrivileges` (a
-    class query; INFORMATION_SCHEMA has no ROUTINE_PRIVILEGES on this build), each with ``via``, how it is held:
-    ``Direct``, ``Schema Privilege`` (a grant on the object's schema), ``SuperUser`` or ``Owner Privilege``. A table
-    privilege granted on some columns only is a row whose ``privilege`` is ``"None"``.
+#: The columns `grants_by_object` reads. GRANTED_BY is a %List that the SQL gateway cannot convert (<LIST> in
+#: LogicalToOdbc), so it is read as %INTERNAL, the $List's text `_grantors` reads.
+_PRIVILEGE_COLUMNS = ("OBJECT_NAME, SUBJECT_NAME, SUBJECT_TYPE, PRIVILEGE_NAME, HAS_GRANT_OPTION, GRANTED_VIA, "
+                      "%INTERNAL(GRANTED_BY)")
 
-    Inside IRIS (irispython) ``%New`` is spelled ``_New`` (``%New`` raises SystemError there) and the result set's
-    methods are plain attributes; the engine's ``EmbeddedIRIS`` passes method names through literally."""
-    from iris_vector_graph._engine.class_deploy import _invoke
-    from iris_vector_graph.embedded import EmbeddedIRIS
 
-    new = "_New" if isinstance(iris_obj, EmbeddedIRIS) else "%New"
-    rs = iris_obj.classMethodObject("%ResultSet", new, "%Library.SQLCatalogPriv:SQLAllPrivileges")
-    _invoke(rs, "Execute", sql_name)
-    n = int(_invoke(rs, "GetColumnCount"))
-    cols = [str(_invoke(rs, "GetColumnName", i)) for i in range(1, n + 1)]
-    out = []
-    while int(_invoke(rs, "Next")):
-        row = dict(zip(cols, (_invoke(rs, "GetData", i) for i in range(1, n + 1))))
-        if str(row.get("OBJECT_NAME")).upper() != sql_name.upper():
+def grants_by_object(conn, sql_names) -> Dict[str, List[Dict[str, Any]]]:
+    """Every privilege a user or role holds on each of `sql_names`, ``{name: [grant, ...]}`` keyed by the names as
+    given (matched without regard to case), from ``%Library.SQLCatalogPriv:SQLAllPrivileges`` (a class query;
+    INFORMATION_SCHEMA has no ROUTINE_PRIVILEGES or TABLE_PRIVILEGES on 2026.1 or 2026.3). Each grant has ``via``, how
+    it is held: ``Direct``, ``Schema Privilege`` (a grant on the object's schema), ``SuperUser`` or ``Owner
+    Privilege``. A table privilege granted on some columns only is a row whose ``privilege`` is ``"None"``.
+
+    One SQL statement for all the objects, filtered in the server, which the DB-API fetches in batches. It was a Native
+    API %ResultSet per object, read one column of one row per round trip: over a link of 83 ms, setup's 64 reads took
+    hours (4.6.0 fixes74, round 3's walkthrough). The query is called once: its rows in a UNION of several calls are
+    not each call's (measured on 2026.3)."""
+    names = list(dict.fromkeys(sql_names))
+    if not names:
+        return {}
+    by_upper = {n.upper(): n for n in names}
+    marks = ", ".join("?" for _ in by_upper)
+    rows = _rows(conn, f'SELECT {_PRIVILEGE_COLUMNS} FROM "%Library".SQLAllPrivileges(?) '
+                       f"WHERE %UPPER(OBJECT_NAME) IN ({marks})", [""] + list(by_upper))
+    out: Dict[str, List[Dict[str, Any]]] = {n: [] for n in names}
+    for obj, subject, subject_type, privilege, grant_option, via, granted_by in rows:
+        name = by_upper.get(str(obj).upper())
+        if name is None:
             continue
-        out.append({"subject": str(row["SUBJECT_NAME"]), "subject_type": str(row["SUBJECT_TYPE"]),
-                    "privilege": str(row["PRIVILEGE_NAME"]),
-                    "with_grant": str(row.get("HAS_GRANT_OPTION")).lower() in ("yes", "1"),
-                    "via": str(row.get("GRANTED_VIA")),
-                    "granted_by": _grantors(row.get("GRANTED_BY"))})
+        out[name].append({"subject": str(subject), "subject_type": str(subject_type), "privilege": str(privilege),
+                          "with_grant": str(grant_option).lower() in ("yes", "1"), "via": str(via),
+                          "granted_by": _grantors(granted_by)})
     return out
 
 
-def user_roles(iris_obj, user: str) -> set:
-    """The roles `user` holds, read through ``%Library.SQLCatalogPriv:SQLUserRole`` (as :func:`grants_on` reads)."""
-    from iris_vector_graph._engine.class_deploy import _invoke
-    from iris_vector_graph.embedded import EmbeddedIRIS
+def grants_on(conn, sql_name: str) -> List[Dict[str, Any]]:
+    """:func:`grants_by_object` for one object."""
+    return grants_by_object(conn, [sql_name])[sql_name]
 
-    new = "_New" if isinstance(iris_obj, EmbeddedIRIS) else "%New"
-    rs = iris_obj.classMethodObject("%ResultSet", new, "%Library.SQLCatalogPriv:SQLUserRole")
-    _invoke(rs, "Execute", user)
-    out = set()
-    while int(_invoke(rs, "Next")):
-        out.add(str(_invoke(rs, "GetData", 1)))
-    return out
+
+def user_roles(conn, user: str) -> set:
+    """The roles `user` holds, from ``%Library.SQLCatalogPriv:SQLUserRole`` in SQL (one statement; as
+    :func:`grants_by_object` reads, never more than one call of the query a statement)."""
+    return {str(r[0]) for r in _rows(conn, 'SELECT ROLE_NAME FROM "%Library".SQLCatalogPriv_SQLUserRole(?)', [user])}
 
 
 def _grantors(value) -> List[str]:
     """SQLAllPrivileges' GRANTED_BY as a list of user names. A grant a user made is a ``$List`` of them (measured
     2026-11-04 on 2026.3.0AI: ``'\\x13\\x01FIXES46_P_GRANTOR'``); the rows the query makes up (SuperUser, Owner
-    Privilege) hold the name as text. Elements of type 1 are 8-bit text, of type 2 UTF-16LE."""
+    Privilege) hold the name as text. Elements of type 1 are 8-bit text, of type 2 UTF-16LE. Read as
+    ``%INTERNAL(GRANTED_BY)`` over the DB-API the value comes as bytes (measured on Community 2026.1, fixes74)."""
+    if isinstance(value, (bytes, bytearray)):
+        value = bytes(value).decode("latin-1")
     text = "" if value is None else str(value)
     out, i = [], 0
     while i < len(text):
@@ -142,11 +152,15 @@ def _grantors(value) -> List[str]:
     return out
 
 
-def direct_grants(iris_obj, sql_name: str) -> List[Dict[str, Any]]:
+def _direct(grants) -> List[Dict[str, Any]]:
+    return [{k: g[k] for k in ("subject", "subject_type", "privilege", "with_grant")}
+            for g in grants if g["via"] == "Direct"]
+
+
+def direct_grants(conn, sql_name: str) -> List[Dict[str, Any]]:
     """The privileges granted on `sql_name` directly to a user or role (research R4): :func:`grants_on`'s ``Direct``
     rows. Rows held via SuperUser, Owner Privilege or a schema grant are not grants made on the object."""
-    return [{k: g[k] for k in ("subject", "subject_type", "privilege", "with_grant")}
-            for g in grants_on(iris_obj, sql_name) if g["via"] == "Direct"]
+    return _direct(grants_on(conn, sql_name))
 
 
 def copy_grants(conn, items: List[Dict[str, Any]], schema: str, dry_run: bool) -> List[Dict[str, Any]]:
@@ -295,10 +309,11 @@ def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
     held: Dict[str, set] = {}
     because: Dict[str, str] = {}
     users = set()  # the qualifying subjects that are users
-    for name in routines:
-        if name not in existing:
-            continue
-        for g in grants_on(iris_obj, f"{schema}.{name}"):
+    table = f"{schema}.{READ_PATH_SELECT_TABLE}"
+    created = [n for n in routines if n in existing]
+    grants = grants_by_object(conn, [f"{schema}.{n}" for n in created] + [table])  # one read
+    for name in created:
+        for g in grants[f"{schema}.{name}"]:
             if g["privilege"].upper() == "EXECUTE" and g["via"] in _HELD_VIA:
                 held.setdefault(g["subject"], set()).add(name)
                 if g["via"] == "Direct":
@@ -311,8 +326,7 @@ def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
                 if g["privilege"].upper() == "EXECUTE":
                     held.setdefault(g["subject"], set()).add(item["replacement"])
                     because.setdefault(g["subject"], f"EXECUTE on {item.get('sql_name') or item['replacement']}")
-    table = f"{schema}.{READ_PATH_SELECT_TABLE}"
-    for g in grants_on(iris_obj, table):
+    for g in grants[table]:
         if g["privilege"].upper() == "SELECT" and g["via"] in _HELD_VIA:
             held.setdefault(g["subject"], set())
             because.setdefault(g["subject"], f"SELECT on {table}")
@@ -321,7 +335,7 @@ def grant_read_path(conn, iris_obj, schema: str, dry_run: bool,
     # SQLAllPrivileges lists a role's privilege again under each member user, held the same way (4.6.0 R050, measured
     # on 2026.3.0AI), so a user is left to its role when one of its roles qualifies: the role's grants serve it.
     for user in users:
-        if user_roles(iris_obj, user) & set(because):
+        if user_roles(conn, user) & set(because):
             del because[user]
     out = []
     for subject in sorted(because):  # a grantee holding the routines through a schema grant alone qualifies for none
@@ -445,11 +459,10 @@ def revoke_legacy_arno(conn, iris_obj, schema: str, copies: List[Dict[str, Any]]
 
     out: List[Dict[str, Any]] = []
     warnings: List[str] = []
-    for copy in copies:
-        if same_schema(copy["schema"], schema):
-            continue
-        target = _qualified(copy["schema"], copy["name"])
-        rows = [g for g in grants_on(iris_obj, target) if g["privilege"].upper() == "EXECUTE"]
+    pairs = [(c, _qualified(c["schema"], c["name"])) for c in copies if not same_schema(c["schema"], schema)]
+    grants = grants_by_object(conn, [t for _, t in pairs])  # one read for every copy
+    for copy, target in pairs:
+        rows = [g for g in grants[target] if g["privilege"].upper() == "EXECUTE"]
         all_holders = {"%All"} | {g["subject"] for g in rows if g["via"] in ("SuperUser", "Role:%All")}
         for g in rows:
             if g["subject"] in all_holders:
@@ -474,8 +487,9 @@ def revoke_legacy_arno(conn, iris_obj, schema: str, copies: List[Dict[str, Any]]
     finally:
         cur.close()
     conn.commit()
-    for routine in sorted({r["routine"] for r in out}):
-        left = {g["subject"] for g in grants_on(iris_obj, routine)
+    after = grants_by_object(conn, sorted({r["routine"] for r in out}))  # read again, once
+    for routine in sorted(after):
+        left = {g["subject"] for g in after[routine]
                 if g["via"] == "Direct" and g["privilege"].upper() == "EXECUTE"}
         for r in out:
             if r["routine"] == routine:

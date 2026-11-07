@@ -40,8 +40,9 @@ MARKER = ("^IVG.Deploy", "fingerprint")
 #: A class that every deploy compiles; its absence means the marker is stale.
 SENTINEL_CLASS = "Graph.KG.PageRank"
 
-#: Characters per stream ``Write``; keeps each call well under the string limit.
-STREAM_CHUNK = 16000
+#: Characters per stream ``Write``: every class IVG ships is one (the largest is about 114,000), each call well under
+#: IRIS's longest string (3,641,144). One Write per 16,000 characters cost 108 round trips for 67 classes (fixes74).
+STREAM_CHUNK = 1_000_000
 
 _PY_METHOD = re.compile(r"\[[^\]\n]*\bLanguage\s*=\s*python\b", re.IGNORECASE)
 _AI_CLASS = re.compile(r"(?<![\w.])%AI(?:\.\w+)+")
@@ -174,6 +175,8 @@ def _invoke(obj, method, *args):
 
 
 def _ok(iris_obj, status) -> bool:
+    if status == 1 or str(status) == "1":  # $$$OK as the server returns it: no round trip to read it (fixes74)
+        return True
     try:
         return bool(int(iris_obj.classMethodValue("%SYSTEM.Status", "IsOK", status)))
     except Exception:

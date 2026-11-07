@@ -409,8 +409,11 @@ class AdminMixin:
             count = legacy.legacy_count(self.conn, native)
         except Exception as exc:  # status reports what it could not read rather than failing (as its other probes do)
             return self._schema_prefix, None, 0, f"schema record probe failed: {exc}"
-        if refusal is None:
-            recorded = recorded or self._schema_prefix
+        if refusal is None and recorded is None:
+            # This release's objects are there but no record: setup writes it last, so it stopped before the end.
+            return None, None, count, (
+                f"no IVG Schema record: setup has not finished here ({self._schema_prefix}'s objects are there, but "
+                "initialize_schema() records the schema as its last step). Run initialize_schema() again.")
         return recorded, refusal, count, None
 
     def _status_probes(self, internals: bool) -> "EngineStatus":

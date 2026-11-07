@@ -1480,6 +1480,14 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   has not had inheritance resolved"), and on a fresh container it often did. `MCPToolSet` now declares
   `DependsOn = Graph.KG.MCPTools`. The TCK namespace deploy no longer calls that error "known" and skips the class, and
   the test fixtures no longer drop deploy errors that name it. Found by the dpgenai1 sharded gate.
+- **Setup from a machine other than the IRIS host finishes.** The grant steps (the read-path grants, the 4.5.x grant
+  copy, the Arno revoke) read each object's privileges through a Native API `%ResultSet`, one round trip per column of
+  every row, about 1,500 per object, for 64 objects: from a laptop 83 ms from the server, `initialize_schema()` and
+  its dry run had not returned after 40 minutes. They now read every object's privileges in one SQL statement, and
+  each class loads in 4 calls (one stream `Write`, a load status read without a call). A fresh setup from a laptop 24
+  ms from dpgenai1 made 667 round trips and took 44 to 62 s on 2026.3.0AI and 46 s on Community 2026.1 (before: not
+  finished after 10 minutes, 23,191 Native calls in them). Found by round 3's IRIS-operator walkthrough.
+  <!-- fixes74 -->
 - **Setup on a non-default IVG Schema tunes that schema's tables.** `initialize_schema()` ran `TUNE TABLE Graph_KG.*`
   whatever the engine's IVG Schema was, so a namespace set up with `schema_prefix="IVGALT"` had its own tables never
   tuned, and its status listed `Graph_KG.*` under `tuned`. A failed `TUNE TABLE` of a table that is there is now a
@@ -1539,6 +1547,10 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
 
 **Fixed: status and index reports**
 
+- **`status().schema` is `None` after a setup that did not finish.** A setup stopped after it created this release's
+  objects but before it records the schema (its last step) left `status()` saying `schema 'Graph_KG'` with nothing
+  recorded. It now says `None`, as ADMIN_GUIDE §7 has it, and its errors say setup has not finished here and to run
+  `initialize_schema()` again. <!-- fixes74 -->
 - **`status().adjacency.kg_edge_count` counts edges**, a parallel edge by its count; it counted source nodes (13 for
   14 edges). <!-- R010, R011 -->
 - **`SHOW INDEXES`, `GET /indexes`, the store's `list_indexes` and `status().indexes` list the BM25, IVF and PLAID

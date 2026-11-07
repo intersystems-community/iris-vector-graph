@@ -18,6 +18,13 @@ import pytest
 from iris_vector_graph._engine import legacy
 
 
+@pytest.fixture(autouse=True)
+def _grants_read_per_object(monkeypatch):
+    """The grant stand-ins below answer per object (`grants_on`); setup reads every object at once (fixes74:
+    `grants_by_object`, one statement), so here that read is each object's stand-in answer."""
+    monkeypatch.setattr(legacy, "grants_by_object", lambda conn, names: {n: legacy.grants_on(conn, n) for n in names})
+
+
 def test_the_read_path_holds_every_cy_and_cypherfn_routine():
     """Every CY_* function and every CypherFn_*; since R278 also the other functions that read nothing
     (tests/unit/test_460_r278_select_holders_read_path.py), and since R280 CY_VLP_* (below)."""

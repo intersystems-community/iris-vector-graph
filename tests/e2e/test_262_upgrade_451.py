@@ -189,7 +189,7 @@ def test_the_upgrade_records_the_schema_and_copies_the_grant(upg):
     assert ns262.native(upg["conn"]).get("^IVG.Deploy", "schema") == "Graph_KG"
     from iris_vector_graph._engine.legacy import direct_grants
 
-    grants = direct_grants(ns262.native(upg["conn"]), "Graph_KG.CY_CMP")
+    grants = direct_grants(upg["conn"], "Graph_KG.CY_CMP")
     # the role's is the copy (grants_copied); the SELECT-only role's is R278's read-path grant
     assert sorted((g["subject"], g["privilege"]) for g in grants) == [(ROLE, "EXECUTE"), (SEL_ROLE, "EXECUTE")]
     assert [(g["replacement"], g["subject"], g["copied"]) for g in status["grants_copied"]] == [
@@ -248,9 +248,8 @@ def test_the_upgrade_gives_the_role_the_rest_of_the_read_path(upg):
     assert {g["because"] for g in grants if g["subject"] == SEL_ROLE} == {"SELECT on Graph_KG.rdf_props"}
     routines = read_path_routines()
     assert {r for r, s in granted if s == SEL_ROLE} == {f"Graph_KG.{r}" for r in routines}
-    native = ns262.native(upg["conn"])
     for name in ("CY_TYPED", "CY_JSON_NUM", "CY_CMP", "JSON_VALUE"):
-        holders = [(g["subject"], g["privilege"]) for g in direct_grants(native, f"Graph_KG.{name}")]
+        holders = [(g["subject"], g["privilege"]) for g in direct_grants(upg["conn"], f"Graph_KG.{name}")]
         assert (ROLE, "EXECUTE") in holders and (SEL_ROLE, "EXECUTE") in holders, (name, holders)
         assert NOPROPS_ROLE not in [s for s, _ in holders]
     assert not [r for r in routines if r.startswith(("kg_", "MatchEdges", "DijkstraPath"))]
@@ -270,7 +269,7 @@ def test_a_read_path_routine_a_later_release_adds_reaches_the_role_on_the_next_s
         status = upg["engine"].initialize_schema()
         assert {(g["routine"], g["subject"]) for g in status["read_path_grants"]} == {
             ("Graph_KG.CY_R170LATER", ROLE), ("Graph_KG.CY_R170LATER", SEL_ROLE)}
-        grants = direct_grants(ns262.native(upg["conn"]), "Graph_KG.CY_R170LATER")
+        grants = direct_grants(upg["conn"], "Graph_KG.CY_R170LATER")
         assert sorted((g["subject"], g["privilege"]) for g in grants) == [(ROLE, "EXECUTE"), (SEL_ROLE, "EXECUTE")]
         again = upg["engine"].initialize_schema()
         assert again["read_path_grants"] == []

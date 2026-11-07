@@ -19,6 +19,13 @@ import pytest
 from iris_vector_graph._engine import legacy
 
 
+@pytest.fixture(autouse=True)
+def _grants_read_per_object(monkeypatch):
+    """The grant stand-ins below answer per object (`grants_on`); setup reads every object at once (fixes74:
+    `grants_by_object`, one statement), so here that read is each object's stand-in answer."""
+    monkeypatch.setattr(legacy, "grants_by_object", lambda conn, names: {n: legacy.grants_on(conn, n) for n in names})
+
+
 def test_the_read_path_holds_every_function_the_translation_calls_that_reads_nothing():
     names = set(legacy.read_path_routines())
     # what the Cypher translation calls (cypher/translator.py's _fn(...)) and reads nothing: R170's list missed the

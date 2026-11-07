@@ -37,23 +37,23 @@ def world():
 
 
 def test_only_the_direct_grant_is_read(world):
-    _, native = world
-    assert [(g["subject"], g["privilege"]) for g in direct_grants(native, "SQLUser.R262GC")] == [(ROLE, "EXECUTE")]
+    conn, _ = world
+    assert [(g["subject"], g["privilege"]) for g in direct_grants(conn, "SQLUser.R262GC")] == [(ROLE, "EXECUTE")]
 
 
 def test_the_copy_grants_exactly_the_direct_rows_on_the_replacement(world):
-    conn, native = world
-    assert direct_grants(native, "R262GT.R262GC") == []
-    items = [{"sql_name": "SQLUser.R262GC", "replacement": "R262GC", "grants": direct_grants(native, "SQLUser.R262GC")}]
+    conn, _ = world
+    assert direct_grants(conn, "R262GT.R262GC") == []
+    items = [{"sql_name": "SQLUser.R262GC", "replacement": "R262GC", "grants": direct_grants(conn, "SQLUser.R262GC")}]
     copied = copy_grants(conn, items, "R262GT", dry_run=False)
     assert [(c["replacement"], c["subject"], c["copied"]) for c in copied] == [("R262GT.R262GC", ROLE, True)]
-    assert [(g["subject"], g["privilege"], g["with_grant"]) for g in direct_grants(native, "R262GT.R262GC")] == [
+    assert [(g["subject"], g["privilege"], g["with_grant"]) for g in direct_grants(conn, "R262GT.R262GC")] == [
         (ROLE, "EXECUTE", False)]
 
 
 def test_the_dry_run_grants_nothing(world):
-    conn, native = world
-    items = [{"sql_name": "SQLUser.R262GC", "replacement": "R262GC", "grants": direct_grants(native, "SQLUser.R262GC")}]
+    conn, _ = world
+    items = [{"sql_name": "SQLUser.R262GC", "replacement": "R262GC", "grants": direct_grants(conn, "SQLUser.R262GC")}]
     copied = copy_grants(conn, items, "R262GT", dry_run=True)
     assert [c["copied"] for c in copied] == [False]
-    assert direct_grants(native, "R262GT.R262GC") == []
+    assert direct_grants(conn, "R262GT.R262GC") == []

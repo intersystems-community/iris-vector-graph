@@ -25,6 +25,13 @@ import pytest
 from iris_vector_graph._engine import legacy
 from iris_vector_graph.stores import arno_bridge
 
+
+@pytest.fixture(autouse=True)
+def _grants_read_per_object(monkeypatch):
+    """The grant stand-ins below answer per object (`grants_on`); setup reads every object at once (fixes74:
+    `grants_by_object`, one statement), so here that read is each object's stand-in answer."""
+    monkeypatch.setattr(legacy, "grants_by_object", lambda conn, names: {n: legacy.grants_on(conn, n) for n in names})
+
 UNCHECKED = "\r\n\tset dllid = $ZF(-4,1,libpath)\r\n\tquit:dllid=0 0\r\n\tset fnid = $ZF(-4,3,dllid,fname)\r\n\tquit fnid\r\n"
 CHECKED = "\n    do ##class(Graph.KG.ArnoAccel).RequireCallout(libpath, fname)\n    set dllid = $ZF(-4,1,libpath)\n"
 

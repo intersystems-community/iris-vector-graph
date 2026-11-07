@@ -85,3 +85,23 @@ def test_status_on_an_accepted_engine_reports_its_schema(native_patch):
         s = eng.status()
     assert s.schema == "IVGALT"
     assert s.legacy_objects == 1
+
+
+def test_status_after_an_interrupted_setup_says_no_schema_is_recorded(native_patch):
+    """4.6.0 fixes74: round 3 stopped initialize_schema() from a laptop part way (its grant reads took hours over an
+    83 ms link). This release's SQL objects were there, so the engine was not refused, but ^IVG.Deploy("schema") was
+    not written, which setup does last; status() said schema 'Graph_KG' all the same. It now says None, as ADMIN_GUIDE
+    §7 has it, and why."""
+    from iris_vector_graph.schema_name import marker_class
+
+    conn = _conn()
+    native_patch(FakeNative(record=None, classes={marker_class("Graph_KG")}))
+    eng = IRISGraphEngine(conn, embedding_dimension=4, vector_dtype="DOUBLE")
+    with patch("iris_vector_graph._engine.legacy.present_legacy_objects", return_value=[]), \
+            patch.object(IRISGraphEngine, "_detect_arno", return_value=False), \
+            patch.object(IRISGraphEngine, "_ledger_status", return_value=None):
+        s = eng.status()
+    assert s.schema is None
+    [why] = [e for e in s.errors if "IVG Schema record" in e]
+    assert "setup has not finished" in why and "initialize_schema()" in why, why
+    assert "IVG Schema:      none recorded" in s.report()

@@ -28,6 +28,8 @@ class Cursor:
             self._rows = VIEWS
         elif "%Dictionary.ClassDefinition" in text:
             self._rows = [c for c in CLASSES if c[0] in (params or [])]
+        elif "SQLAllPrivileges" in text:
+            self._rows = []  # no grant on any of them
         else:
             self.statements.append(text)
             self._rows = []
@@ -51,20 +53,9 @@ class Conn:
         self.commits += 1
 
 
-class EmptyGrants:
-    """%ResultSet over SQLAllPrivileges answering no rows."""
-
-    def invoke(self, method, *args):
-        return {"Execute": 1, "GetColumnCount": 0, "Next": 0}[method]
-
-
 class Native:
     def __init__(self):
         self.deleted = []
-
-    def classMethodObject(self, cls, method, *args):
-        assert (cls, method, args) == ("%ResultSet", "%New", ("%Library.SQLCatalogPriv:SQLAllPrivileges",))
-        return EmptyGrants()
 
     def classMethodValue(self, cls, method, *args):
         if (cls, method) == ("%SYSTEM.OBJ", "Delete"):
@@ -113,67 +104,42 @@ def test_removal_drops_exactly_the_listed_objects(world):
     assert native.deleted == ["User.CypherFn"]
 
 
-class IrisResultSet:
-    """A %ResultSet as irispython hands it back: plain method attributes, no Native API ``invoke``."""
+class GrantCursor:
+    """SQLAllPrivileges as the catalog answers it for one function: the SuperUser, a direct grant, the owner."""
 
-    COLS = ["SUBJECT_NAME", "SUBJECT_TYPE", "PRIVILEGE_NAME", "OBJECT_NAME", "GRANTED_VIA", "HAS_GRANT_OPTION"]
     ROWS = [
-        ["_SYSTEM", "USER", "EXECUTE", "SQLUser.CY_CMP", "SuperUser", "1"],
-        ["app_role", "ROLE", "EXECUTE", "SQLUser.CY_CMP", "Direct", "Yes"],
-        ["_SYSTEM", "USER", "EXECUTE", "SQLUser.CY_CMP", "Owner Privilege", "Yes"],
+        ("SQLUser.CY_CMP", "_SYSTEM", "USER", "EXECUTE", "1", "SuperUser", ""),
+        ("SQLUser.CY_CMP", "app_role", "ROLE", "EXECUTE", "Yes", "Direct", ""),
+        ("SQLUser.CY_CMP", "_SYSTEM", "USER", "EXECUTE", "Yes", "Owner Privilege", ""),
     ]
 
-    def __init__(self):
-        self.pos, self.executed = 0, None
+    def __init__(self, seen):
+        self.seen, self.rows = seen, []
 
-    def Execute(self, name):
-        self.executed = name
-        return 1
+    def execute(self, sql, params=None):
+        self.seen.append((sql, list(params or [])))
+        self.rows = [r for r in self.ROWS if r[0].upper() in [str(p).upper() for p in (params or [])[1:]]]
 
-    def GetColumnCount(self):
-        return len(self.COLS)
+    def fetchall(self):
+        return list(self.rows)
 
-    def GetColumnName(self, i):
-        return self.COLS[i - 1]
-
-    def Next(self):
-        self.pos += 1
-        return 1 if self.pos <= len(self.ROWS) else 0
-
-    def GetData(self, i):
-        return self.ROWS[self.pos - 1][i - 1]
+    def close(self):
+        pass
 
 
-def test_the_grants_are_read_inside_iris():
-    """The 4.0.0 upgrade under irispython died in direct_grants (IVG 4.6.0 E2E): ``iris.cls("%ResultSet").%New`` is
-    ``SystemError: Cannot modify a string currently used`` there (measured), ``_New`` works, and the object it returns
-    has no ``invoke``."""
-    import types
-
+def test_the_grants_are_read_in_sql_on_the_connection():
+    """The 4.0.0 upgrade under irispython died in direct_grants (IVG 4.6.0 E2E) when it opened a %ResultSet through
+    ``iris.cls`` (``SystemError: Cannot modify a string currently used``). Since fixes74 the grants are one SQL
+    statement on the connection, the same under irispython (EmbeddedConnection's cursor) as over TCP, and only the
+    ``Direct`` row is a grant made on the object."""
     from iris_vector_graph._engine.legacy import direct_grants
-    from iris_vector_graph.embedded import EmbeddedIRIS
 
-    made = []
-
-    class Cls:
-        def __init__(self, name):
-            self.name = name
-
-        def __getattr__(self, method):
-            if method == "%New":
-                raise SystemError("Cannot modify a string currently used")
-            assert (self.name, method) == ("%ResultSet", "_New"), (self.name, method)
-
-            def new(query):
-                assert query == "%Library.SQLCatalogPriv:SQLAllPrivileges"
-                made.append(IrisResultSet())
-                return made[-1]
-
-            return new
-
-    grants = direct_grants(EmbeddedIRIS(types.SimpleNamespace(cls=Cls)), "SQLUser.CY_CMP")
+    seen = []
+    conn = type("C", (), {"cursor": lambda self: GrantCursor(seen)})()
+    grants = direct_grants(conn, "SQLUser.CY_CMP")
     assert grants == [{"subject": "app_role", "subject_type": "ROLE", "privilege": "EXECUTE", "with_grant": True}]
-    assert made[0].executed == "SQLUser.CY_CMP"
+    [(sql, params)] = seen
+    assert '"%Library".SQLAllPrivileges(?)' in sql and params == ["", "SQLUSER.CY_CMP"]
 
 
 def test_the_leftovers_notice_is_info_and_logged_once_per_namespace(caplog):

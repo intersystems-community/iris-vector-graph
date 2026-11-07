@@ -68,7 +68,7 @@ def _grants(conn, routine: str) -> set:
     """(subject, via) of every EXECUTE on `routine`, through the code setup itself reads them with."""
     from iris_vector_graph._engine import legacy
 
-    return {(g["subject"], g["via"]) for g in legacy.grants_on(ns262.native(conn), routine)
+    return {(g["subject"], g["via"]) for g in legacy.grants_on(conn, routine)
             if g["privilege"].upper() == "EXECUTE"}
 
 

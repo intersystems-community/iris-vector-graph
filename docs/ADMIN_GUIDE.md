@@ -74,7 +74,8 @@ publishes the ports on every interface. Compose names the container itself; `doc
 IVG has no separate ObjectScript installation and nothing to copy onto the server. One call from Python sets up a
 namespace. Run it from any machine with Python 3.10 or later and the package installed that reaches the IRIS
 SuperServer port (1972 by default), as a user with `%All` in the namespace ([Privileges](#3-privileges)); nothing
-needs to run on the IRIS host:
+needs to run on the IRIS host. Setup makes a fixed number of round trips (667 on a fresh namespace), so the link sets
+its time: from a laptop 24 ms from the server a fresh setup took 44 to 62 s, on 2026.3.0AI and on Community 2026.1:
 
 ```python
 import iris
