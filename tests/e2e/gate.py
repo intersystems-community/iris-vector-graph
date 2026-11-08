@@ -118,6 +118,10 @@ GROUPS: Dict[str, Group] = {
     "chunked": Group("IVG_CHUNKED_NAMESPACE", "CHK", "graph_kg"),
     # test_253_degree_tally: its cached queries failed <SYNTAX> in USER when another module recompiled classes there
     "degtally": Group("IVG_DEGREE_TALLY_NAMESPACE", "DTL", "graph_kg"),
+    # 4.6.3: test_463_half_setup_writes_e2e takes its namespace back to a half-finished setup (tables, a class and the
+    # record removed), so it needs one of its own; test_463_refused_reads_e2e makes a user without SELECT there.
+    "r463half": Group("IVG_R463_HALF_NS", "463H", "graph_kg"),
+    "r463priv": Group("IVG_R463_PRIV_NS", "463P", "graph_kg"),
 }
 #: Namespace variables an E2E module cannot be given per run, and why (tests/unit/test_460_gate_namespace_vars.py).
 SESSION_NAMESPACES: Dict[str, str] = {

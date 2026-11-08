@@ -75,8 +75,12 @@ class TestUnifiedEdgeStoreUnit:
                         and c.args[1] == "DeleteAdjacency"]
         assert delete_calls, "delete_edge must call EdgeScan.DeleteAdjacency"
 
-    def test_kg_write_failure_is_non_fatal(self):
+    def test_kg_write_failure_raises_and_commits_nothing(self):
+        """4.6.3: it answered True with a WARNING (tests/unit/test_463_kg_write_failures_raise.py)."""
+        from iris_vector_graph.errors import GraphWriteError
+
         engine = _make_engine()
+        engine._adjacency_indexed_cached = False
         iris_mock = MagicMock()
         iris_mock.classMethodVoid.side_effect = RuntimeError("^KG write failed")
         engine._iris_obj = lambda: iris_mock
@@ -85,8 +89,10 @@ class TestUnifiedEdgeStoreUnit:
         cursor_mock.execute.return_value = None
         engine.conn.cursor.return_value = cursor_mock
 
-        result = engine.create_edge("A", "TREATS", "B")
-        assert result is True, "create_edge must return True even when ^KG write fails"
+        with pytest.raises(GraphWriteError, match=r"\^KG adjacency write.*nothing written"):
+            engine.create_edge("A", "TREATS", "B")
+        statements = [c.args[0] for c in cursor_mock.execute.call_args_list]
+        assert "COMMIT" not in statements and "ROLLBACK" in statements
 
     def test_an_id_bound_hop_joins_rdf_edges_by_default(self, monkeypatch):
         # the edge scan cost 77 us an edge once IRIS joined its rows (5.5 s on DRKG's 23,866-edge hub, 10 ms joined)

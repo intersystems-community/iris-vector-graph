@@ -73,7 +73,8 @@ def test_delete_edge_raises_on_a_refused_delete():
     with pytest.raises(GraphWriteError) as raised:
         eng.delete_edge("a", "KNOWS", "b")
     _assert_refusal(raised, "delete_edge")
-    conn.rollback.assert_called()
+    # 4.6.3: a transaction of its own (the driver autocommits, so conn.rollback() took nothing back)
+    assert "ROLLBACK" in log and "COMMIT" not in log
     conn.commit.assert_not_called()
 
 

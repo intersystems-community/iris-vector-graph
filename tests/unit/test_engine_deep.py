@@ -542,6 +542,7 @@ class TestImportGraphNDJSON:
             os.unlink(path)
 
     def test_import_edge_events(self):
+        self.engine._adjacency_indexed_cached = True  # rows only: ^KG by hand on this fake fails and raises (4.6.3)
         data = '\n'.join([
             json.dumps({"kind": "edge", "source": "n1", "predicate": "CAUSES", "target": "n2", "properties": {}}),
         ])

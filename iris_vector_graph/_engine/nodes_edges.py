@@ -35,12 +35,18 @@ def _cypher_json_number(v):
     return v
 
 
-def _rollback_conn(conn) -> None:
-    """Roll the connection back before raising; a failure here is cleanup and must not hide the error raised."""
-    try:
-        conn.rollback()
-    except Exception as e:  # noqa: BLE001 - the write's own error is the one raised
-        logger.debug("rollback before raising failed: %s", e)
+def kg_adjacency_left(method: str, exc: BaseException, left: str) -> str:
+    """The ``left`` of the GraphWriteError an edge writer raises when its own ``^KG`` call (``Graph.KG.EdgeScan.<method>``,
+    made where the adjacency functional index does not keep ``^KG``) fails: the part that failed, then ``left``, what
+    the call leaves. A class that is not there is a setup that did not finish, and the message says what to run.
+
+    4.6.3: these failures logged ``<call> ^KG write failed (BuildKG can recover)`` at WARNING and the call answered
+    True, so on a half set-up namespace ``create_edge`` reported an edge the adjacency reads never saw."""
+    part = "delete" if method.startswith(("Delete", "BulkDelete")) else "write"
+    text = f"its ^KG adjacency {part} (Graph.KG.EdgeScan.{method}) failed; {left}"
+    if "<CLASS DOES NOT EXIST>" in str(exc):
+        text += " (IVG's classes are not compiled here: if setup did not finish, run initialize_schema() again)"
+    return text
 
 
 def _ingest_left(engine, written: int) -> str:
@@ -48,7 +54,8 @@ def _ingest_left(engine, written: int) -> str:
     index the ^KG entries it wrote by hand for the edges before it are not."""
     if not written or engine._adjacency_indexed:
         return "nothing written"
-    return f"rows rolled back, but the ^KG adjacency of the {written} edges before it stays (sync() rebuilds it)"
+    return (f"rows rolled back, but the ^KG adjacency of the {written} edges before it may stay (written over the "
+            "Native API, which a connection of its own does not roll back; sync() rebuilds it)")
 
 
 # a bulk load of at least this many rows gathers the tables' statistics when it ends (TUNE TABLE)
@@ -1115,6 +1122,7 @@ class NodesEdgesMixin:
             quals["weight"] = _weight_text(weight)
         qual_json = _qualifiers_json(quals, "create_edge")
         cursor = self.conn.cursor()
+        kg_failed = kg_written = False
         try:
             cursor.execute("START TRANSACTION")
             self._ensure_edge_endpoints(cursor, ((graph, source_id), (graph, target_id)))
@@ -1128,33 +1136,40 @@ class NodesEdgesMixin:
                 [source_id, predicate, target_id, qual_json, gid, source_id, predicate, target_id, gid],
             )
             inserted = cursor.rowcount
+            if inserted and not self._adjacency_indexed:
+                # Without the adjacency index (spec 252) ^KG is written here, before the COMMIT, so a failure rolls
+                # the rows back. 4.6.3: it ran after the COMMIT, and a failure (Graph.KG.EdgeScan not compiled on a
+                # half set-up namespace) was a WARNING while the call answered True.
+                kg_failed = True
+                self._iris_obj().classMethodVoid(
+                    "Graph.KG.EdgeScan",
+                    "WriteAdjacency",
+                    source_id,
+                    predicate,
+                    target_id,
+                    _adjacency_weight(quals),
+                    graph_key,
+                )
+                kg_failed, kg_written = False, True
             cursor.execute("COMMIT")
         except Exception as e:
             _rollback(cursor)
-            if _is_duplicate(e):
+            if kg_failed:
+                raise GraphWriteError(
+                    "create_edge", e, kg_adjacency_left("WriteAdjacency", e, "the rows are rolled back, nothing written")
+                ) from e
+            if _is_duplicate(e) and not kg_written:
                 # a concurrent writer won the race between the probe and the insert
                 inserted = 0
             else:
-                raise GraphWriteError("create_edge", e) from e
+                # ^KG is written over the Native API; on a connection of its own its entry outlives the rollback
+                left = "the rows are rolled back; the edge's ^KG entry may remain (rebuild_kg() removes it)"
+                raise GraphWriteError("create_edge", e, left if kg_written else "") from e
         if not inserted:
             if self._adopt_temporal_row(source_id, predicate, target_id, graph, qual_json):
                 return True
             logger.debug(f"create_edge duplicate: {source_id}-[{predicate}]->{target_id}")
             return False
-        if self._adjacency_indexed:
-            return True  # the adjacency index wrote ^KG with the row (spec 252)
-        try:
-            self._iris_obj().classMethodVoid(
-                "Graph.KG.EdgeScan",
-                "WriteAdjacency",
-                source_id,
-                predicate,
-                target_id,
-                _adjacency_weight(quals),
-                graph_key,
-            )
-        except Exception as e:
-            logger.warning(f"create_edge ^KG write failed (BuildKG can recover): {e}")
         return True
 
     def _ekey_guard(self, cursor) -> str:
@@ -1232,6 +1247,7 @@ class NodesEdgesMixin:
         # The weight lives in the row's qualifiers (FR-015). This used to write ^KG alone, so a rebuild lost it,
         # and on an edge with no row it created adjacency nothing stood behind.
         cursor = self.conn.cursor()
+        kg_failed = False
         try:
             # one transaction: outside it each UPDATE committed on its own, and a failure on a multigraph
             # triple's second row left the first at the new weight
@@ -1261,18 +1277,23 @@ class NodesEdgesMixin:
                     f"UPDATE {self._t('rdf_edges')} SET qualifiers = ? WHERE %ID = ?",
                     [json.dumps(quals, allow_nan=False), row_id],
                 )
-            cursor.execute("COMMIT")
-        except Exception as e:
-            _rollback(cursor)
-            # R203: False is the answer for an edge with no row; a refused update raises
-            raise GraphWriteError("set_edge_weight", e) from e
-        if not self._adjacency_indexed:
-            try:
+            if not self._adjacency_indexed:
+                # before the COMMIT, so a failure keeps the old weight in the rows (4.6.3: a WARNING, and True)
+                kg_failed = True
                 self._iris_obj().classMethodVoid(
                     "Graph.KG.EdgeScan", "WriteAdjacency", source, predicate, target, str(new_weight)
                 )
-            except Exception as e:
-                logger.warning(f"set_edge_weight ^KG write failed (BuildKG can recover): {e}")
+                kg_failed = False
+            cursor.execute("COMMIT")
+        except Exception as e:
+            _rollback(cursor)
+            if kg_failed:
+                raise GraphWriteError(
+                    "set_edge_weight", e,
+                    kg_adjacency_left("WriteAdjacency", e, "the rows are rolled back and keep their old weight"),
+                ) from e
+            # R203: False is the answer for an edge with no row; a refused update raises
+            raise GraphWriteError("set_edge_weight", e) from e
         return True
 
     def delete_edge(
@@ -1306,7 +1327,10 @@ class NodesEdgesMixin:
         # that opts into touching every graph.
         graph_key = graph_index_key(graph)
         cursor = self.conn.cursor()
+        kg_method = None  # set while the ^KG delete runs, so a failure there is named
         try:
+            # A transaction of its own: the driver's connection autocommits, so conn.rollback() took nothing back
+            cursor.execute("START TRANSACTION")
             if all_graphs:
                 cursor.execute(
                     f"DELETE FROM {self._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ?",
@@ -1323,35 +1347,28 @@ class NodesEdgesMixin:
                     "AND COALESCE(graph_id, '') = COALESCE(?, '')",
                     [source_id, predicate, target_id, "" if graph_key == 0 else graph_key],
                 )
-            self.conn.commit()
+            if not self._adjacency_indexed:  # with the index the row deletes remove the entries (spec 252)
+                # Before the commit, so a failure keeps the rows (4.6.3: a WARNING after the commit, and True, with
+                # ^KG still answering the deleted edge).
+                kg_args = [source_id, predicate, target_id]
+                if all_graphs:
+                    # Every graph is not a key value, so it cannot be expressed by
+                    # passing one. EdgeScan walks its own tree and delegates per edge.
+                    kg_method = "DeleteAdjacencyAllGraphs"
+                else:
+                    kg_method = "DeleteAdjacency"
+                    kg_args.append(graph_key)
+                self._iris_obj().classMethodVoid("Graph.KG.EdgeScan", kg_method, *kg_args)
+                kg_method = None
+            cursor.execute("COMMIT")
         except Exception as e:
-            self.conn.rollback()
+            _rollback(cursor)
+            if kg_method:
+                raise GraphWriteError(
+                    "delete_edge", e, kg_adjacency_left(kg_method, e, "the rows are rolled back, nothing deleted")
+                ) from e
             # R203: answering False made a refused delete look like one that found nothing
             raise GraphWriteError("delete_edge", e) from e
-        if self._adjacency_indexed:
-            return True  # the adjacency index removed the entries with the rows (spec 252)
-        try:
-            if all_graphs:
-                # Every graph is not a key value, so it cannot be expressed by
-                # passing one. EdgeScan walks its own tree and delegates per edge.
-                self._iris_obj().classMethodVoid(
-                    "Graph.KG.EdgeScan",
-                    "DeleteAdjacencyAllGraphs",
-                    source_id,
-                    predicate,
-                    target_id,
-                )
-            else:
-                self._iris_obj().classMethodVoid(
-                    "Graph.KG.EdgeScan",
-                    "DeleteAdjacency",
-                    source_id,
-                    predicate,
-                    target_id,
-                    graph_key,
-                )
-        except Exception as e:
-            logger.warning(f"delete_edge ^KG kill failed (BuildKG can recover): {e}")
         return True
 
     def list_graphs(self) -> List[str]:
@@ -1880,10 +1897,17 @@ class NodesEdgesMixin:
         cursor = self.conn.cursor()
         n = 0
         err_lower = lambda ex: ("unique" in str(ex).lower() or "-119" in str(ex))
-        # This path writes the default graph only, so that is where the endpoints go.
-        self._ensure_edge_endpoints(
-            cursor, ((None, e[k]) for e in normalized for k in ("s", "o"))
-        )
+        # One transaction, so a failure takes the endpoint and edge rows back: the driver's connection autocommits,
+        # and the conn.rollback() this path made before raising took nothing back (4.6.3).
+        cursor.execute("START TRANSACTION")
+        try:
+            # This path writes the default graph only, so that is where the endpoints go.
+            self._ensure_edge_endpoints(
+                cursor, ((None, e[k]) for e in normalized for k in ("s", "o"))
+            )
+        except Exception as ex:
+            _rollback(cursor)
+            raise GraphWriteError("bulk_ingest_edges", ex) from ex
         for edge in normalized:
             s, p, o = edge["s"], edge["p"], edge["o"]
             try:
@@ -1901,7 +1925,7 @@ class NodesEdgesMixin:
                     continue  # duplicate edge (a concurrent writer) — skip silently
                 # 4.6.0 R276: any other refusal fell through, wrote ^KG for the row that was not there, and
                 # counted it.
-                _rollback_conn(self.conn)
+                _rollback(cursor)
                 raise GraphWriteError("bulk_ingest_edges", ex, left=_ingest_left(self, n)) from ex
             if not self._adjacency_indexed:  # with the index the row wrote ^KG (spec 252)
                 try:
@@ -1909,13 +1933,18 @@ class NodesEdgesMixin:
                         "Graph.KG.EdgeScan", "WriteAdjacency", s, p, o, "1.0"
                     )
                 except Exception as ex:
-                    # Without the Graph.KG classes there is no ^KG to keep; any other failure left ^KG without
-                    # the edge, and was passed over (4.6.0 R276).
-                    if "<CLASS DOES NOT EXIST>" not in str(ex):
-                        _rollback_conn(self.conn)
-                        raise GraphWriteError("bulk_ingest_edges", ex, left=_ingest_left(self, n)) from ex
+                    # A failure left ^KG without the edge, and was passed over (4.6.0 R276). 4.6.3: so was a class
+                    # that is not there, read as "no ^KG to keep"; that is a half-finished setup, whose ^KG reads
+                    # then missed the edges.
+                    _rollback(cursor)
+                    left = kg_adjacency_left("WriteAdjacency", ex, _ingest_left(self, n))
+                    raise GraphWriteError("bulk_ingest_edges", ex, left=left) from ex
             n += 1
-        self.conn.commit()
+        try:
+            cursor.execute("COMMIT")
+        except Exception as ex:
+            _rollback(cursor)
+            raise GraphWriteError("bulk_ingest_edges", ex, left=_ingest_left(self, n)) from ex
         self._nkg_dirty = True
         if auto_sync:
             self.sync()

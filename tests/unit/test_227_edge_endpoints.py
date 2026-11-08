@@ -37,6 +37,9 @@ def _engine():
     cursor.fetchone.return_value = (0,)
     cursor.description = [("node_id", None)]
     engine = IRISGraphEngine(conn, embedding_dimension=4)
+    # the adjacency index keeps ^KG: these tests are about the rows (4.6.3: a failed ^KG write by hand raises, and on
+    # this fake connection createIRIS fails, which until then was a swallowed WARNING)
+    engine._adjacency_indexed_cached = True
     cursor.reset_mock()
     return engine, conn, cursor
 

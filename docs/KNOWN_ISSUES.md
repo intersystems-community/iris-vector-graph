@@ -610,24 +610,28 @@ engine.execute_cypher(
 
 ## For IRIS operators
 
-### After an interrupted setup the engine can accept writes it does not index
+### After an interrupted setup the engine accepts the namespace, and its edge writes fail
 
 - **Symptom:** an `initialize_schema()` stopped part way (the process killed, the connection lost) leaves a namespace
   with some of IVG's tables, routines and classes and no IVG Schema record. Where it got far enough to create 4.6.0's
   SQL objects in the schema, the next engine is not refused: `status().schema` is `None` and its `errors` say
-  "setup has not finished here ... Run initialize_schema() again", but `create_node` and `create_edge` answer `True`.
-  Where `Graph.KG.EdgeScan` is not yet compiled, `create_edge` writes the row, fails to write `^KG` and only logs a
-  WARNING (`create_edge ^KG write failed (BuildKG can recover): <CLASS DOES NOT EXIST> ... Graph.KG.EdgeScan`), so
-  reads that use the adjacency index miss the edge. Where setup stopped earlier the first call raises `IVGSchemaError`
-  ("setup has not finished here"), as the [errors](ADMIN_GUIDE.md#one-ivg-schema-per-namespace) describe. Seen by the
-  expert walkthrough (Community 2026.1): 16 of 18 tables left, accepted; 10 of 18, refused.
+  "setup has not finished here ... Run initialize_schema() again". Where `Graph.KG.EdgeScan` is not yet compiled,
+  `create_edge`, `set_edge_weight`, `delete_edge`, `bulk_ingest_edges` and `materialize_inference` raise
+  `GraphWriteError` ("its ^KG adjacency write (Graph.KG.EdgeScan.WriteAdjacency) failed; the rows are rolled back,
+  nothing written (IVG's classes are not compiled here: if setup did not finish, run initialize_schema() again)").
+  Through 4.6.2 `create_edge` wrote the row, logged `create_edge ^KG write failed (BuildKG can recover)` at WARNING and
+  answered `True`, so reads that use the adjacency index missed the edge. Where setup stopped earlier the first call
+  raises `IVGSchemaError` ("setup has not finished here"), as the
+  [errors](ADMIN_GUIDE.md#one-ivg-schema-per-namespace) describe. Seen by the expert walkthrough (Community 2026.1):
+  16 of 18 tables left, accepted; 10 of 18, refused.
 - **Cause:** the engine's first-call check refuses a namespace that lacks 4.6.0's SQL objects, and these were already
-  there; `create_edge` treats a failed `^KG` write as recoverable.
-- **Versions:** 4.6.0; on the 4.6.1 list.
+  there.
+- **Versions:** 4.6.0 and later. Since 4.6.3 a write that cannot keep `^KG` raises and leaves no row; 4.6.0 to 4.6.2
+  answered `True`.
 - **Workaround:** run `initialize_schema()` again to the end before writing (it finishes the namespace and rebuilds
-  `^KG` from the rows, so edges written meanwhile are indexed), and check `status().schema` is set and its `errors`
-  empty before an application writes.
-- **Check:** `engine.status().schema` is `None`, or the log holds `create_edge ^KG write failed`.
+  `^KG` from the rows, so edges a 4.6.2 or earlier engine wrote meanwhile are indexed), and check `status().schema` is
+  set and its `errors` empty before an application writes.
+- **Check:** `engine.status().schema` is `None`, or a write raises `GraphWriteError` naming `Graph.KG.EdgeScan`.
 
 ### Upgrading a 2.x install quarantines a named-graph edge whose endpoints are only in the default graph
 

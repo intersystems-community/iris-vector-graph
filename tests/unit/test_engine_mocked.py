@@ -181,12 +181,18 @@ class TestEngineCreateDelete:
         assert result is False
 
     def test_create_edge_creates_nodes_first(self):
+        # the Native API is a fake: on the MagicMock connection createIRIS fails, which until 4.6.3 was a swallowed
+        # WARNING and now raises GraphWriteError (tests/unit/test_463_kg_write_failures_raise.py)
         engine, _, _ = _make_engine()
-        result = engine.create_edge("new1", "INTERACTS", "new2")
+        native = MagicMock()
+        with patch.object(engine, "_iris_obj", return_value=native):
+            result = engine.create_edge("new1", "INTERACTS", "new2")
         assert result is True or result is False
 
     def test_create_edge_success(self):
-        result = self.engine.create_edge("n1", "INTERACTS", "n2")
+        native = MagicMock()
+        with patch.object(self.engine, "_iris_obj", return_value=native):
+            result = self.engine.create_edge("n1", "INTERACTS", "n2")
         assert result is True or result is False
 
     def test_create_edge_duplicate_is_false(self):

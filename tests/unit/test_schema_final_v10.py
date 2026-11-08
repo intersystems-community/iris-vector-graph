@@ -893,6 +893,7 @@ class TestMaterializeInference:
     def _eng_with_edges(self, edge_map):
         """Build engine whose cursor returns edges from the map per predicate."""
         eng, conn, cur = make_engine()
+        eng._adjacency_indexed_cached = True  # rows only: ^KG by hand on this fake fails and raises (4.6.3)
         calls = [0]
         # We need to track what predicate was queried
         predicate_tracker = {"last_pred": None}

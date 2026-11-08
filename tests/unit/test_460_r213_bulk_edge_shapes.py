@@ -116,7 +116,8 @@ class TestBulkIngestEdgesShapes:
             [{"source_id": "ann", "predicate": "WORKS_AT", "target_id": "acme2"}], auto_sync=False
         )
         assert n == 1
-        sql, params = cur.execute.call_args.args
+        # the INSERT, not the COMMIT that follows it (4.6.3: the SQL path is one transaction)
+        [(sql, params)] = [c.args for c in cur.execute.call_args_list if c.args[0].lstrip().startswith("INSERT")]
         assert params[:3] == ["ann", "WORKS_AT", "acme2"]
 
 

@@ -25,6 +25,7 @@ def _engine():
     cursor.fetchone.return_value = (0,)
     cursor.description = [("node_id", None)]
     engine = IRISGraphEngine(conn, embedding_dimension=4)
+    engine._adjacency_indexed_cached = True  # rows only: ^KG by hand on this fake fails and raises (4.6.3)
     cursor.reset_mock()
     return engine, cursor
 

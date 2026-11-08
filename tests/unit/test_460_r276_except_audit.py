@@ -174,13 +174,15 @@ def test_bulk_ingest_edges_raises_when_its_adjacency_write_fails(stop_patches):
         eng.bulk_ingest_edges([("a", "R", "b")], auto_sync=False)
 
 
-def test_bulk_ingest_edges_without_the_classes_writes_no_adjacency(stop_patches):
-    """No Graph.KG classes, no ^KG to keep: that failure is the one still passed over."""
+def test_bulk_ingest_edges_without_the_classes_raises(stop_patches):
+    """4.6.0 passed this one over ("no Graph.KG classes, no ^KG to keep"); 4.6.3: it is a half-finished setup, whose
+    ^KG reads missed the edges once the classes compiled, so it raises too and says to finish setup."""
     eng = _sql_path_engine(_Cursor())
     native = MagicMock()
     native.classMethodVoid.side_effect = RuntimeError("<CLASS DOES NOT EXIST>XDCall+11^%SYS.DBSRV.1 *Graph.KG.EdgeScan")
-    with patch.object(eng, "_iris_obj", return_value=native):
-        assert eng.bulk_ingest_edges([("a", "R", "b")], auto_sync=False) == 1
+    with patch.object(eng, "_iris_obj", return_value=native), \
+            pytest.raises(GraphWriteError, match=r"initialize_schema\(\) again"):
+        eng.bulk_ingest_edges([("a", "R", "b")], auto_sync=False)
 
 
 def test_retract_inference_raises_on_a_refused_commit():

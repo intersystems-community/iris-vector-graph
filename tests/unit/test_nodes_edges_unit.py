@@ -209,14 +209,17 @@ class TestDeleteEdge:
         with pytest.raises(GraphWriteError):  # 4.6.0 R203: a failed write raises; it answered False
             eng.delete_edge("src", "TREATS", "tgt")
 
-    def test_adjacency_kill_failure_still_returns_true(self):
-        """delete_edge should succeed even if ^KG kill fails."""
+    def test_adjacency_kill_failure_raises_and_keeps_the_row(self):
+        """4.6.3: it answered True with a WARNING, ^KG still holding the deleted edge."""
         eng, conn, cursor = _make_eng()
+        eng._adjacency_indexed_cached = False
         iris_obj = MagicMock()
         iris_obj.classMethodVoid.side_effect = RuntimeError("^KG kill failed")
-        with patch.object(eng, "_iris_obj", return_value=iris_obj):
-            result = eng.delete_edge("src", "TREATS", "tgt")
-        assert result is True
+        with patch.object(eng, "_iris_obj", return_value=iris_obj), \
+                pytest.raises(GraphWriteError, match=r"\^KG adjacency delete.*nothing deleted"):
+            eng.delete_edge("src", "TREATS", "tgt")
+        statements = [c.args[0] for c in cursor.execute.call_args_list]
+        assert "COMMIT" not in statements and "ROLLBACK" in statements, statements
 
 
 # ---------------------------------------------------------------------------

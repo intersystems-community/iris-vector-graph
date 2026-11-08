@@ -2989,7 +2989,19 @@ class SchemaMixin:
                         )
                         adjacency_written += 1
                     except Exception as e:
-                        logger.warning(f"materialize_inference ^KG write failed (BuildKG can recover): {e}")
+                        # 4.6.3: a WARNING, and the edge counted, committed and unseen by every ^KG reader
+                        from iris_vector_graph._engine.nodes_edges import kg_adjacency_left
+
+                        rollback(cursor)
+                        inferred_count = 0
+                        left = (
+                            f"the rows are rolled back; the {adjacency_written} ^KG entries written before it remain "
+                            "(rebuild_kg() removes them)" if adjacency_written
+                            else "the rows are rolled back, nothing written"
+                        )
+                        raise GraphWriteError(
+                            "materialize_inference", e, kg_adjacency_left("WriteAdjacency", e, left)
+                        ) from e
             cursor.execute("COMMIT")
 
         def _transitive_closure(direct_edges):
@@ -3129,7 +3141,7 @@ class SchemaMixin:
         graph_key = graph_index_key(graph)
         if self._adjacency_indexed:
             return deleted  # the row deletes removed ^KG through the adjacency index (spec 252)
-        for s, p, o in retracted:
+        for done, (s, p, o) in enumerate(retracted):
             # An asserted row for the same triple keeps its adjacency entry.
             cursor.execute(
                 f"SELECT COUNT(*) FROM {self._ivg_schema}.rdf_edges WHERE s=? AND p=? AND o_id=? AND {scope_sql}",
@@ -3141,7 +3153,14 @@ class SchemaMixin:
             try:
                 self._iris_obj().classMethodVoid("Graph.KG.EdgeScan", "DeleteAdjacency", s, p, o, graph_key)
             except Exception as e:
-                logger.warning(f"retract_inference ^KG kill failed (BuildKG can recover): {e}")
+                # 4.6.3: a WARNING, and the count returned while ^KG still answered the retracted edges. The rows are
+                # committed by now (each ^KG delete first checks for an asserted row of the triple), so say what stays.
+                from iris_vector_graph._engine.nodes_edges import kg_adjacency_left
+                from iris_vector_graph.errors import GraphWriteError
+
+                left = (f"the {deleted} inferred rows are deleted; the ^KG entries of up to {len(retracted) - done} "
+                        "of their edges remain (rebuild_kg() removes them)")
+                raise GraphWriteError("retract_inference", e, kg_adjacency_left("DeleteAdjacency", e, left)) from e
         return deleted
 
 

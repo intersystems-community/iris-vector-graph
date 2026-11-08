@@ -1067,7 +1067,7 @@ class TestCreateEdge:
         """Line 907 — graph kwarg uses graph_id INSERT."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(return_value=MagicMock())  # ^KG answers (4.6.3: a failure there raises)
 
         result = eng.create_edge("a", "rel", "b", graph="g1")
         assert result is True
@@ -1089,21 +1089,23 @@ class TestCreateEdge:
         result = eng.create_edge("a", "rel", "b")
         assert result is False
 
-    def test_create_edge_iris_obj_failure_logged(self):
-        """Lines 934-935 — ^KG write failure logged but True returned."""
+    def test_create_edge_iris_obj_failure_raises(self):
+        """A ^KG write failure raises and commits nothing (4.6.3; it was logged and True returned)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
+        eng._adjacency_indexed_cached = False
         cur.execute.side_effect = None  # SQL succeeds
         eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
-        result = eng.create_edge("a", "rel", "b")
-        assert result is True
+        with pytest.raises(GraphWriteError, match="no iris"):
+            eng.create_edge("a", "rel", "b")
+        assert "COMMIT" not in [c.args[0] for c in cur.execute.call_args_list]
 
     def test_create_edge_with_qualifiers(self):
         """Lines 956-957 — qualifiers serialized as JSON."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(return_value=MagicMock())
 
         result = eng.create_edge("a", "rel", "b", qualifiers={"weight": 0.5})
         assert result is True
@@ -1141,7 +1143,7 @@ class TestDeleteEdge:
         """delete_edge returns True on success."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
-        eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
+        eng._iris_obj = MagicMock(return_value=MagicMock())
 
         result = eng.delete_edge("a", "rel", "b")
         assert result is True
@@ -1155,15 +1157,17 @@ class TestDeleteEdge:
         with pytest.raises(GraphWriteError):
             eng.delete_edge("a", "rel", "b")
 
-    def test_delete_edge_iris_failure_still_true(self):
-        """Lines 1009-1010 — ^KG delete failure logged but True returned."""
+    def test_delete_edge_iris_failure_raises(self):
+        """A ^KG delete failure raises and keeps the row (4.6.3; it was logged and True returned)."""
         eng, conn, cur = make_engine()
         _patch_t(eng)
+        eng._adjacency_indexed_cached = False
         cur.execute.side_effect = None
         eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
 
-        result = eng.delete_edge("a", "rel", "b")
-        assert result is True
+        with pytest.raises(GraphWriteError, match="no iris"):
+            eng.delete_edge("a", "rel", "b")
+        assert "COMMIT" not in [c.args[0] for c in cur.execute.call_args_list]
 
 
 # ---------------------------------------------------------------------------
@@ -1417,7 +1421,13 @@ class TestBulkIngestEdges:
         _patch_t(eng)
         eng.sync = MagicMock()
         eng._iris_obj = MagicMock(side_effect=Exception("no iris"))
-        cur.execute.side_effect = Exception("UNIQUE")
+
+        # only the edge insert meets the unique key; the transaction statements run (4.6.3)
+        def execute(sql, *a, **k):
+            if sql.lstrip().startswith("INSERT"):
+                raise Exception("UNIQUE")
+
+        cur.execute.side_effect = execute
 
         result = eng.bulk_ingest_edges([{"s": "a", "p": "r", "o": "b"}], auto_sync=False)
         assert result == 0  # skipped, not counted

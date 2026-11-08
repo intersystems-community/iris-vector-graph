@@ -217,6 +217,7 @@ class TestMaterializeInferenceWithGraph:
     def test_insert_inferred_with_graph(self):
         """Lines 621-625: _insert_inferred uses graph_id column when graph is set."""
         eng, conn, cursor = _make_eng()
+        eng._adjacency_indexed_cached = True  # rows only: ^KG by hand on this fake fails and raises (4.6.3)
 
         sqls = []
         fetchone_calls = [0]
@@ -256,6 +257,7 @@ class TestMaterializeInferenceOwl:
     def test_owl_equiv_class_infers_subclassof(self):
         """Lines 692-696: equivalentClass(A,B) → subClassOf(A,B) + subClassOf(B,A)."""
         eng, conn, cursor = _make_eng()
+        eng._adjacency_indexed_cached = True  # rows only: ^KG by hand on this fake fails and raises (4.6.3)
 
         OWL_EQUIV_CLASS = "http://www.w3.org/2002/07/owl#equivalentClass"
 

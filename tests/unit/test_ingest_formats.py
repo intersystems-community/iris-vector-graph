@@ -16,6 +16,9 @@ class TestLoadNetworkx:
         # The load ends in sync(), which needs the Native API this stand-in lacks; before 4.6.0 R135 its failure
         # was a silent False. Pinned here: the load asks for one sync.
         engine.sync = MagicMock(return_value=True)
+        # Rows only: the adjacency index keeps ^KG. Written by hand, ^KG needs the same Native API; its failure was a
+        # swallowed WARNING and raises since 4.6.3.
+        engine._adjacency_indexed_cached = True
         return engine
 
     def test_loads_nodes_and_edges(self):
@@ -58,6 +61,7 @@ class TestLoadObo:
         cursor_mock.fetchone.return_value = (0,)
         engine.conn.cursor.return_value = cursor_mock
         engine.sync = MagicMock(return_value=True)  # see TestLoadNetworkx._make_engine (R135)
+        engine._adjacency_indexed_cached = True  # and there for ^KG (4.6.3)
         try:
             import obonet
         except ImportError:

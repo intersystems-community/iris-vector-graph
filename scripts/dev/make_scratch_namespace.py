@@ -3,9 +3,9 @@
     python scripts/dev/make_scratch_namespace.py IVG262ALT [IVG262UPG ...]
     python scripts/dev/make_scratch_namespace.py --no-install IVG460FXA      (the namespace and its database only)
     python scripts/dev/make_scratch_namespace.py --split IVG460FXS    (globals in IVG460FXSD, routines in IVG460FXSR)
-    python scripts/dev/make_scratch_namespace.py --drop IVG262UPG     (IVG262*, IVG460INV*, IVG460FX*, IVG460DC* only)
+    python scripts/dev/make_scratch_namespace.py --drop IVG262UPG     (IVG262*, IVG460INV*, IVG460FX*, IVG460DC*, IVG463* only)
 
-Only names starting IVG262 or IVG460 are accepted, so this cannot touch a namespace another suite or project uses. A
+Only names starting IVG262, IVG460 or IVG463 (4.6.3's scratch work) are accepted, so this cannot touch a namespace another suite or project uses. A
 namespace that already exists is left as it is. A namespace with its own database is the only kind a parallel run can
 use: one mapped to USER shares ^KG and the routines with every suite that uses USER.
 
@@ -25,12 +25,12 @@ from pathlib import Path
 
 #: The checkout this script belongs to: what `install_ivg` installs.
 REPO = Path(__file__).resolve().parents[2]
-ALLOWED = ("IVG262", "IVG460")
+ALLOWED = ("IVG262", "IVG460", "IVG463")
 #: The namespaces `drop` may delete: spec 262's; the inventory test's (tests/e2e/test_262_inventory.py), which needs a
 #: namespace nothing has touched; and the per-worker scratch names (IVG460FX* for fix work, IVG460DC* for parallel doc
 #: runs through IVG_DOCTEST_NAMESPACE). Other IVG460* namespaces are never dropped: IVG460DOC (tests/docs/docs.toml)
 #: holds the doc harness's baseline, IVG460ALT is tests/e2e/ns460alt.py's default.
-DROPPABLE = ("IVG262", "IVG460INV", "IVG460FX", "IVG460DC")
+DROPPABLE = ("IVG262", "IVG460INV", "IVG460FX", "IVG460DC", "IVG463")
 PORT = int(os.environ.get("IVG_PORT", "31972"))
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 

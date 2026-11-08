@@ -27,6 +27,19 @@
   and betweenness on ids `a"b` and `c\d` against networkx. **What to do:** run `initialize_schema()`, which compiles
   the changed classes.
 
+**Fixed: writes and errors**
+
+- **An edge write whose `^KG` part fails raises, and writes no row.** Without the adjacency index (a namespace whose
+  setup did not finish, an install `ensure_indexes` has not reached), `create_edge`, `set_edge_weight`, `delete_edge`,
+  `bulk_ingest_edges` and `materialize_inference` keep `^KG` through `Graph.KG.EdgeScan`. A failure there logged
+  `... ^KG write failed (BuildKG can recover)` at WARNING and the call answered `True`; on a half set-up namespace
+  `create_edge` reported edges the adjacency reads never saw. Each now makes the `^KG` call inside its transaction and
+  raises `GraphWriteError` naming it ("its ^KG adjacency write (Graph.KG.EdgeScan.WriteAdjacency) failed; the rows are
+  rolled back, nothing written" and, when the class is not compiled, to run `initialize_schema()` again).
+  `retract_inference`, whose rows are committed first, raises saying which `^KG` entries remain. `delete_edge` and
+  `bulk_ingest_edges` open a transaction of their own: the driver's connection autocommits, and the rollback they made
+  before raising took nothing back. **What to do:** a caller that relied on the `True` catches `GraphWriteError`.
+
 ### v4.6.2 (2026-11-08)
 
 A fix for a wrong answer the 4.6.1 walkthrough found: `shortestPath` read only the default graph.
