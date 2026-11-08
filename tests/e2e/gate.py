@@ -9,7 +9,8 @@
     the last; never mid-run, never under --collect-only, never when no collected module needs one. Kinds (GROUPS):
 
     primary    IVG_NAMESPACE for the modules that check `startswith("IVG460...")` or use
-               `reading_role460.requires_namespace`: a namespace with IVG installed for `Graph_KG`
+               `reading_role460.requires_namespace` or `ns463.requires_namespace`: a namespace with IVG installed for
+               `Graph_KG`
                (scripts/dev/make_scratch_namespace.py: `make` then `install_ivg`, this checkout's tables and classes)
     rag        IVG_NAMESPACE for the modules that use `ns460alt.requires_namespace`: IVG set up with
                `schema_prefix="RAG"` by this checkout's `initialize_schema()`
@@ -51,7 +52,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 #: Which helper's `requires_namespace` puts a module in which group.
-_HELPER_GROUP = {"ns460alt": "rag", "reading_role460": "primary"}
+_HELPER_GROUP = {"ns460alt": "rag", "reading_role460": "primary", "ns463": "primary"}
 #: Modules under tests/e2e that read IVG_NAMESPACE at import into `NS`; patched to the module's namespace.
 HELPERS = tuple(f"tests.e2e.{stem}" for stem in _HELPER_GROUP)
 SCRATCH_PREFIXES = ("IVG460", "IVG262")
