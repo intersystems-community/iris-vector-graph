@@ -213,7 +213,7 @@ IVG_NAMESPACE=IVGFIX IVG_SECONDARY_NAMESPACE=IVGSEC PYTHONPATH=<worktree>`, Pyth
 - [x] T059 [US6] `docs/migration/v4.6.0.md` with a "For projects that vendor IVG's sources" section: every moved, renamed and retired object (from the manifest), `remove_legacy_objects`, grants, and "a namespace that stays on `Graph_KG` needs no SQL changes"
   Also: the consolidation route T048 runs, the grants on the four views (no replacement; grant SELECT on the table), and a warning that `remove_legacy_objects()` lists a vendored class that has a 4.5.x name.
   T068 B7/C3: the notes now list `Graph.KG.Loader` among the retired classes, and say only `Graph.KG.SqlProcs` and the two ledger classes compile into the schema's package.
-- [ ] T060 [US6] Release-time task (recorded in `PRE_RELEASE_CHECKLIST.md` §9): send opsreview an agent-bus message pointing to the notes; no edits in opsreview
+- [x] T060 [US6] Release-time task (recorded in `PRE_RELEASE_CHECKLIST.md` §9): send opsreview an agent-bus message pointing to the notes; no edits in opsreview (sent 2026-11-07, agent-bus msg:b301244e5e41416d978451a8a1ebe195)
 
 **Gate**: T058 green.
 
