@@ -3,6 +3,9 @@ Schema's replacements, and remove them when the operator asks (spec 262, FR-010,
 
 Nothing here matches a name by pattern. An object is IVG's to list, copy or remove only when its exact name is in
 :data:`iris_vector_graph.legacy_manifest.LEGACY_MANIFEST`; an application's own `CY_MINE` in SQLUser is never touched.
+And a name is not enough (4.6.3): an object is IVG's to copy or remove only when its text is one a release shipped
+(:mod:`iris_vector_graph.legacy_bodies`), so an operator's own `JSON_VALUE` under the manifest's name is listed as not
+IVG's and kept.
 """
 
 from __future__ import annotations
@@ -12,6 +15,14 @@ import re
 from typing import Any, Dict, List, Optional
 
 from iris_vector_graph.legacy_manifest import LEGACY_MANIFEST
+from iris_vector_graph.legacy_text import (
+    SOURCE_CHECKED_CLASSES,
+    class_fingerprint,
+    derived_class,
+    routine_fingerprint,
+    view_fingerprint,
+    view_query,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +45,50 @@ def _short(sql_name: str) -> str:
 
 def _derived_class(entry: Dict[str, Any]) -> bool:
     """A function whose class `CREATE FUNCTION` generated (`User.func<NAME>`), as against a shipped class's SqlProc."""
-    return entry["class_name"] == "User.func" + _short(entry["sql_name"]).replace("_", "")
+    return derived_class(entry)
+
+
+def class_source(iris_obj, name: str) -> str:
+    """Class `name`'s UDL text, from ``%Compiler.UDL.TextServices.GetTextAsString`` (its text comes back in an
+    output argument: ``iris.IRISReference`` over the Native API, ``iris.ref`` under irispython). Raises when there is
+    no native handle or IRIS refuses."""
+    if iris_obj is None:
+        raise RuntimeError("no Native API connection")
+    import iris
+
+    make = getattr(iris, "IRISReference", None)
+    ref = make(None) if make is not None else iris.ref("")
+    status = iris_obj.classMethodValue("%Compiler.UDL.TextServices", "GetTextAsString", "", name, ref)
+    if not int(str(iris_obj.classMethodValue("%SYSTEM.Status", "IsOK", status) or 0)):
+        raise RuntimeError(str(iris_obj.classMethodValue("%SYSTEM.Status", "GetErrorText", status)))
+    value = ref.getValue() if make is not None else ref.value
+    return "" if value is None else str(value)
+
+
+def _not_ivgs(what: str, reason: str) -> str:
+    return f"{what} is not IVG's ({reason}) and is kept: remove_legacy_objects never removes it"
+
+
+def _class_verdicts(iris_obj, names) -> Dict[str, str]:
+    """``{class: note}`` for each of `names`: ``""`` when its source is one a release shipped
+    (:data:`iris_vector_graph.legacy_bodies.CLASS_SOURCES`), else why it is not known to be IVG's."""
+    from iris_vector_graph.legacy_bodies import CLASS_SOURCES
+
+    out = {}
+    for name in sorted(names):
+        try:
+            text = class_source(iris_obj, name)
+        except Exception as exc:  # recorded in the item's note; the class is kept, never deleted unread
+            out[name] = f"{name}'s source could not be read ({exc}), so it is not known to be IVG's and is kept"
+            continue
+        known = class_fingerprint(name, text) in CLASS_SOURCES.get(name, ())
+        out[name] = "" if known else _not_ivgs(name, "its source is not one IVG shipped")
+    return out
+
+
+def _texts_by_name(conn, sql: str) -> Dict[str, str]:
+    """``{NAME: text}`` from a ``(name, text)`` query over SQLUser; a NULL text is ``""``."""
+    return {str(r[0]).upper(): "" if r[1] is None else str(r[1]) for r in _rows(conn, sql, [LEGACY_SCHEMA])}
 
 
 def _defined_classes(conn, iris_obj, wanted: List[str]) -> set:
@@ -57,11 +111,21 @@ def _defined_classes(conn, iris_obj, wanted: List[str]) -> set:
 
 def present_legacy_objects(conn, iris_obj, with_grants: bool = True) -> List[Dict[str, Any]]:
     """Every manifest entry found in the namespace, with its direct grants (an empty list each when ``with_grants``
-    is False: a count needs no grant reads)."""
-    routines = {str(r[0]).upper() for r in _rows(
-        conn, "SELECT ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ?", [LEGACY_SCHEMA])}
-    views = {str(r[0]).upper() for r in _rows(
-        conn, "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = ?", [LEGACY_SCHEMA])}
+    is False: a count needs no grant reads), and whether it is IVG's.
+
+    A name on the manifest is not enough (4.6.3): 4.5.x and earlier made their SQLUser functions with ``CREATE OR
+    REPLACE``, over a namespace's own ``JSON_VALUE`` or ``RAND``, and an operator who installs theirs again after
+    upgrading has a function the manifest names. An item is IVG's (``ivg_owned`` True, ``note`` empty) when its text
+    is one a release shipped (:mod:`iris_vector_graph.legacy_bodies`): a function's body
+    (``INFORMATION_SCHEMA.ROUTINES.ROUTINE_DEFINITION``), a view's query (``INFORMATION_SCHEMA.VIEWS``), and the
+    source of a class removal would delete (:data:`~iris_vector_graph.legacy_text.SOURCE_CHECKED_CLASSES`; for a
+    class's SqlProc, its body and its class's). Otherwise ``ivg_owned`` is False and ``note`` says why it is kept."""
+    from iris_vector_graph.legacy_bodies import ROUTINE_BODIES, VIEW_QUERIES
+
+    routines = _texts_by_name(
+        conn, "SELECT ROUTINE_NAME, ROUTINE_DEFINITION FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_SCHEMA = ?")
+    views = _texts_by_name(
+        conn, "SELECT TABLE_NAME, VIEW_DEFINITION FROM INFORMATION_SCHEMA.VIEWS WHERE TABLE_SCHEMA = ?")
     wanted = sorted({e["class_name"] for e in LEGACY_MANIFEST})
     classes = _defined_classes(conn, iris_obj, wanted)
     found = []
@@ -76,9 +140,27 @@ def present_legacy_objects(conn, iris_obj, with_grants: bool = True) -> List[Dic
         item = {
             "kind": entry["kind"], "sql_name": entry["sql_name"], "class_name": entry["class_name"],
             "replacement": entry["replacement"], "present": True, "removed": False,
-            "class_present": entry["class_name"] in classes, "grants": [],
+            "class_present": entry["class_name"] in classes, "grants": [], "ivg_owned": True, "note": "",
         }
+        spelled = _short(entry["sql_name"]) if entry["sql_name"] else ""  # the tables' keys: the manifest's spelling
+        if entry["kind"] == "view":
+            if view_fingerprint(view_query(views[name])) not in VIEW_QUERIES.get(spelled, ()):
+                item["note"] = _not_ivgs(entry["sql_name"], "its query is not one IVG shipped")
+        elif entry["sql_name"] and routine_fingerprint(routines[name]) not in ROUTINE_BODIES.get(spelled, ()):
+            item["note"] = _not_ivgs(entry["sql_name"], "its body is not one IVG shipped")
         found.append(item)
+    checked = {i["class_name"] for i in found
+               if i["class_name"] in SOURCE_CHECKED_CLASSES and i["class_present"] and not i["note"]}
+    verdicts = _class_verdicts(iris_obj, checked)
+    for item in found:
+        verdict = verdicts.get(item["class_name"], "")
+        if verdict and not item["note"]:
+            if item["sql_name"]:
+                item["note"] = (f"{item['sql_name']} is a method of {item['class_name']}, "
+                                f"which removing it would delete: {verdict}")
+            else:
+                item["note"] = verdict
+        item["ivg_owned"] = not item["note"]
     if with_grants:
         grants = grants_by_object(conn, [i["sql_name"] for i in found if i["sql_name"]])  # one read for all of them
         for item in found:
@@ -569,17 +651,21 @@ def _delete_class(iris_obj, name: str) -> bool:
 
 
 def remove_legacy_objects(conn, iris_obj, dry_run: bool = True) -> List[Dict[str, Any]]:
-    """List (``dry_run=True``, the default) or remove the manifest objects present in the namespace.
+    """List (``dry_run=True``, the default) or remove the manifest objects present in the namespace that are IVG's.
 
-    A view is dropped as a view; a function `CREATE FUNCTION` made is dropped as a function, which removes its
-    generated class; a shipped class (`User.CypherFn`, `User.Exec`, the benchmark classes) is deleted as a class, once,
-    which removes every SqlProc it projects.
+    Every manifest object present is listed (:func:`present_legacy_objects`); one whose text no release shipped
+    (``ivg_owned`` False: an operator's own ``JSON_VALUE``, installed again after 4.5.x overwrote it) is never
+    removed, and its ``note`` says so. A view is dropped as a view; a function `CREATE FUNCTION` made is dropped as a
+    function, which removes its generated class; a shipped class (`User.CypherFn`, `User.Exec`, the benchmark
+    classes) is deleted as a class, once, which removes every SqlProc it projects.
     """
     items = present_legacy_objects(conn, iris_obj)
     if dry_run:
         return items
     classes_done = set()
     for item in items:
+        if not item["ivg_owned"]:
+            continue
         if item["kind"] == "view":
             _drop(conn, f"DROP VIEW {item['sql_name']}")
             item["removed"] = True
@@ -612,7 +698,8 @@ def _drop(conn, sql: str) -> bool:
 
 
 def legacy_count(conn, iris_obj) -> int:
-    return len(present_legacy_objects(conn, iris_obj, with_grants=False))
+    """How many of IVG's own 4.5.x objects are still here: an operator's same-named function is not counted."""
+    return sum(1 for i in present_legacy_objects(conn, iris_obj, with_grants=False) if i["ivg_owned"])
 
 
 #: Namespaces whose leftovers notice this process has logged.

@@ -2171,7 +2171,10 @@ class SchemaMixin:
             # IVG's tables in another schema (or several), and nobody named one: record nothing (FR-009)
             raise IVGSchemaError.unrecorded_schemas(held, schema, native_namespace(iris_obj))
         refuse_package_clash(self.conn, schema)
-        found = legacy.present_legacy_objects(self.conn, iris_obj) if iris_obj is not None else []
+        # IVG's own 4.5.x objects only: an operator's same-named function (4.5.x had overwritten theirs; they installed
+        # it again) is theirs, and its grants are not copied to IVG's replacement (4.6.3)
+        found = [i for i in legacy.present_legacy_objects(self.conn, iris_obj) if i["ivg_owned"]] \
+            if iris_obj is not None else []
         if dry_run:
             dim = getattr(self, "embedding_dimension", None)
             widths = None

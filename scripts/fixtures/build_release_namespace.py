@@ -16,7 +16,7 @@ with the worktree first on PYTHONPATH, then the fixed seed of `generate_old_snap
 `initialize_schema()` cannot send its classes over the connection (3.2.0 loads them from a server directory) gets them
 copied into the container and loaded from there.
 
-Without `--keep` the namespace is dropped and created anew first (IVG262* and IVG460FX* only), so nothing of an earlier run or of
+Without `--keep` the namespace is dropped and created anew first (IVG262*, IVG460FX* and IVG463* only), so nothing of an earlier run or of
 the current checkout is in it. The last line printed is a JSON summary of what the release left in `SQLUser`, the `User`
 package, the top-level package and each schema's tables; `inventory()` is the same probe for callers.
 
@@ -470,9 +470,9 @@ def build(tag: str, ns: str, keep: bool = False, seed: bool = True, migrate: boo
     way a consumer on that prefix had to (`_tables_in_prefix`); the release's own setup also made `Graph_KG`'s, which
     `only_prefix` drops, for a namespace whose IVG tables are in that one schema alone. With `keep`, a second build
     adds a second schema's tables. `named_edges=False` seeds without the `acme` edge (see `_child`)."""
-    # IVG460FX*: a fix worker's own scratch namespaces, which make_scratch_namespace may also drop (4.6.0 R299)
-    if not ns.startswith(("IVG262", "IVG460FX")) or ns.upper() != ns:
-        raise ValueError(f"refusing {ns!r}: only upper-case IVG262* or IVG460FX* scratch namespaces")
+    # IVG460FX*, IVG463*: a fix worker's own scratch namespaces, which make_scratch_namespace may also drop (4.6.0 R299)
+    if not ns.startswith(("IVG262", "IVG460FX", "IVG463")) or ns.upper() != ns:
+        raise ValueError(f"refusing {ns!r}: only upper-case IVG262*, IVG460FX* or IVG463* scratch namespaces")
     tree = release_worktree(tag)
     if not keep:
         sys.path.insert(0, str(REPO / "scripts" / "dev"))

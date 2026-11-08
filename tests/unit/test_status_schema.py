@@ -54,11 +54,12 @@ def test_status_on_a_not_upgraded_namespace_reports_why_and_sends_no_sql(native_
     """status() is how an operator finds out: it does not raise, it says, and probes nothing else."""
     conn = _conn()
     native_patch(FakeNative(record=None, classes={"User.funcCYCMP"}))  # 4.5.x left its CY_CMP
-    with patch("iris_vector_graph._engine.legacy.present_legacy_objects", return_value=[{}, {}]) as legacy:
+    found = [{"ivg_owned": True}, {"ivg_owned": True}, {"ivg_owned": False}]
+    with patch("iris_vector_graph._engine.legacy.present_legacy_objects", return_value=found) as legacy:
         eng = IRISGraphEngine(conn, embedding_dimension=4, vector_dtype="DOUBLE")
         s = eng.status()
     assert s.schema is None
-    assert s.legacy_objects == 2
+    assert s.legacy_objects == 2  # IVG's two; the third, an operator's same-named function, is not counted (4.6.3)
     assert any("set up by an earlier IVG release" in e for e in s.errors), s.errors
     legacy.assert_called_once()
     assert legacy.call_args.kwargs.get("with_grants") is False
@@ -79,7 +80,7 @@ def test_status_on_an_accepted_engine_reports_its_schema(native_patch):
     conn = _conn()
     native_patch(FakeNative(record="IVGALT"))
     eng = IRISGraphEngine(conn, embedding_dimension=4, vector_dtype="DOUBLE", schema_prefix="IVGALT")
-    with patch("iris_vector_graph._engine.legacy.present_legacy_objects", return_value=[{}]), \
+    with patch("iris_vector_graph._engine.legacy.present_legacy_objects", return_value=[{"ivg_owned": True}]), \
             patch.object(IRISGraphEngine, "_detect_arno", return_value=False), \
             patch.object(IRISGraphEngine, "_ledger_status", return_value=None):
         s = eng.status()

@@ -67,6 +67,7 @@ LEGACY_CALLERS = {
     "e2e/test_262_not_upgraded.py": "a namespace 4.6.0 has not set up keeps answering through its 4.5.x routines",
     "e2e/test_262_upgrade_451.py": "the 4.5.1 install's own routines, before and after the upgrade",
     "e2e/test_262_vendored.py": "an application that vendored 4.5.x routines keeps them",
+    "e2e/test_463_legacy_same_named_functions_e2e.py": "an operator's own SQLUser.JSON_VALUE and RAND survive the cleanup",
 }
 #: `CREATE ... FUNCTION <schema>.<name>(`, the schema written out or as a format field (`{schema}`, `{s}`).
 _ROUTINE = re.compile(r"(?:FUNCTION|PROCEDURE)\s+(?:\{\w*\}|\w+)\.(\w+)\s*\(", re.IGNORECASE)

@@ -2701,7 +2701,7 @@ Return the SQL statements running now. A failed listing raises (4.6.0; it answer
 def remove_legacy_objects(dry_run: bool = True) -> list
 ```
 
-The objects IVG 4.5.x created in SQLUser and the User package that are still here, by the frozen manifest (spec 262, FR-011); `dry_run=False` removes exactly those. Each item: `kind`, `sql_name`, `class_name`, `present`, `grants`, `removed`. A name not on the manifest is never listed or touched.
+The objects IVG 4.5.x created in SQLUser and the User package that are still here, by the frozen manifest (spec 262, FR-011); `dry_run=False` removes exactly the ones that are IVG's. Each item: `kind`, `sql_name`, `class_name`, `present`, `grants`, `removed`, `ivg_owned` and `note`. A name not on the manifest is never listed or touched. An object under a manifest name whose body (a view's query, a class's source) no IVG release shipped, such as an operator's own `JSON_VALUE` in SQLUser installed again after 4.5.x overwrote it, is listed with `ivg_owned` False and a `note` saying it is kept, and is never removed.
 
 #### `set_multigraph`
 

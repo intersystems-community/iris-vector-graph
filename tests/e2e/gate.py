@@ -100,6 +100,7 @@ GROUPS: Dict[str, Group] = {
     "fx8d": Group("IVG_NS_IVG262FX8D", "FX8D", "name"),
     "rcd262": Group("IVG_NS_IVG262RCD", "RCD", "name"),
     "ns262upg": Group("IVG_NS_IVG262UPG", "U262", "name"),
+    "legacy463": Group("IVG_NS_IVG463L", "463L", "name"),
     "fx24b": Group("IVG_NS_IVG460FX24B", "24B", "name"),
     "r173": Group("IVG_R173_NAMESPACE", "173", "name"),
     "r174": Group("IVG_R174_NAMESPACE", "174", "name"),

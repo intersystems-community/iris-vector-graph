@@ -7,7 +7,7 @@ names that variable in its module docstring, so two runs can be pointed at two n
 
 The guard, over the test files of tests/e2e, tests/integration and tests/docs: a file that drops or rebuilds a
 namespace (a `recreate(...)` or `drop(...)` of ns262 / make_scratch_namespace, or `Config.Namespaces).Delete(`) holds
-no scratch namespace name (IVG262*, IVG460*, IVG252*) as a string of its own anywhere but as an `os.environ.get`
+no scratch namespace name (IVG262*, IVG460*, IVG252*, IVG463*) as a string of its own anywhere but as an `os.environ.get`
 default (a prefix passed to `startswith`, a message or a pattern is not a name), and its docstring names every such
 variable. PER_RUN lists the files whose namespace is made per run, with a name no other run can hold.
 """
@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRATCH = re.compile(r"IVG(?:262|460|252)[A-Z0-9]+")
+SCRATCH = re.compile(r"IVG(?:262|460|252|463)[A-Z0-9]+")
 DROPPERS = {"ns262", "make_scratch_namespace", "msn"}
 #: files that drop a namespace made per run, which no other run can be using
 PER_RUN = {"test_embedded_irispython_e2e.py": "IVGEMB plus a uuid, made and deleted by the test"}
