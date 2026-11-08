@@ -246,6 +246,25 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.6.1 — an all-graphs shortestPath answers its path once (2026-11-08)
+
+Hotfix (Tom: "4.6.1 hotfix now", "Push and publish 4.6.1"). Found by the round 5c expert walkthrough on the published
+4.6.0. Branch `release-4.6.1` from `5ee2859d`; commit `e30c1a45` (fix, E2E test red on 4.6.0, CHANGELOG, version).
+
+| Gate                                                                      | Commit     | Result                                  |
+| ------------------------------------------------------------------------- | ---------- | --------------------------------------- |
+| New E2E (default and SQL routes)                                          | `e30c1a45` | red on 4.6.0 (`[[2], [2]]`), 4/4 passed |
+| shortestPath E2E files (19, laptop enterprise 2026.3, scratch `IVG460SZ`) | `e30c1a45` | 7,815 passed, 0 failed                  |
+| Unit suite (laptop)                                                       | `e30c1a45` | 23,387 passed, 0 failed                 |
+| GitHub CI (unit 3.11/3.12/3.13, wheel, quickstart)                        | `e30c1a45` | green                                   |
+| `twine check`, clean venv install from PyPI                               | `v4.6.1`   | passed; installs 4.6.1                  |
+
+Not run: the TCK and the full E2E (dpgenai1 unreachable over the VPN); the change only stops the all-graphs route
+from splitting a shortest path per graph. 4.6.0's last gate on `5ee2859d` (dpgenai1, unit + r308 differential and
+R319 on both drivers) passed: unit 23,383, e2e 145 + 140, e2e-541 285, 0 failed.
+
+§9: main fast-forwarded to `e30c1a45`, tag `v4.6.1`, PyPI, GitHub release, clean install.
+
 ### 4.6.0 — one IVG Schema per namespace, the read_only and Cypher-literal security fixes, typed results (2026-11-07)
 
 Minor release with approved breaking changes (CHANGELOG "Changed (breaking)", docs/migration/v4.6.0.md). Branch

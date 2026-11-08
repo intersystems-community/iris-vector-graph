@@ -451,6 +451,9 @@ loss, a doc example's wrong answer or a walkthrough blocker/wrong item):
   shortestPath sees a second graph's path; a betweenness algorithm-cache hit skips the WARNING) and
   `test_230_tune_tables_e2e` (residue check after another module) pass alone (33/33, 3/3) but not beside other
   modules: give each its own namespace
+- shortestPath and named graphs (found writing 4.6.1, not yet reproduced): `ShortestPathJson` and `ShortestLength`
+  take no graph, so a path only a named graph holds is probably not found, with or without `USE GRAPH`; reproduce,
+  then pass the graph to both routines
 - R318 (Tom 2026-11-07, "Allow it, R318 to 4.6.1"): the bulk node loader skips the label and property existence
   SELECTs for a node the batch creates (`node_write_bulk` -8%; 460-bulkperf a05d52e8, tests on the branch)
 - Spec 262 T068 A2: no test runs the suite from the installed wheel (US5-AS3); run the spec 262 E2E files against the
