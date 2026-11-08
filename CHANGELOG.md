@@ -2,6 +2,17 @@
 
 # Changelog
 
+### v4.6.1 (2026-11-07)
+
+A fix for one wrong answer the 4.6.0 release walkthrough found after publishing.
+
+**Fixed: Cypher**
+
+- **An all-graphs `shortestPath` answers its path once.** With no `USE GRAPH`, `MATCH p = shortestPath((a)-[*]->(b))
+RETURN length(p)` with both ends bound answered one copy of its row for each graph holding edges (`[[2], [2]]`
+  beside one unrelated named graph), so a count over it multiplied. The shortest-path routine reads no graph, and 4.6.0
+  ran it once per graph; it runs once now. **What to do:** nothing; `USE GRAPH ''` was the workaround.
+
 ### v4.6.0 (2026-11-07)
 
 One IVG Schema per namespace (spec 262), a set of security fixes, and the defects found by a newcomer walkthrough, a

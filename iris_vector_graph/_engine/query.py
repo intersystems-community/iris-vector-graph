@@ -2352,13 +2352,16 @@ class QueryMixin:
         # running the translated statement — so the graph has to travel on the
         # SQLQuery and be handed to every traversal below (spec 227).
         graph = getattr(sql_query, "graph_context", None)
+        is_shortest = vl0.get("shortest") or vl0.get("all_shortest")
         if graph is None:
             # An all-graphs read is the union of each graph's own answer (spec 253, FR-009): every route below walks
             # one graph's ^KG, and graph=None used to mean the default graph's alone.
             graphs = self._edge_graphs()
-            if graphs:
+            # 4.6.1: not a shortest path: its routine (ShortestPathJson, ShortestLength) reads no graph, so one run per
+            # graph answered the same path once per graph holding edges ([[2], [2]] beside one unrelated named graph)
+            if graphs and not is_shortest:
                 return self._route_var_length_each_graph(sql_query, parameters, graphs)
-        if vl0.get("shortest") or vl0.get("all_shortest"):
+        if is_shortest:
             return self._execute_shortest_path_cypher(sql_query, parameters)
 
         # Resolve source_id from explicit id parameter or query parameters
