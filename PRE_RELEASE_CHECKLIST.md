@@ -262,8 +262,18 @@ gets `graph` as a keyword for a named graph) and `9e98f169` (the r306 oracle's s
 | GitHub CI (unit 3.11/3.12/3.13, wheel, quickstart)            | `9e98f169` | green                                                                                                  |
 | `twine check`, clean venv install from PyPI                   | `v4.6.2`   | passed; installs 4.6.2                                                                                 |
 
-Not run (Tom: use less of dpgenai1): the full E2E suite, the Community TCK and ci-parity. 4.6.1's dpgenai1 gate on
-`07262499` did not complete: the lead deleted that run's trees while freeing disk.
+After publishing, a lean gate on dpgenai1 (`run_all.sh`, stages e2e, tckcom and ci, two E2E shards; Tom: "Run them
+lean on dpgenai1"):
+
+| Gate                                           | Commit     | Result                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full E2E, shard 1 (heavy files)                | `9e98f169` | 3,723 passed, 0 failed                                                                                                                                                                                                                                                                                                                                        |
+| Full E2E, shard 2 (237 files)                  | `9e98f169` | 11,000 passed, 0 failed. Rerun alone after the first run's shard 2 never started (the gate kit's Arno install raced shard 1's). 2 errors: `test_embedded_wgproto_e2e` TestEmbeddedCommunityIRIS needs `ivg-gate-com`, which an e2e-only run does not start; not run, code 4.6.2 did not change                                                                |
+| E2E on driver 5.4.1 (driver matrix list)       | `9e98f169` | 191 passed, 0 failed                                                                                                                                                                                                                                                                                                                                          |
+| TCK, Community 2026.1, drivers 5.4.0 and 5.4.1 | `9e98f169` | 3895 / 3896 each; only Temporal2 [6], environment-dependent                                                                                                                                                                                                                                                                                                   |
+| `scripts/ci-parity.sh`                         | `9e98f169` | unit 23,295 passed on 3.12/5.4.0 and 3.13; docs, doc run (16/16), inventory (21), both drivers, wheel passed. 3.12/5.4.1: 1 failed, the bare `pytest` collection: `api.main` failed its import against a namespace recording another IVG Schema. Fixed in `1b48c8cc` (`api/` is not in the wheel); that test and the new one pass in the same venv (5 passed) |
+
+4.6.1's dpgenai1 gate on `07262499` did not complete: the lead deleted that run's trees while freeing disk.
 
 §9: main fast-forwarded to `9e98f169`, tag `v4.6.2`, PyPI, GitHub release, clean install.
 
