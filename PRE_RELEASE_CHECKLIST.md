@@ -246,6 +246,27 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.6.2 — shortestPath walks the graph it reads (2026-11-08)
+
+Hotfix (Tom: "yes a", "Push and publish 4.6.2"), found by both round 6 walkthroughs on the published 4.6.1. Commit
+`0a89301f` (ShortestPathJson/ShortestLength take the graph; an all-graphs read answers each graph's own path; the store
+gets `graph` as a keyword for a named graph) and `9e98f169` (the r306 oracle's shortestPath reads the default graph).
+
+| Gate                                                          | Commit     | Result                                                                                                 |
+| ------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------ |
+| New E2E (default and SQL routes)                              | `0a89301f` | red on 4.6.1 (6 cases), 8/8 passed                                                                     |
+| shortestPath E2E files (laptop enterprise 2026.3, `IVG460SZ`) | `9e98f169` | 7,821 passed; the 2 r306 failures were the test's default-graph reference, fixed in `9e98f169` (96/96) |
+| Unit suite (laptop)                                           | `0a89301f` | 23,389 passed, 0 failed                                                                                |
+| TCK, enterprise 2026.3, drivers 5.4.0 and 5.4.1 (dpgenai1)    | `0a89301f` | 3895 / 3896 each; only Temporal2 [6], environment-dependent                                            |
+| Walkthroughs, round 7, on the 4.6.2 wheel (both)              | `0a89301f` | expert 0 blocker / 0 wrong / 0 papercut; python 0 / 0 / 0                                              |
+| GitHub CI (unit 3.11/3.12/3.13, wheel, quickstart)            | `9e98f169` | green                                                                                                  |
+| `twine check`, clean venv install from PyPI                   | `v4.6.2`   | passed; installs 4.6.2                                                                                 |
+
+Not run (Tom: use less of dpgenai1): the full E2E suite, the Community TCK and ci-parity. 4.6.1's dpgenai1 gate on
+`07262499` did not complete: the lead deleted that run's trees while freeing disk.
+
+§9: main fast-forwarded to `9e98f169`, tag `v4.6.2`, PyPI, GitHub release, clean install.
+
 ### 4.6.1 — an all-graphs shortestPath answers its path once (2026-11-08)
 
 Hotfix (Tom: "4.6.1 hotfix now", "Push and publish 4.6.1"). Found by the round 5c expert walkthrough on the published
