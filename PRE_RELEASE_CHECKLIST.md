@@ -294,8 +294,10 @@ property use (slow prepare; workaround: bind in a `WITH`), duration field reads,
 
 Not run: line coverage and the coverage gate (as at 4.5.1).
 
-§9: PENDING Tom's word (push, CI, fast-forward main, tag `v4.6.0`, build at the tag, `twine check`, PyPI, GitHub
-release, clean venv install check).
+§9 (Tom: "push it", "Publish it", 2026-11-07): CI on `c487738d` green (unit 3.11/3.12/3.13 after adding `uv` to the
+dev extra, which `test_wheel_contents` builds with; wheel; quickstart); main fast-forwarded to `c487738d`; tag `v4.6.0`;
+built at the tag, `twine check` passed; uploaded to PyPI; GitHub release v4.6.0 with both artifacts; a clean venv
+installs 4.6.0 from PyPI. Final unit run on `a5e973ce` (dpgenai1): 23,383 passed, 0 failed.
 
 ### 4.5.1 — a window read survives a string attribute out of numeric range (2026-11-01)
 
