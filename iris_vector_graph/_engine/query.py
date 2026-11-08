@@ -2357,9 +2357,7 @@ class QueryMixin:
             # An all-graphs read is the union of each graph's own answer (spec 253, FR-009): every route below walks
             # one graph's ^KG, and graph=None used to mean the default graph's alone.
             graphs = self._edge_graphs()
-            # 4.6.1: not a shortest path: its routine (ShortestPathJson, ShortestLength) reads no graph, so one run per
-            # graph answered the same path once per graph holding edges ([[2], [2]] beside one unrelated named graph)
-            if graphs and not is_shortest:
+            if graphs:
                 return self._route_var_length_each_graph(sql_query, parameters, graphs)
         if is_shortest:
             return self._execute_shortest_path_cypher(sql_query, parameters)
@@ -3494,6 +3492,11 @@ class QueryMixin:
         max_hops = vl.get("max_hops", 5)
         direction = vl.get("direction", "both")
         find_all = 1 if vl.get("all_shortest") else 0
+        # the graph walked (4.6.2): the routines read the default graph's ^KG whatever the query's graph, so USE GRAPH
+        # 'g' answered the default graph's path and a path only g holds answered none
+        graph = getattr(sql_query, "graph_context", None)
+        # named only for a named graph, so a store written before 4.6.2 (no graph argument) still answers the default
+        gkw = {"graph": graph} if isinstance(graph, str) and graph else {}
         # a query that reads only the length gets the distance alone, searched from both ends (ShortestLength); the
         # routine reads out and both, so another direction keeps the path routine
         length_only = (
@@ -3506,13 +3509,15 @@ class QueryMixin:
 
         def _length_rows(source_id, target_id):
             try:
-                n = self._store.shortest_path_length(source_id, target_id, vl.get("types", []), max_hops, direction)
+                n = self._store.shortest_path_length(
+                    source_id, target_id, vl.get("types", []), max_hops, direction, **gkw
+                )
             except Exception as ex:
                 if "DOES NOT EXIST" not in str(ex):
                     raise
                 # classes deployed before ShortestLength: the path routine answers, as it did
                 found = self._store.execute_shortest_path(
-                    source_id, target_id, vl.get("types", []), max_hops, direction, False
+                    source_id, target_id, vl.get("types", []), max_hops, direction, False, **gkw
                 )
                 return [[r[0], r[1]] for r in (found.rows or [])[:1]]
             return [["", n]] if n >= 0 else []
@@ -3526,7 +3531,7 @@ class QueryMixin:
                     continue
                 found = self._store.execute_shortest_path(
                     source_id, target_id, vl.get("types", []), max_hops, direction,
-                    bool(find_all),
+                    bool(find_all), **gkw,
                 )
                 # shortestPath is one path per pair; ShortestPathJson hands back every one at the shortest depth
                 found_rows = found.rows or []
@@ -3585,7 +3590,7 @@ class QueryMixin:
             )
         predicates = vl.get("types", [])
         result = self._store.execute_shortest_path(
-            source_id, target_id, predicates, max_hops, direction, bool(find_all)
+            source_id, target_id, predicates, max_hops, direction, bool(find_all), **gkw
         )
         if not find_all and len(result.rows or []) > 1:
             result = IVGResult(columns=result.columns, rows=result.rows[:1])

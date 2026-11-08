@@ -23,8 +23,10 @@ class GraphStore(Protocol):
     def execute_bfs(self, source_id: str, predicates: list, max_hops: int,
                     direction: str, max_results: int, *,
                     graph: Optional[str] = None) -> IVGResult: ...
+    # `graph` (4.6.2) is passed only for a named graph; a store without it answers the default graph's paths
     def execute_shortest_path(self, source_id: str, target_id: str, predicates: list,
-                               max_hops: int, direction: str, find_all: bool) -> IVGResult: ...
+                               max_hops: int, direction: str, find_all: bool, *,
+                               graph: Optional[str] = None) -> IVGResult: ...
     # `bidirectional` / `reverse_edge_weight` are part of the interface because a store
     # that ignores them answers the wrong question: forward-only scores for a caller who
     # asked for reverse traversal, with no error to say so. A store that cannot honour

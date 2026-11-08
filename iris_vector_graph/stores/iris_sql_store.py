@@ -2138,7 +2138,8 @@ class IRISGraphStore:
         return IVGResult(columns=["id", "hops", "pred"], rows=result_rows)
 
     def shortest_path_length(
-        self, source_id: str, target_id: str, predicates: list, max_hops: int, direction: str
+        self, source_id: str, target_id: str, predicates: list, max_hops: int, direction: str, *,
+        graph: Optional[str] = None,
     ) -> int:
         """The length of a shortest path (-1 for none within max_hops), searched from both ends
         (Graph.KG.TraversalPaths.ShortestLength): what execute_shortest_path's paths' length is, without them."""
@@ -2153,6 +2154,7 @@ class IRISGraphStore:
                 str(max_hops),
                 _json.dumps(predicates) if predicates else "",
                 direction,
+                graph or "",
             )
         )
 
@@ -2164,13 +2166,16 @@ class IRISGraphStore:
         max_hops: int,
         direction: str,
         find_all: bool,
+        *,
+        graph: Optional[str] = None,
     ) -> IVGResult:
+        """Shortest paths in one graph: `graph` a name ("" or None the default graph; before 4.6.2 every call walked the default graph)."""
         import json as _json
 
         if direction == "in":
             # ShortestPathJson walks "out" and "both" only, so `(a)<-[*]-(b)` answered no path (4.6.0 R061): an
             # incoming path from a to b is an outgoing one from b to a, read backwards
-            found = self.execute_shortest_path(target_id, source_id, predicates, max_hops, "out", find_all)
+            found = self.execute_shortest_path(target_id, source_id, predicates, max_hops, "out", find_all, graph=graph)
             rows = []
             for path_json, length in found.rows:
                 path = _json.loads(path_json)
@@ -2191,6 +2196,7 @@ class IRISGraphStore:
                 predicates_json,
                 direction,
                 str(int(find_all)),
+                graph or "",
             )
         )
         paths_raw = _json.loads(path_json) if path_json else []

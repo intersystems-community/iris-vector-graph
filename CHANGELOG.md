@@ -2,6 +2,20 @@
 
 # Changelog
 
+### v4.6.2 (2026-11-08)
+
+A fix for a wrong answer the 4.6.1 walkthrough found: `shortestPath` read only the default graph.
+
+**Fixed: Cypher**
+
+- **`shortestPath` walks the graph it reads.** The shortest-path routines (`Graph.KG.TraversalPaths.ShortestPathJson`,
+  `ShortestLength`) took no graph and walked the default graph's edges. So `USE GRAPH 'g'` answered the default graph's
+  path, through nodes `g` does not hold (with null properties), and a path that only a named graph holds answered no
+  row, with or without `USE GRAPH`. Each now takes the graph (`pGraphId`, as `DijkstraJson` does), and a read with no
+  `USE GRAPH` answers each graph's own shortest path, as every other variable-length read does (spec 253). A store
+  implementing `execute_shortest_path` gets the graph as a keyword argument, `graph`, only for a named graph. **What to
+  do:** run `initialize_schema()`, which compiles the changed classes.
+
 ### v4.6.1 (2026-11-07)
 
 A fix for one wrong answer the 4.6.0 release walkthrough found after publishing.

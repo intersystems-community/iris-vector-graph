@@ -79,7 +79,8 @@ class TestExecuteShortestPathCypherPaths:
             result = eng._execute_shortest_path_cypher(sq, {"src": "n1", "dst": "n2"})
         assert isinstance(result, IVGResult)
         args = mock_call.call_args.args
-        assert args[1] == "ShortestPathJson" and args[2:4] == ("n1", "n2") and args[-1] == "1"
+        # find_all, then the graph walked (4.6.2: "" the default graph)
+        assert args[1] == "ShortestPathJson" and args[2:4] == ("n1", "n2") and args[-2:] == ("1", "")
 
     def test_source_resolved_from_source_var(self):
         """Line 408: source_id resolved from source_var in parameters."""

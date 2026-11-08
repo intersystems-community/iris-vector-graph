@@ -143,9 +143,9 @@ ClassMethod ReadBFSPage(tag As %String, cursorStep As %String, cursorO As %Strin
 	Quit ##class(Graph.KG.TraversalBFS).ReadBFSPage(tag, cursorStep, cursorO, pageSize)
 }
 
-ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Integer = 5, predsJson As %String = "", direction As %String = "both", findAll As %Integer = 0) As %String
+ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Integer = 5, predsJson As %String = "", direction As %String = "both", findAll As %Integer = 0, pGraphId As %String = "") As %String
 {
-	Quit ##class(Graph.KG.TraversalPaths).ShortestPathJson(srcId, dstId, maxHops, predsJson, direction, findAll)
+	Quit ##class(Graph.KG.TraversalPaths).ShortestPathJson(srcId, dstId, maxHops, predsJson, direction, findAll, pGraphId)
 }
 
 ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %String = "", maxCost As %Double = 9999, maxHops As %Integer = 10, direction As %String = "out", predsJson As %String = "", pGraphId As %String = "") As %String

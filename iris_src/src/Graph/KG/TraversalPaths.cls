@@ -1,9 +1,10 @@
 Class Graph.KG.TraversalPaths Extends %RegisteredObject [ SqlSchemaName = Graph_KG ]
 {
 
-ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Integer = 5, predsJson As %String = "", direction As %String = "both", findAll As %Integer = 0) As %String
+/// pGraphId: the graph walked, a name as DijkstraJson takes it ("" the default graph; before 4.6.2 every call walked the default graph)
+ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Integer = 5, predsJson As %String = "", direction As %String = "both", findAll As %Integer = 0, pGraphId As %String = "") As %String
 {
-	Set pGraph = 0
+	Set pGraph = ##class(Graph.KG.GraphKey).ForIndex(pGraphId)
 	Kill ^||SP.parents, ^||SP.frontier, ^||SP.seen
 
 	If srcId = "" || (dstId = "") {
@@ -112,8 +113,10 @@ ClassMethod ShortestPathJson(srcId As %String, dstId As %String, maxHops As %Int
 /// A breadth-first search from both ends, each step expanding the end with the smaller frontier, reading only the
 /// predicates asked for; ShortestPathJson searches from the source alone and keeps a parent per edge to build every
 /// shortest path. direction "out" (the source's out entries, the target's in entries) or "both".
-ClassMethod ShortestLength(srcId As %String, dstId As %String, maxHops As %Integer = 5, predsJson As %String = "", direction As %String = "both") As %Integer
+/// pGraphId: the graph walked, as ShortestPathJson
+ClassMethod ShortestLength(srcId As %String, dstId As %String, maxHops As %Integer = 5, predsJson As %String = "", direction As %String = "both", pGraphId As %String = "") As %Integer
 {
+	Set tG = ##class(Graph.KG.GraphKey).ForIndex(pGraphId)
 	Quit:(srcId="")||(dstId="") -1
 	Quit:srcId=dstId 0
 	Set tBoth = (direction = "both"), tNT = 0
@@ -147,12 +150,12 @@ ClassMethod ShortestLength(srcId As %String, dstId As %String, maxHops As %Integ
 						Quit:tJ>tNT
 						Set tP = tT(tJ)
 					} Else {
-						Set tP = $Order(^KG(tSub, 0, tU, tP))
+						Set tP = $Order(^KG(tSub, tG, tU, tP))
 						Quit:tP=""
 					}
 					Set tV = ""
 					For {
-						Set tV = $Order(^KG(tSub, 0, tU, tP, tV))
+						Set tV = $Order(^KG(tSub, tG, tU, tP, tV))
 						Quit:tV=""
 						// the two sides shared no node before this step, so any meeting on it is a shortest path
 						Return:$Data(tSeen(tOther, tV), tDo) tL(tSide) + 1 + tDo
