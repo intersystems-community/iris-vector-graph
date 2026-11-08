@@ -548,8 +548,9 @@ def test_cypher_shortest_path(engine, graph):
     problems = []
     for a, b in _pairs_to_ask(graph):
         want = ref.hop_distance(graph, a, b)
-        rows = cy(engine, "MATCH p = shortestPath((a {node_id: $a})-[*]->(b {node_id: $b})) "
-                          "RETURN length(p) AS hops, p", a=a, b=b).rows
+        q = "MATCH p = shortestPath((a {node_id: $a})-[*]->(b {node_id: $b})) RETURN length(p) AS hops, p"
+        # the reference is the default graph's; with no USE GRAPH each graph answers its own path (4.6.2: g2's too)
+        rows = cy(engine, ("USE GRAPH '' " + q) if graph.has_named_edges else q, a=a, b=b).rows
         if want is None:
             if rows:
                 problems.append(f"{a!r}->{b!r}: IVG path {rows}, unreachable")
