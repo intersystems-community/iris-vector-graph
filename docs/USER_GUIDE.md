@@ -549,6 +549,29 @@ that property. An edge without one costs 1.0, and `r.weight` reads it as null; `
 (against them: a path from `from` to `to` over edges that point the other way) or `'both'` (either way); anything
 else raises `ValueError`. Before 4.6.0 `'in'` walked no edge and answered no row, and so did a misspelt direction.
 
+The edges here have no weight, so each costs 1.0, and the cheapest path from Alice to Erin is the shortest one:
+
+```python
+r = engine.execute_cypher(
+    "CALL ivg.shortestPath.weighted('alice', 'erin') YIELD path, totalCost RETURN path, totalCost"
+)
+r.rows[0]
+# → [{'nodes': ['alice', 'carol', 'dave', 'erin'], 'rels': ['KNOWS', 'KNOWS', 'KNOWS'], 'costs': [1.0, 1.0, 1.0], 'length': 3, 'totalCost': 3.0}, 3.0]
+```
+
+`path.costs` and `totalCost` are floats. Before 4.6.3 a whole-number cost read as an integer inside `path`
+(`'costs': [1, 1, 1]`, `'totalCost': 3`), though `r.weight` reads a weight of 1.0 back as 1.0.
+`gds.shortestPath.dijkstra.stream`'s `costs` holds something else, as in Neo4j GDS: the running totals, one per node
+of `nodeIds`, from 0.0 at the start to `totalCost` at the end:
+
+```python
+engine.execute_cypher(
+    "USE GRAPH '' CALL gds.shortestPath.dijkstra.stream('g', {sourceNode: 'alice', targetNode: 'erin', "
+    "relationshipWeightProperty: 'weight'}) YIELD nodeIds, costs RETURN nodeIds, costs"
+).rows
+# → [[['alice', 'carol', 'dave', 'erin'], [0.0, 1.0, 2.0, 3.0]]]
+```
+
 ### Breadth-first search
 
 The nodes within two hops of Alice, over any edge type, are Bob, Carol and Acme (one hop) and Dave (two). In Cypher:

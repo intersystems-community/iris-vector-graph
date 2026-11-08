@@ -1029,8 +1029,11 @@ class IRISGraphEngine(
         stores (``TraversalPaths.ShortestLength`` / ``ShortestPathJson``). With ``'weight'`` it is Dijkstra over the
         stored weights (``DijkstraCost`` / ``DijkstraJson``), where IVG reads a weight of 0 or less, or none, as 1;
         another property raises, as it does for ``ivg.shortestPath.weighted``. ``relationshipTypes`` lists the
-        predicates walked (``['*']``: all). ``sourceNode``/``targetNode`` are node IDs, ``nodeIds`` too; ``costs``
-        accumulates from 0. GDS's ``path`` (a Path) is not answered: yielding it raises."""
+        predicates walked (``['*']``: all). ``sourceNode``/``targetNode`` are node IDs, ``nodeIds`` too. ``costs`` is
+        GDS's: the running totals, one per node of ``nodeIds``, the first 0.0 and the last ``totalCost`` (a -1.0-> b
+        -2.5-> c answers ``costs [0.0, 1.0, 3.5]``), not each relationship's weight, which
+        ``ivg.shortestPath.weighted``'s ``path.costs`` lists. Every cost is a float. GDS's ``path`` (a Path) is not
+        answered: yielding it raises."""
         import json as _json
         from itertools import accumulate
 
@@ -1135,7 +1138,12 @@ class IRISGraphEngine(
     def _proc_ivg_shortestpath_weighted(self, proc, parameters=None, graph=None) -> Optional[Dict[str, Any]]:
         """`CALL ivg.shortestPath.weighted(from, to [, weightProp, maxCost, maxHops, direction, types])`, answered
         by the server's Dijkstra in the `USE GRAPH` graph (`graph`); with None, in each graph with edges, a row per
-        graph that has a path (the union of each graph's own answer, CONTEXT.md All-graphs read)."""
+        graph that has a path (the union of each graph's own answer, CONTEXT.md All-graphs read).
+
+        `path` is `{nodes, rels, costs, length, totalCost}`: `costs` is each relationship's weight in path order (not
+        running totals, which `gds.shortestPath.dijkstra.stream`'s `costs` are) and `totalCost` their sum, all floats:
+        a -1.0-> b -2.5-> c answers `costs [1.0, 2.5]`, `totalCost 3.5`. Before 4.6.3 a whole-number weight read as an
+        integer there (`[1, 1]`, `2` for weights of 1.0; Graph.KG.TraversalPaths.PathJson)."""
         args = proc.arguments
         from iris_vector_graph.cypher import ast as cypher_ast
         from iris_vector_graph.cypher.translator import _procedure_direction, _weighted_path_weight_prop

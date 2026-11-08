@@ -270,16 +270,10 @@ ClassMethod DijkstraJson(srcId As %String, dstId As %String, weightProp As %Stri
 	}
 
 	If srcId = dstId {
-		Set result = ##class(%DynamicObject).%New()
 		Set nodes = ##class(%DynamicArray).%New()
 		Do nodes.%Push(srcId)
-		Do result.%Set("nodes", nodes)
-		Do result.%Set("rels", ##class(%DynamicArray).%New())
-		Do result.%Set("costs", ##class(%DynamicArray).%New())
-		Do result.%Set("length", 0)
-		Do result.%Set("totalCost", 0)
 		Kill ^||Dij.pq, ^||Dij.parent, ^||Dij.seen, ^||Dij.dist
-		Return result.%ToJSON()
+		Return ..PathJson(nodes, ##class(%DynamicArray).%New(), "", 0)
 	}
 
 	// Relationship types to walk; none named walks every predicate
@@ -475,21 +469,38 @@ ClassMethod DijkstraBacktrack(srcId As %String, dstId As %String, totalCost As %
 
 	Set nodes = ##class(%DynamicArray).%New()
 	Set rels = ##class(%DynamicArray).%New()
-	Set costs = ##class(%DynamicArray).%New()
 
 	Set ptr = 0
 	While $ListNext(nodeStack, ptr, n) { Do nodes.%Push(n) }
 	Set ptr = 0
 	While $ListNext(relStack, ptr, r) { Do rels.%Push(r) }
-	Set ptr = 0
-	While $ListNext(costStack, ptr, c) { Do costs.%Push(+c) }
 
-	Set result = ##class(%DynamicObject).%New()
-	Do result.%Set("nodes", nodes)
-	Do result.%Set("rels", rels)
-	Do result.%Set("costs", costs)
-	Do result.%Set("length", nodes.%Size() - 1)
-	Do result.%Set("totalCost", totalCost)
-	Return result.%ToJSON()
+	Return ..PathJson(nodes, rels, costStack, totalCost)
+}
+
+/// A weighted path as JSON {nodes, rels, costs, length, totalCost}, each cost and the total written as a JSON float
+/// ("1.0", not "1"): an edge's weight is a float, and r.weight reads one written as 1.0 back as 1.0. %ToJSON writes a
+/// whole number with no decimal point, so before 4.6.3 a path over weights of 1.0 answered costs [1, 1] and
+/// totalCost 2. IRIS keeps a parsed JSON number's text, so the floats survive JSON_VALUE and %FromJSON downstream.
+/// pCosts is a $List of the relationships' weights, in path order.
+ClassMethod PathJson(pNodes As %DynamicArray, pRels As %DynamicArray, pCosts As %List, pTotal As %Double) As %String [ Private ]
+{
+	Set tCosts = ""
+	Set tPtr = 0
+	While $ListNext(pCosts, tPtr, tC) {
+		Set tCosts = tCosts _ $Select(tCosts = "": "", 1: ",") _ ..JsonFloat(tC)
+	}
+	Quit "{""nodes"":" _ pNodes.%ToJSON() _ ",""rels"":" _ pRels.%ToJSON() _ ",""costs"":[" _ tCosts _ "],""length"":" _ (pNodes.%Size() - 1) _ ",""totalCost"":" _ ..JsonFloat(pTotal) _ "}"
+}
+
+/// pNum as a JSON float: "1.0" for 1, "0.5" for .5, "-0.5" for -.5, "2.5" for 2.5; an exponent form as it is.
+ClassMethod JsonFloat(pNum As %Double) As %String [ Private ]
+{
+	Set tText = +pNum
+	If tText [ "E" Quit tText
+	If $Extract(tText) = "." Set tText = "0" _ tText
+	If $Extract(tText, 1, 2) = "-." Set tText = "-0" _ $Extract(tText, 2, *)
+	If tText '[ "." Set tText = tText _ ".0"
+	Quit tText
 }
 }

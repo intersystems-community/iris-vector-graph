@@ -2,6 +2,18 @@
 
 # Changelog
 
+### v4.6.3 (unreleased)
+
+**Fixed: algorithms**
+
+- **A weighted path's costs are floats.** `CALL ivg.shortestPath.weighted ... YIELD path` answered `path.costs` and
+  `path.totalCost` as integers for whole-number weights (`[1, 1]` and `2` for weights written as 1.0, which `r.weight`
+  reads back as 1.0), on every route: the CALL alone, `RETURN path.costs`, a `WITH` or `MATCH` after it. Each cost and
+  the total is now a float, as the yielded `totalCost` column already was. `gds.shortestPath.dijkstra.stream`'s
+  `costs` were already floats; they are GDS's running totals (from 0.0 to `totalCost`, one per node), not each
+  relationship's weight, which USER_GUIDE now says. **What to do:** run `initialize_schema()`, which compiles the
+  changed `Graph.KG.TraversalPaths`.
+
 ### v4.6.2 (2026-11-08)
 
 A fix for a wrong answer the 4.6.1 walkthrough found: `shortestPath` read only the default graph.
