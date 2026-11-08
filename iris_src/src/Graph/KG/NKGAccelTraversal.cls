@@ -193,7 +193,7 @@ ClassMethod RandomWalkJson(seedId As %String, walkLength As %Integer = 20, numWa
         Set result = result _ "["
         Set current = seedId
         If useNKG { Set currentIdx = $Get(^NKG("$NI", seedId), "") }
-        Set result = result _ """" _ seedId _ """"
+        Set result = result _ """" _ ##class(Graph.KG.TraversalBFS).jsonEsc(seedId) _ """"
         For step = 1:1:walkLength {
             // Collect neighbors
             Kill ^||walkNbrs
@@ -212,7 +212,7 @@ ClassMethod RandomWalkJson(seedId As %String, walkLength As %Integer = 20, numWa
             } Else {
                 Set current = ^||walkNbrs(pick)
             }
-            Set result = result _ ",""" _ current _ """"
+            Set result = result _ ",""" _ ##class(Graph.KG.TraversalBFS).jsonEsc(current) _ """"
         }
         Set result = result _ "]"
     }

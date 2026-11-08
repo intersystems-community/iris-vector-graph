@@ -19,6 +19,13 @@
   first claim on that table found no row. The default graph then had a third node route, which `Graph.KG.PyOps` reads
   in no order, until the next `initialize_schema()`. Every registry insert now records the edge table as `edge`.
   **What to do:** nothing; `initialize_schema()` repairs a row an earlier release wrote.
+- **Search answers keep a node id with a quote or a backslash.** `bm25_search` and `CALL ivg.bm25.search` escaped
+  a quote in an id but not a backslash, so an id such as `c\d` made the answer unreadable JSON; `plaid_search` and
+  `vec_search` escaped neither. The paged BFS read behind large variable-length walks did the same with its cursor (a
+  quote only), and `random_walk` (Arno only) wrote ids unescaped. Each now escapes as RFC 8259 asks. The community
+  and centrality procedures were fixed in 4.6.0 (R306); a 4.6.3 test checks WCC, CDLP, PageRank, degree, closeness
+  and betweenness on ids `a"b` and `c\d` against networkx. **What to do:** run `initialize_schema()`, which compiles
+  the changed classes.
 
 ### v4.6.2 (2026-11-08)
 

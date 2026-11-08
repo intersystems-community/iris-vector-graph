@@ -190,7 +190,8 @@ StageTwo
 			Quit:did=""
 			Set:'first result = result _ ","
 			Set first = 0
-			Set result = result _ "{""id"":""" _ did _ """,""score"":" _ $FNumber(-negSc,"",8) _ "}"
+			// the id escaped (4.6.3: written as it was, so a quote or a backslash in it broke the JSON)
+			Set result = result _ "{""id"":""" _ ##class(Graph.KG.TraversalBFS).jsonEsc(did) _ """,""score"":" _ $FNumber(-negSc,"",8) _ "}"
 			Set cnt = cnt + 1
 			If cnt >= k Goto SearchDone
 		}

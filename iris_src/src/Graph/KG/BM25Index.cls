@@ -226,7 +226,7 @@ ClassMethod SearchReport(name As %String, queryText As %String, k As %Integer = 
     For {
         Set tTerm = $Order(^||bm25skip(tTerm))
         Quit:tTerm=""
-        Set tSkipped = tSkipped _ $Select(tSkipped="":"", 1:",") _ """" _ tTerm _ """"
+        Set tSkipped = tSkipped _ $Select(tSkipped="":"", 1:",") _ """" _ ##class(Graph.KG.TraversalBFS).jsonEsc(tTerm) _ """"
     }
     Set tFallback = +$Get(^||bm25fallback, 0)
     Kill ^||bm25skip, ^||bm25fallback
@@ -358,7 +358,8 @@ ClassMethod SearchCore(name As %String, queryText As %String, k As %Integer = 10
             Set docId = $Order(^||bm25sorted(sortKey, docId), 1, score)
             Quit:docId=""
             If count > 0 Set result = result_","
-            Set safeId = $Replace(docId, """", "\""")
+            // RFC 8259 escaping: before 4.6.3 only a quote was escaped, so an id with a backslash broke the JSON
+            Set safeId = ##class(Graph.KG.TraversalBFS).jsonEsc(docId)
             // ObjectScript writes 0.5 as ".5", which is not JSON; a score under 1 was
             // unparseable by every caller.
             Set scoreText = $Select($Extract(score) = ".": "0"_score, 1: score)

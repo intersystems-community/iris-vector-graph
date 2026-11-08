@@ -384,7 +384,8 @@ ClassMethod TopK(k As %Integer, metric As %String = "cosine") As %String [ Priva
             } Else {
                 Set score = +sk
             }
-            Set result = result _ "{""id"":""" _ docId _ """,""score"":" _ $FNumber(score,"",12) _ ",""distance"":" _ $FNumber(+sk,"",12) _ "}"
+            // the id escaped (4.6.3: written as it was, so a quote or a backslash in it broke the JSON)
+            Set result = result _ "{""id"":""" _ ##class(Graph.KG.TraversalBFS).jsonEsc(docId) _ """,""score"":" _ $FNumber(score,"",12) _ ",""distance"":" _ $FNumber(+sk,"",12) _ "}"
             Set count = count + 1
             If count >= k Goto TopKDone
         }

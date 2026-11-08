@@ -595,7 +595,8 @@ ClassMethod ReadBFSPage(tag As %String, cursorStep As %String, cursorO As %Strin
                 Kill ^ArnoKG("bfs_r", tag)
                 Return "{""items"":["_result_"],""next_step"":-1,""next_o"":"""",""done"":true}"
             }
-            Set oVal = """"_$Replace(o,"""","\""")_""""
+            // the cursor is a node id: escaped as the items are (4.6.3: a quote only, so a backslash broke the page)
+            Set oVal = """"_..jsonEsc(o)_""""
             Return "{""items"":["_result_"],""next_step"":"_step_",""next_o"":"_oVal_",""done"":false}"
         }
     }
