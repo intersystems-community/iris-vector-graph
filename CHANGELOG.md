@@ -4,6 +4,14 @@
 
 ### v4.6.3 (unreleased)
 
+**Fixed: Cypher**
+
+- **An `UNWIND` of a list known before the query runs keeps its empty strings, and a parameter's list concatenates.**
+  `UNWIND ['', 'a'] + [''] AS x` answered null for each `''`, as did an `UNWIND` of a parameter list longer than 900
+  elements or holding a list or a map; `$l1 + $l2` over two list parameters answered `0` (the lists were added as
+  numbers), and `WITH [1] AS l RETURN l + 'x'` the text `'[1]x'`. Each now answers as openCypher does (`''`, `'a'`,
+  `''`; the concatenated list; `[1, 'x']`).
+
 **Fixed: algorithms**
 
 - **A weighted path's costs are floats.** `CALL ivg.shortestPath.weighted ... YIELD path` answered `path.costs` and

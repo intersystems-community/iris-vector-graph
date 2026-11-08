@@ -7927,6 +7927,15 @@ def translate_unwind_clause(unwind, context):
     # a parameter holding scalars: its elements are known before the query runs, as a literal list's are (4.6.0 R273:
     # `UNWIND $p AS v RETURN v` read every element as JSON_TABLE's text, '1' for 1 and for true)
     _param_elems = _scalar_param_list(unwind.expression, context)
+    # a concatenation of lists the query holds (4.6.3): read as the one list it makes, as a parameter's is
+    _concat = (
+        _held_list_value(unwind.expression, context)
+        if isinstance(unwind.expression, ast.FunctionCall) and unwind.expression.function_name == "__arith_+"
+        else None
+    )
+    _concat_scalars = _concat is not None and all(isinstance(v, (str, int, float, bool)) or v is None for v in _concat)
+    if _param_elems is None and _concat_scalars:
+        _param_elems = _concat
     _kinds_map = getattr(context, "static_scalar_kinds", None)
     if _kinds_map is not None:
         _src_elems = None
@@ -8019,16 +8028,22 @@ def translate_unwind_clause(unwind, context):
         if all(isinstance(v, (str, int, float, bool)) or v is None for v in _items):
             _use_union = True
             _union_rows = _items
-    elif _empty_string_list(unwind.expression, context) is not None:
+    elif (_empty_rows := _empty_string_list(unwind.expression, context)) is not None and len(
+        _empty_rows
+    ) <= _KNOWN_ELEMS_MAX:
         _use_union = True
-        _union_rows = _empty_string_list(unwind.expression, context)
+        _union_rows = _empty_rows
     if not _use_union:
         _nested_rows = _single_nested_list(unwind.expression, context)
+        if _nested_rows is None and _concat is not None and len(_concat) == 1 and isinstance(_concat[0], list):
+            _nested_rows = [json.dumps(_concat[0], separators=(",", ":"))]  # as _single_nested_list reads one
         if _nested_rows is not None:
             _use_union = True
             _union_rows = _nested_rows
     if not _use_union:
         _known = _known_scalar_elems(unwind.expression, context)
+        if _known is None and _concat_scalars:
+            _known = _concat
         if _known is not None and 0 < len(_known) <= _KNOWN_ELEMS_MAX and any(
             # 4.6.0 R311: a string that spells a list or map too (JSON_TABLE's text of '[1]' read back as the list)
             isinstance(v, bool) or v == "" or (isinstance(v, str) and v[:1] in ("[", "{"))
@@ -8102,14 +8117,26 @@ def translate_unwind_clause(unwind, context):
             context.variable_aliases[unwind.alias] = alias
             return
 
-    expr = translate_expression(unwind.expression, context, segment="join")
-    if (
-        isinstance(unwind.expression, ast.Variable)
-        and unwind.expression.name in context.input_params
-    ):
-        val = context.input_params[unwind.expression.name]
-        if isinstance(val, list):
-            context.join_params[-1] = json.dumps(val)
+    # A list known before the query runs goes to JSON_TABLE as one bind, its own '' elements marked: JSON_TABLE reads ""
+    # as null, and the derived table below turns the mark back into '' (4.6.3: a parameter list past
+    # _KNOWN_ELEMS_MAX elements or holding a list or a map, and a concatenation of known lists)
+    _known_list = _concat
+    if _concat is not None:
+        expr = context.add_join_param(None)
+    else:
+        expr = translate_expression(unwind.expression, context, segment="join")
+        if (
+            isinstance(unwind.expression, ast.Variable)
+            and unwind.expression.name in context.input_params
+            and isinstance(context.input_params[unwind.expression.name], list)
+        ):
+            _known_list = context.input_params[unwind.expression.name]
+    _mark_empty = False
+    if _known_list is not None:
+        _mark_empty = _EMPTY_MARK not in _known_list and "" in _known_list
+        context.join_params[-1] = json.dumps(
+            [_EMPTY_MARK if v == "" else v for v in _known_list] if _mark_empty else _known_list
+        )
     if isinstance(unwind.expression, ast.Variable) and unwind.expression.name in getattr(context, "nested_list_vars", ()):
         # 4.6.0 R273: a collected list of lists. JSON_TABLE iterates the inner list of a one-element list of a list
         # (R255), so a null goes on the end, which no collected list holds, and its row is dropped
@@ -8127,6 +8154,12 @@ def translate_unwind_clause(unwind, context):
         return
     expr = _hoist_unwind_list(expr, alias, context)
     json_table_sql = f"JSON_TABLE({expr}, '$[*]' COLUMNS ({_safe_alias(unwind.alias)} {col_type} PATH '$')) {alias}"
+    if _mark_empty:
+        col, inner = _safe_alias(unwind.alias), f"{alias}j"
+        json_table_sql = (
+            f"(SELECT CASE WHEN {inner}.{col} = {_EMPTY_MARK_SQL} THEN '' ELSE {inner}.{col} END AS {col} "
+            f"FROM JSON_TABLE({expr}, '$[*]' COLUMNS ({col} {col_type} PATH '$')) {inner}) {alias}"
+        )
     if context.from_clauses:
         context.join_clauses.append(f"CROSS JOIN {json_table_sql}")
     else:
@@ -8319,6 +8352,11 @@ def _unwind_by_position(expr: str, alias: str, column: str, context) -> Optional
 #: Elements an UNWIND of a known list reads as UNION ALL rows: IRIS refuses 1000 literals in a statement.
 _KNOWN_ELEMS_MAX = 900
 
+#: What an UNWIND of a known list sends JSON_TABLE in place of each of its '' elements (JSON_TABLE reads "" as null),
+#: and the SQL its derived table compares the column with to read '' again (4.6.3).
+_EMPTY_MARK = "\x01E"
+_EMPTY_MARK_SQL = "CHAR(1) || 'E'"
+
 
 def _known_scalar_elems(expr, context) -> Optional[list]:
     """The scalar elements of a parameter's list, or of a WITH column bound to a list literal or such a parameter."""
@@ -8332,6 +8370,38 @@ def _known_scalar_elems(expr, context) -> Optional[list]:
         vals = (getattr(context, "alias_param_values", None) or {}).get(expr.name)
     if isinstance(vals, list) and all(isinstance(v, (str, int, float, bool)) or v is None for v in vals):
         return vals
+    return None
+
+
+def _held_list_value(expr, context) -> Optional[list]:
+    """The value of a list the query holds before it runs, else None: a list literal of constants, a parameter holding
+    a list, a WITH column bound to either, or a `+` of such a list and another one or a non-null constant (4.6.3: an
+    UNWIND of `$l1 + $l2` read JSON_TABLE((? + ?)), numeric addition of the two lists' JSON texts, and
+    `UNWIND ['', 'a'] + ['']` read its '' elements as null)."""
+    if isinstance(expr, ast.Literal) and isinstance(expr.value, list):
+        return _literal_to_python(expr) if _is_fully_literal(expr) else None
+    if isinstance(expr, ast.Variable):
+        if expr.is_parameter:
+            v = (getattr(context, "input_params", None) or {}).get(expr.name)
+            return v if isinstance(v, list) else None
+        llv = getattr(context, "literal_list_vars", {})
+        lit = llv.get(context.variable_aliases.get(expr.name, expr.name), llv.get(expr.name))
+        if lit is not None:
+            node = ast.Literal(list(lit))
+            return _literal_to_python(node) if _is_fully_literal(node) else None
+        v = (getattr(context, "alias_param_values", None) or {}).get(expr.name)
+        return v if isinstance(v, list) else None
+    if isinstance(expr, ast.FunctionCall) and expr.function_name == "__arith_+" and len(expr.arguments) == 2:
+        left, right = (_held_list_value(a, context) for a in expr.arguments)
+        if left is not None and right is not None:
+            return left + right
+        if left is None and right is None:
+            return None
+        other = expr.arguments[0] if left is None else expr.arguments[1]
+        value = _fold_constant(other, context)
+        if value is None or value is _NOT_CONSTANT:
+            return None  # `l + null` is null; anything else is the row's
+        return left + [value] if right is None else [value] + right
     return None
 
 
@@ -18238,6 +18308,12 @@ def _expr_arith(expr, context, segment):
                     return True
             return False
 
+        # 4.6.3: a list the query holds (a parameter's, a WITH column of a literal) concatenates with anything: `$l1 +
+        # $l2` was numeric addition of their JSON texts (0), and `WITH [1] AS l RETURN l + 'x'` the text '[1]x'
+        if any(_held_list_value(a, context) is not None for a in expr.arguments) and not (
+            _is_fully_literal(expr.arguments[0]) and _is_fully_literal(expr.arguments[1])
+        ):
+            return f"{_fn('LIST_CONCAT')}({left}, {right})"
         left_str = _is_str(expr.arguments[0])
         right_str = _is_str(expr.arguments[1])
         if left_str or right_str:
