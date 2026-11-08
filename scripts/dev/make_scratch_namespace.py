@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parents[2]
 ALLOWED = ("IVG262", "IVG460", "IVG463")
 #: The namespaces `drop` may delete: spec 262's; the inventory test's (tests/e2e/test_262_inventory.py), which needs a
 #: namespace nothing has touched; and the per-worker scratch names (IVG460FX* for fix work, IVG460DC* for parallel doc
-#: runs through IVG_DOCTEST_NAMESPACE). Other IVG460* namespaces are never dropped: IVG460DOC (tests/docs/docs.toml)
+#: runs through IVG_DOCTEST_NAMESPACE); IVG463* for 4.6.3 fix work. Other IVG460* namespaces are never dropped: IVG460DOC (tests/docs/docs.toml)
 #: holds the doc harness's baseline, IVG460ALT is tests/e2e/ns460alt.py's default.
 DROPPABLE = ("IVG262", "IVG460INV", "IVG460FX", "IVG460DC", "IVG463")
 PORT = int(os.environ.get("IVG_PORT", "31972"))
