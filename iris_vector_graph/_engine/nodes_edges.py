@@ -16,7 +16,7 @@ from iris_vector_graph.constants import DEFAULT_GRAPH
 from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED_ROW
 from iris_vector_graph._write_txn import is_duplicate as _is_duplicate
 from iris_vector_graph._write_txn import rollback as _rollback
-from iris_vector_graph.errors import GraphWriteError
+from iris_vector_graph.errors import GraphWriteError, IVGError
 from iris_vector_graph.prop_values import decode_typed_text, prop_text, read_node_value
 from iris_vector_graph.routing import graph_scope_predicate
 from iris_vector_graph.schema import GraphSchema
@@ -1992,18 +1992,30 @@ class NodesEdgesMixin:
             cursor.close()
         return list(found)
 
-    def _delete_in_scope(self, node_ids: List[str], graph: str) -> int:
+    def _delete_in_scope(self, node_ids: List[str], graph: str, operation: str = "delete_node") -> int:
         """Delete ``node_ids`` from ``graph``, then the reifiers of their edges.
 
         A reifier names exactly one edge (``pk_reifications``), so it is dead once
         that edge is; the Eraser removes the ``rdf_reifications`` row, not the node.
         The reifiers go after, in each graph holding them, and are not counted.
+        A failure raises ``GraphWriteError`` for ``operation``.
         """
-        reifiers = [r for r in self._reifiers_of(node_ids, graph) if r not in node_ids]
-        deleted = _deleted_count(self._store.delete_nodes(node_ids, graph=graph))
+        try:
+            reifiers = [r for r in self._reifiers_of(node_ids, graph) if r not in node_ids]
+            deleted = _deleted_count(self._store.delete_nodes(node_ids, graph=graph))
+        except (IVGError, ValueError):
+            raise
+        except Exception as e:
+            # 4.6.3: the driver's error (SQLCODE -99) or a plain RuntimeError (-415) came through as it was
+            raise GraphWriteError(operation, e) from e
         if reifiers:
-            for scope, ids in self._graphs_holding(reifiers).items():
-                self._store.delete_nodes(ids, graph=scope)
+            try:
+                for scope, ids in self._graphs_holding(reifiers).items():
+                    self._store.delete_nodes(ids, graph=scope)
+            except Exception as e:
+                what = "nodes are" if len(node_ids) > 1 else "node is"
+                left = f"the {what} deleted; the reifier nodes of its edges ({len(reifiers)}) are not"
+                raise GraphWriteError(operation, e, left) from e
         return deleted
 
     def _delete_scopes(self, node_ids: List[str], graph: Any) -> Dict[str, List[str]]:
@@ -2056,11 +2068,20 @@ class NodesEdgesMixin:
             ValueError: for a graph name that cannot be a subscript, or, with
                 ``graph`` omitted, when more than one graph holds ``node_id`` (the
                 message names them); before anything is deleted.
-            Exception: when a delete fails; that graph's delete has rolled back.
+            GraphWriteError: when IRIS refuses the lookup or the delete (SQLCODE -99 for a
+                user without the privilege, -415 for an id too long for the index); the
+                message says what, if anything, was deleted, and the driver's error is
+                ``__cause__`` (before 4.6.3 the driver's error or a plain RuntimeError).
         """
         _ledger_check(self, "delete_node")
         deleted = 0
-        for scope in self._delete_scopes([node_id], graph):
+        try:
+            scopes = self._delete_scopes([node_id], graph)
+        except (IVGError, ValueError):
+            raise
+        except Exception as e:
+            raise GraphWriteError("delete_node", e) from e
+        for scope in scopes:
             deleted += self._delete_in_scope([node_id], scope)
         # The Eraser drops ^NKG itself when edges ^NKG can hold went; nothing is deferred.
         return deleted > 0
@@ -2087,7 +2108,7 @@ class NodesEdgesMixin:
             for i in range(0, len(scoped_ids), size):
                 batch = scoped_ids[i : i + size]
                 try:
-                    deleted += self._delete_in_scope(batch, scope)
+                    deleted += self._delete_in_scope(batch, scope, "bulk_delete_nodes")
                 except Exception as e:
                     logger.warning(
                         "bulk_delete_nodes: batch of %d in graph %r rolled back: %s",

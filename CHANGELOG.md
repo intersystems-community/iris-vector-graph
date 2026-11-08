@@ -43,6 +43,12 @@
   `<PROTECT>`) still answers its `error`, and logged `execute_sql error` at DEBUG only, so an application logging at
   WARNING never saw that its user lacks `SELECT`. It is a WARNING now ("execute_sql refused for a missing privilege
   (SQLCODE -99)"), with IRIS's text. Other failed reads stay at DEBUG.
+- **`kg_PAGERANK()` and `delete_node` raise IVG's errors for a refused call.** For a user without `SELECT` both let
+  the driver's `iris.dbapi.OperationalError` (SQLCODE -99) through, and `delete_node` answered an id too long for the
+  index with a plain `RuntimeError`. `kg_PAGERANK()` raises `RuntimeError("kg_PAGERANK failed (SQLCODE -99): ...")`
+  and `delete_node` raises `GraphWriteError` (saying what, if anything, was deleted), each with the original error as
+  `__cause__`. **What to do:** code that caught `iris.dbapi.Error` from these catches `RuntimeError` (`GraphWriteError`
+  is one).
 
 ### v4.6.2 (2026-11-08)
 

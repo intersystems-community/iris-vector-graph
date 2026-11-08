@@ -68,3 +68,36 @@ def test_a_refused_cypher_read_logs_a_warning_naming_the_privilege(engine, caplo
     assert warned, [(r.levelname, r.getMessage()[:120]) for r in caplog.records]
     message = warned[0].getMessage()
     assert "SQLCODE -99" in message and "Privilege" in message, message
+
+
+def test_kg_pagerank_raises_runtime_error_naming_itself(engine):
+    import iris.dbapi
+
+    with pytest.raises(RuntimeError, match=r"kg_PAGERANK failed \(SQLCODE -99\)") as raised:
+        engine.kg_PAGERANK()
+    assert not isinstance(raised.value, iris.dbapi.Error)
+    assert isinstance(raised.value.__cause__, iris.dbapi.Error), repr(raised.value.__cause__)
+
+
+def test_delete_node_raises_graph_write_error_and_deletes_nothing(engine, no_select):
+    import iris.dbapi
+
+    from iris_vector_graph.errors import GraphWriteError
+
+    with pytest.raises(GraphWriteError, match=r"delete_node failed \(SQLCODE -99\), nothing written") as raised:
+        engine.delete_node("a")
+    assert isinstance(raised.value.__cause__, iris.dbapi.Error), repr(raised.value.__cause__)
+    cur = no_select[0].cursor()
+    cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = 'a'")
+    assert int(cur.fetchone()[0]) == 1
+
+
+def test_delete_node_of_an_id_too_long_for_the_index_raises_graph_write_error(no_select):
+    """An id too long for a global subscript: the Eraser's <THROW> came through as a plain RuntimeError."""
+    from iris_vector_graph import IRISGraphEngine
+    from iris_vector_graph.errors import GraphWriteError
+
+    owner = IRISGraphEngine(no_select[0], embedding_dimension=rr.DIM)
+    with pytest.raises(GraphWriteError, match=r"^delete_node failed") as raised:
+        owner.delete_node("x" * 900, graph=None)
+    assert raised.value.operation == "delete_node" and raised.value.__cause__ is not None

@@ -5,9 +5,16 @@ import re
 from typing import Dict, Any, List, Optional, Sequence, Tuple, Callable, Union
 
 from iris_vector_graph._collation import rank_key
+from iris_vector_graph.errors import GraphWriteError, IVGError
 
 
 logger = logging.getLogger(__name__)
+
+
+def _sqlcode_note(exc: BaseException) -> str:
+    """`` (SQLCODE n)`` when IRIS's error text carries one, as GraphWriteError's message has it; else empty."""
+    found = GraphWriteError._SQLCODE.search(str(exc))
+    return f" (SQLCODE {found.group(1)})" if found else ""
 
 
 def _exclude_entry(entry) -> Tuple[Optional[str], str]:
@@ -708,6 +715,15 @@ class AlgorithmsMixin:
             return self.kg_PERSONALIZED_PAGERANK(
                 seed_entities, damping_factor=damping, max_iterations=max_iterations,
             )
+        try:
+            return self._kg_pagerank_global(damping, max_iterations)
+        except IVGError:
+            raise
+        except Exception as exc:
+            # 4.6.3: the driver's OperationalError (SQLCODE -99 for a user without SELECT) came through raw
+            raise RuntimeError(f"kg_PAGERANK failed{_sqlcode_note(exc)}: {exc}") from exc
+
+    def _kg_pagerank_global(self, damping: float, max_iterations: int):
         # Through the store, as kg_WCC and kg_CDLP are: the store routes to a Native
         # Reader only when one is proven, and serves a repeat from the shared cache.
         # the nodes with no edge take part (4.6.0 R306), each as a node with no out-edge
