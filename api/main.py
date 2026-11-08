@@ -38,14 +38,19 @@ def get_engine():
 def create_app(engine: "IRISGraphEngine | None" = None) -> FastAPI:
     """Create the FastAPI application with the biomedical GraphQL schema."""
     if engine is None:
+        # `engine.conn` runs the first-access check, so a namespace recording another IVG Schema raises there, not in
+        # get_engine(); both stay inside the try, or the module-level fallback below builds the engine again and fails
+        # the import.
         try:
             engine = get_engine()
-        except Exception:
-            engine = None
+            conn = engine.conn
+        except Exception as exc:
+            logger.warning("IRIS Vector Graph API starting without the database: %s", exc)
+            engine = conn = None
+    else:
+        conn = engine.conn
 
     app = FastAPI(title="IRIS Vector Graph API")
-
-    conn = engine.conn if engine is not None else None
 
     async def get_context():
         # Shared with api.gql.create_app: the generic resolvers read `engine` from the
