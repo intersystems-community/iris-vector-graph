@@ -60,12 +60,17 @@ def test_every_path_column_names_its_keys():
 
 def test_weighted_path_keys_are_dijkstra_json_s():
     """By hand from Graph.KG.TraversalPaths: DijkstraJson's own answer (a node to itself) and DijkstraBacktrack's (every
-    other path) each set nodes, rels, costs, length and totalCost."""
+    other path) are each PathJson's, which writes nodes, rels, costs, length and totalCost (4.6.3: as text, so a cost
+    is a JSON float; tests/e2e/test_463_weighted_path_costs_e2e.py)."""
     src = (Path(__file__).resolve().parents[2] / "iris_src/src/Graph/KG/TraversalPaths.cls").read_text()
+
+    def body(method):
+        return src.split(f"ClassMethod {method}(", 1)[1].split("\nClassMethod ", 1)[0]
+
     for method in ("DijkstraJson", "DijkstraBacktrack"):
-        body = src.split(f"ClassMethod {method}(", 1)[1].split("\nClassMethod ", 1)[0]
-        set_keys = set(re.findall(r'\.%Set\("(\w+)"', body))
-        assert set_keys == set(PATH_KEYS[("ivg.shortestPath.weighted", "path")]), (method, set_keys)
+        assert "..PathJson(" in body(method), method
+    keys = re.findall(r'""(\w+)"":', body("PathJson"))
+    assert keys == list(PATH_KEYS[("ivg.shortestPath.weighted", "path")]), keys
 
 
 @pytest.mark.parametrize("name", sorted(GDS_YIELDS))
