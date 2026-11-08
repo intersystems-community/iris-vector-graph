@@ -102,6 +102,9 @@ cli = [
 ]
 dev = [
     "pytest>=7.4.0",
+    # tests/unit/test_wheel_contents.py builds the wheel with `uv build`, as scripts/ci-parity.sh does; without it
+    # the 9 wheel checks fail at setup (CI on 4c29a30f).
+    "uv>=0.4",
     "pytest-asyncio>=0.21.0",
     "black>=23.0.0",
     "isort>=5.12.0",
