@@ -17900,7 +17900,31 @@ def _expr_prop(expr, context, segment):
         _safe_prop = orig_prop.replace("'", "''")
         return f"(SELECT val FROM {_table('rdf_props')} WHERE s = {node_id_expr} AND \"key\" = '{_safe_prop}')"
     inner = translate_expression(inner_expr, context, segment=segment)
+    temporal = _temporal_field_of(inner_expr, inner, str(expr.arguments[1].value), context)
+    if temporal is not None:
+        return temporal
     return f"{inner}.{prop}"
+
+
+def _temporal_field_of(base_expr, base_sql: str, prop_name: str, context) -> Optional[str]:
+    """`<temporal>.field` read off an expression that is no WITH column, as a WITH column's is read (4.6.3:
+    `duration('PT1H').seconds` translated to `?.seconds`, SQLCODE -25; `a.d.seconds` and
+    `duration.inSeconds(...).seconds` to JSON_VALUE of the duration's text, -149). A value the translator types (a
+    constructor, a duration function) reads its component; a stored property dispatches on its text as a WITH column of
+    one does (_runtime_temporal_accessor), a map's key included. None when neither applies, or when the read would
+    repeat a bind marker."""
+    has_bind = "?" in base_sql
+    ttype = _detect_temporal_type(base_expr, context)
+    if ttype is not None:
+        comp = _extract_temporal_component(base_sql, ttype, prop_name)
+        if comp is None:
+            return None
+        if has_bind:
+            return comp if comp.count(base_sql) == 1 else None
+        return f"CASE WHEN ({base_sql}) IS NULL THEN NULL ELSE {comp} END"
+    if isinstance(base_expr, ast.PropertyReference) and not has_bind:
+        return _runtime_temporal_accessor(base_sql, prop_name)
+    return None
 
 
 def _prop_ref_cast(arg, sql):
@@ -22187,6 +22211,9 @@ def _expr_property_access(expr, context, segment):
             f" WHEN SUBSTRING({base_sql}, 1, 1) = '{{' THEN {_fn('JSON_VALUE')}({base_sql}, '$.{_jsonpath_key(expr.property_name)}')"
             f" ELSE {_node} END"
         )
+    temporal = _temporal_field_of(expr.expression, base_sql, expr.property_name, context)
+    if temporal is not None:
+        return temporal
     return f"CASE WHEN ({base_sql}) IS NULL THEN NULL ELSE {_fn('JSON_VALUE')}({base_sql}, '$.{_jsonpath_key(expr.property_name)}') END"
 
 

@@ -458,24 +458,6 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 - **Workaround:** compare values of one type, or compare the values before putting them in the list.
 - **Check:** `RETURN [date('2020-01-01'), 'b'][0] < [date('2020-01-01'), 'b'][1]` answers true rather than null.
 
-### A duration's field cannot be read straight off a constructor, a property or a function
-
-- **Symptom:** reading a field (`.seconds`, `.days`, `.hours`) directly off a duration fails the query. Measured on
-  4.6.0, both routes, drivers 5.4.0 and 5.4.1: `RETURN duration('PT1H').seconds` (and `duration('P1D').days`,
-  `duration('PT1H').hours`) fails with SQLCODE -25 (input after the end of the query); `MATCH (a) RETURN a.d.seconds`
-  over a stored duration `a.d` fails with SQLCODE -149, and so does `.seconds` of
-  `duration.inSeconds(datetime(...), datetime(...))`. The duration itself reads correctly in each case
-  (`duration.inSeconds(...)` of one hour answers `'PT1H'`).
-- **Cause:** the translator reads a duration's field only from a `WITH` column; elsewhere the SQL it writes fails.
-- **Versions:** 4.6.0 and earlier; on the 4.6.1 list.
-- **Workaround:** bind the duration in a `WITH` first, then read the field:
-  `WITH duration('PT1H') AS d RETURN d.seconds` answers 3600, and `MATCH (a) WITH a.d AS d RETURN d.seconds` reads a
-  stored one. A field is one component only (`.seconds` of `duration('P1D')` is 0, its `.days` 1), so to compare or
-  order lengths of time store the length as a number beside the duration
-  (`CREATE (:Job {d: duration('PT1H'), d_seconds: 3600})`) and compare that: `a.d_seconds < b.d_seconds` answers as
-  numbers do.
-- **Check:** `RETURN duration('PT1H').seconds` fails with SQLCODE -25.
-
 ### A query that reads many properties prepares slowly
 
 - **Symptom:** the first run of a query that reads properties many times on the SQL route takes seconds to prepare.

@@ -11,6 +11,9 @@
   elements or holding a list or a map; `$l1 + $l2` over two list parameters answered `0` (the lists were added as
   numbers), and `WITH [1] AS l RETURN l + 'x'` the text `'[1]x'`. Each now answers as openCypher does (`''`, `'a'`,
   `''`; the concatenated list; `[1, 'x']`).
+- **A duration's field reads straight off the duration.** `RETURN duration('PT1H').seconds` failed with SQLCODE -25,
+  and `a.d.seconds` over a stored duration and `duration.inSeconds(...).seconds` with -149; only a `WITH` column's
+  field read. Each now answers what the `WITH` form does (3600 here), and the KNOWN_ISSUES entry is gone.
 
 **Fixed: algorithms**
 
