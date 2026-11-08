@@ -614,7 +614,7 @@ engine.execute_cypher(
 
 - **Symptom:** an `initialize_schema()` stopped part way (the process killed, the connection lost) leaves a namespace
   with some of IVG's tables, routines and classes and no IVG Schema record. Where it got far enough to create 4.6.0's
-  SQL objects in the schema, the next engine is not refused: `status()["schema"]` is `None` and its `errors` say
+  SQL objects in the schema, the next engine is not refused: `status().schema` is `None` and its `errors` say
   "setup has not finished here ... Run initialize_schema() again", but `create_node` and `create_edge` answer `True`.
   Where `Graph.KG.EdgeScan` is not yet compiled, `create_edge` writes the row, fails to write `^KG` and only logs a
   WARNING (`create_edge ^KG write failed (BuildKG can recover): <CLASS DOES NOT EXIST> ... Graph.KG.EdgeScan`), so
@@ -625,9 +625,9 @@ engine.execute_cypher(
   there; `create_edge` treats a failed `^KG` write as recoverable.
 - **Versions:** 4.6.0; on the 4.6.1 list.
 - **Workaround:** run `initialize_schema()` again to the end before writing (it finishes the namespace and rebuilds
-  `^KG` from the rows, so edges written meanwhile are indexed), and check `status()["schema"]` is set and its `errors`
+  `^KG` from the rows, so edges written meanwhile are indexed), and check `status().schema` is set and its `errors`
   empty before an application writes.
-- **Check:** `engine.status()["schema"]` is `None`, or the log holds `create_edge ^KG write failed`.
+- **Check:** `engine.status().schema` is `None`, or the log holds `create_edge ^KG write failed`.
 
 ### Upgrading a 2.x install quarantines a named-graph edge whose endpoints are only in the default graph
 

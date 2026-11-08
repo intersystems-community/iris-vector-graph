@@ -2,7 +2,7 @@
 
 # Changelog
 
-### v4.6.0 (unreleased)
+### v4.6.0 (2026-11-07)
 
 One IVG Schema per namespace (spec 262), a set of security fixes, and the defects found by a newcomer walkthrough, a
 triage of KNOWN_ISSUES and the new documentation tests. **Upgrading: run `initialize_schema()` once per namespace, after
@@ -252,9 +252,9 @@ What a 4.5.x caller must change, one line each; each change has its full entry u
   `NotImplementedError`, and a write IRIS or IVG refuses in `create_node`, `create_edge` or a Cypher write raises
   `GraphWriteError` (a `RuntimeError`). Some refusals raise other types, with nothing written: a SQL privilege refusal
   inside an algorithm method that runs SQL (`kg_PAGERANK()` for a user with no SQL grants) or inside `delete_node` (a
-  user without `R` on the routines database) raises the driver's `iris.dbapi.OperationalError` with SQLCODE -99, which
+  user without the DELETE grant) raises the driver's `iris.dbapi.OperationalError` with SQLCODE -99, which
   is not a `RuntimeError` and names no method; `delete_node` for a user who may not write the globals database raises
-  a plain `RuntimeError` (`erase failed on rdf_edges with SQLCODE -415; nothing was erased`). Catch both:
+  a plain `RuntimeError` carrying IRIS's `<PROTECT>` or SQLCODE -415, with nothing erased. Catch both:
   `except (RuntimeError, iris.dbapi.Error)`.
 - `save_snapshot`, `restore_snapshot` and `bulk_ingest_edges` raise on a table or global they cannot read or write:
   handle `SnapshotReadError` / `RuntimeError`.

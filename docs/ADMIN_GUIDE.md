@@ -422,8 +422,9 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   the routines database left out, on 2026.3.0AI (`tests/e2e/test_460_r202_reading_role_e2e.py`) and, by the expert
   walkthrough of November 2026, on Community 2026.1: the calls that run an IVG class method over the Native API raise
   `<PROTECT>` naming the routines database (`<PROTECT>^%SYS.DBSRV.1 *^|^^<routines directory>|Graph.KG.PageRank.1`):
-  `kg_PAGERANK()`, `shortestPath`, `degree_centrality()`, `sync()`, `ppr()` and
-  `kg_PERSONALIZED_PAGERANK()` (these two on 2026.3.0AI and, by the walkthrough, on Community 2026.1 too). These answer right: Cypher reads on the SQL path,
+  `kg_PAGERANK()`, `degree_centrality()`, `sync()`, `ppr()` and
+  `kg_PERSONALIZED_PAGERANK()` (these two on 2026.3.0AI and, by the walkthrough, on Community 2026.1 too). A Cypher `shortestPath` answers no rows with the `<PROTECT>` in `result.error` (it raises with
+  `raise_on_error=True`). These answer right: Cypher reads on the SQL path,
   IVG's SQL functions such as `kg_PPR`, the `CALL ivg.*` procedures that run them (`ivg.betweenness`, `ivg.closeness`,
   `ivg.degreeCentrality`, `ivg.ppr`), `closeness_centrality()`, and `betweenness_centrality()` from its Python walk,
   with the WARNING below. The class dictionary is kept in the routines database too, and refused it answers that no
