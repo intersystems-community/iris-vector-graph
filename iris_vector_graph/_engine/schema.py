@@ -1430,9 +1430,13 @@ class SchemaMixin:
         graph_id: str,
         identity: EmbeddingIdentity,
         set_by: str,
-        kind: str = ROUTE_KIND_NODE,
+        kind: Optional[str] = None,
     ) -> None:
         """Write one registry row.
+
+        ``kind`` None is the table's own kind: ``edge`` for ``kg_EdgeEmbeddings`` (keyed ``(s, p, o_id)``), ``node``
+        for any other. Before 4.6.3 it was ``node`` for every table, so a row written outside setup's adoption
+        (``set_embedding_identity``, a declared model's first claim) recorded the edge table as a node route.
 
         ``kind`` is named in the INSERT only for an edge route (spec 230 FR-006). A node
         route leaves the column out and takes its ``DEFAULT 'node'``, which keeps this
@@ -1442,6 +1446,8 @@ class SchemaMixin:
         that cannot tell the two kinds apart must not be handed an edge route, because
         every reader would then answer a node lookup with a table of ``(s, p, o_id)``.
         """
+        if kind is None:
+            kind = ROUTE_KIND_EDGE if table_name == LEGACY_EDGE_TABLE else ROUTE_KIND_NODE
         if kind not in ROUTE_KINDS:
             raise ValueError(f"kind must be one of {ROUTE_KINDS}, got {kind!r}")
         columns = [

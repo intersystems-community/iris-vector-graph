@@ -13,6 +13,12 @@
   `costs` were already floats; they are GDS's running totals (from 0.0 to `totalCost`, one per node), not each
   relationship's weight, which USER_GUIDE now says. **What to do:** run `initialize_schema()`, which compiles the
   changed `Graph.KG.TraversalPaths`.
+- **Every `embedding_registry` row for `kg_EdgeEmbeddings` says kind `edge`.** 4.6.0 fixed setup's adoption and
+  repairs an earlier setup's `node` row; a row written any other way still took the default, `node`:
+  `set_embedding_identity(identity, "kg_EdgeEmbeddings")`, or an engine declaring a model (`embedding_config`) whose
+  first claim on that table found no row. The default graph then had a third node route, which `Graph.KG.PyOps` reads
+  in no order, until the next `initialize_schema()`. Every registry insert now records the edge table as `edge`.
+  **What to do:** nothing; `initialize_schema()` repairs a row an earlier release wrote.
 
 ### v4.6.2 (2026-11-08)
 
