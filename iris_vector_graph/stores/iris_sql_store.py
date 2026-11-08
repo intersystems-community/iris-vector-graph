@@ -19,7 +19,7 @@ from iris_vector_graph.result import IVGResult
 from iris_vector_graph.routing import graph_scope_predicate
 from iris_vector_graph.security import quote_identifier
 
-from iris_vector_graph._dictionary import compiled_class_exists, compiled_method_exists
+from iris_vector_graph._dictionary import compiled_class_exists, compiled_method_exists, sql_refused
 from iris_vector_graph.schema_name import DEFAULT_SCHEMA, guarded_connection
 from iris_vector_graph.stores.arno_bridge import arno_disabled
 
@@ -1522,9 +1522,16 @@ class IRISGraphStore:
             # Keep the whole text: IRIS puts a failing UDF's %msg (where IVG names the
             # Cypher error kind) after ~200 characters of SQLCODE/Location preamble.
             err = str(e)
-            # DEBUG: the caller gets it in `error` (USER_GUIDE §3); at WARNING logging's last-resort handler printed
-            # it to the stderr of a caller who had configured no logging (round 3, python W6)
-            logger.debug("execute_sql error: %s", err[:500])
+            if sql_refused(e) or "<PROTECT>" in err:
+                # 4.6.3: a refusal for a missing privilege is the operator's setup, not a query the caller can fix;
+                # at DEBUG an application logging at WARNING never heard of it
+                code = "SQLCODE -99" if sql_refused(e) else "<PROTECT>"
+                logger.warning("execute_sql refused for a missing privilege (%s); the result's error holds it: %s",
+                               code, err[:500])
+            else:
+                # DEBUG: the caller gets it in `error` (USER_GUIDE §3); at WARNING logging's last-resort handler
+                # printed it to the stderr of a caller who had configured no logging (round 3, python W6)
+                logger.debug("execute_sql error: %s", err[:500])
             try:
                 self.conn.rollback()
             except Exception:

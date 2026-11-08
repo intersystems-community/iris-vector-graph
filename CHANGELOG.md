@@ -39,6 +39,10 @@
   `retract_inference`, whose rows are committed first, raises saying which `^KG` entries remain. `delete_edge` and
   `bulk_ingest_edges` open a transaction of their own: the driver's connection autocommits, and the rollback they made
   before raising took nothing back. **What to do:** a caller that relied on the `True` catches `GraphWriteError`.
+- **A read refused for a missing privilege is logged at WARNING.** A Cypher or SQL read IRIS refuses (SQLCODE -99, or
+  `<PROTECT>`) still answers its `error`, and logged `execute_sql error` at DEBUG only, so an application logging at
+  WARNING never saw that its user lacks `SELECT`. It is a WARNING now ("execute_sql refused for a missing privilege
+  (SQLCODE -99)"), with IRIS's text. Other failed reads stay at DEBUG.
 
 ### v4.6.2 (2026-11-08)
 
