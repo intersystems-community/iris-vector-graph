@@ -49,6 +49,11 @@
   and `delete_node` raises `GraphWriteError` (saying what, if anything, was deleted), each with the original error as
   `__cause__`. **What to do:** code that caught `iris.dbapi.Error` from these catches `RuntimeError` (`GraphWriteError`
   is one).
+- **The sample API's `/health` checks the database.** `api/main.py` answered `200 {"status": "healthy"}` whatever
+  happened, even with no database (`"database": "unavailable"`). It now runs `SELECT 1` through the engine's connection
+  and, over an IRIS connection, checks that the namespace's IVG Schema record names the engine's schema. A failure
+  answers `503` with `"status": "unhealthy"` and a fixed `reason` ("the database did not answer SELECT 1", "the
+  namespace records another IVG Schema", ...); IRIS's own text goes to the log at WARNING, since `/health` needs no key.
 
 ### v4.6.2 (2026-11-08)
 

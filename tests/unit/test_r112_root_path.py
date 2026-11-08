@@ -81,6 +81,8 @@ def cypher_api():
 @pytest.fixture
 def main_app():
     eng = _engine()
+    # /health runs SELECT 1 through the connection (4.6.3); this database answers it
+    eng.conn.cursor.return_value.fetchone.return_value = (1,)
     from api.main import create_app
 
     yield create_app(engine=eng), eng

@@ -3,10 +3,12 @@ import os
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from strawberry.fastapi import GraphQLRouter
 
 from iris_vector_graph import IRISGraphEngine, gql
 from iris_vector_graph.api_auth import ApiKeyMiddleware, ReadOnlyMiddleware
+from iris_vector_graph.schema_name import DEFAULT_SCHEMA, is_iris_connection, read_record, same_schema
 from iris_devtester.utils.dbapi_compat import get_connection as iris_connect
 from api.routers.cypher import router as cypher_router
 from api.routers.fhir_event import router as fhir_event_router
@@ -35,8 +37,37 @@ def get_engine():
     return IRISGraphEngine(conn)
 
 
+def database_problem(engine) -> "tuple[str, str] | None":
+    """``(reason, detail)`` when the engine's database cannot serve the API, None when it can: ``SELECT 1`` through
+    its connection answers 1, and over an IRIS connection the namespace's IVG Schema record names the engine's schema.
+    ``reason`` is a fixed phrase, safe for the unauthenticated ``/health``; ``detail`` adds IRIS's text, for the log."""
+    try:
+        cursor = engine.conn.cursor()
+        cursor.execute("SELECT 1")
+        row = cursor.fetchone()
+    except Exception as exc:
+        return "the database did not answer SELECT 1", str(exc)
+    if not row or row[0] != 1:
+        return "the database did not answer SELECT 1", f"it answered {row!r}, not 1"
+    if not is_iris_connection(engine.conn):
+        return None  # a stand-in connection has no namespace to read a record from (as engine.status() skips it)
+    schema = getattr(engine, "_schema_prefix", DEFAULT_SCHEMA)
+    try:
+        recorded = read_record(engine._iris_obj())
+    except Exception as exc:
+        return "the IVG Schema record could not be read", str(exc)
+    if recorded is None:
+        return ("the namespace has no IVG Schema record: setup has not finished; run initialize_schema()",
+                f"no record; this API's engine asks for {schema}")
+    if not same_schema(recorded, schema):
+        return ("the namespace records another IVG Schema",
+                f"the namespace records {recorded}, and this API's engine asks for {schema}")
+    return None
+
+
 def create_app(engine: "IRISGraphEngine | None" = None) -> FastAPI:
     """Create the FastAPI application with the biomedical GraphQL schema."""
+    startup_error = ""
     if engine is None:
         # `engine.conn` runs the first-access check, so a namespace recording another IVG Schema raises there, not in
         # get_engine(); both stay inside the try, or the module-level fallback below builds the engine again and fails
@@ -47,6 +78,7 @@ def create_app(engine: "IRISGraphEngine | None" = None) -> FastAPI:
         except Exception as exc:
             logger.warning("IRIS Vector Graph API starting without the database: %s", exc)
             engine = conn = None
+            startup_error = str(exc) or type(exc).__name__
     else:
         conn = engine.conn
 
@@ -67,9 +99,18 @@ def create_app(engine: "IRISGraphEngine | None" = None) -> FastAPI:
 
     @app.get("/health")
     def health():
-        db_status = "connected" if engine is not None else "unavailable"
-        gql_status = "available"
-        return {"status": "healthy", "database": db_status, "graphql": gql_status}
+        # 4.6.3: it answered 200 "healthy" whatever the database did, with no engine included. The body names the
+        # failure in a fixed phrase and IRIS's text goes to the log: /health needs no key (cypher_api's does the same).
+        if engine is None:
+            problem = ("the API started without the database", startup_error)
+        else:
+            problem = database_problem(engine)
+        if problem is None:
+            return {"status": "healthy", "database": "connected", "graphql": "available"}
+        reason, detail = problem
+        logger.warning("/health: %s (%s)", reason, detail)
+        return JSONResponse(status_code=503, content={
+            "status": "unhealthy", "database": "unavailable", "graphql": "available", "reason": reason})
 
     app.include_router(cypher_router)
     app.include_router(fhir_event_router, prefix="/fhir-event", tags=["fhir-event"])
