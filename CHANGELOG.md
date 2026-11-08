@@ -2,8 +2,6 @@
 
 # Changelog
 
-### v4.6.3 (unreleased)
-
 **Fixed: Cypher**
 
 - **An `UNWIND` of a list known before the query runs keeps its empty strings, and a parameter's list concatenates.**
@@ -69,6 +67,20 @@
   and, over an IRIS connection, checks that the namespace's IVG Schema record names the engine's schema. A failure
   answers `503` with `"status": "unhealthy"` and a fixed `reason` ("the database did not answer SELECT 1", "the
   namespace records another IVG Schema", ...); IRIS's own text goes to the log at WARNING, since `/health` needs no key.
+
+### Unreleased
+
+**Documented: upgrading**
+
+- **4.5.x and earlier replaced any `SQLUser` function with the same name, and 4.6 does not restore it.** Their
+  `initialize_schema()` created IVG's helper functions with `CREATE OR REPLACE FUNCTION SQLUser.<name>`, so a function
+  the namespace already had under one of those names (`JSON_VALUE`, `RAND`, `NEWID`, `STR_SPLIT`, `REGEX_MATCH` and the
+  rest) was overwritten without a warning. 4.6.0 creates its functions in the IVG Schema and leaves the 4.5.x
+  `SQLUser` objects in place, so the overwritten version keeps answering. IVG 4.4.1's `SQLUser.JSON_VALUE`, for
+  example, reads top-level keys only, so nested paths such as `'$.a.b'` return nothing. **What to do:** before
+  installing any IVG release older than 4.6.0, check `INFORMATION_SCHEMA.ROUTINES` for those names in `SQLUser`; after
+  upgrading, reinstall your own version of any it replaced. ([Upgrading a
+  namespace](docs/migration/v4.6.0.md#upgrading-a-namespace))
 
 ### v4.6.2 (2026-11-08)
 
