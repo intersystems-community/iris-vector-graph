@@ -2,6 +2,8 @@
 
 # Changelog
 
+### v4.6.3 (unreleased)
+
 **Fixed: Cypher**
 
 - **An `UNWIND` of a list known before the query runs keeps its empty strings, and a parameter's list concatenates.**
@@ -68,7 +70,17 @@
   answers `503` with `"status": "unhealthy"` and a fixed `reason` ("the database did not answer SELECT 1", "the
   namespace records another IVG Schema", ...); IRIS's own text goes to the log at WARNING, since `/health` needs no key.
 
-### Unreleased
+**Fixed: upgrading**
+
+- **`remove_legacy_objects(dry_run=False)` no longer drops a same-named function of yours.** It removed every
+  `SQLUser` routine whose name was on the 4.5.x manifest, so a `JSON_VALUE` or `RAND` you had installed again after
+  upgrading (as the entry below advises), or one a namespace that never ran 4.5.x already had, was dropped as IVG's
+  leftover. It now compares each object's text with every text an IVG release from 1.0.0 to 4.5.1 shipped under that
+  name: a function's body (`INFORMATION_SCHEMA.ROUTINES.ROUTINE_DEFINITION`), a view's query, and the source of a
+  class it would delete (`User.SQL`, `User.Exec`, `User.CypherFn` and the rest). One that matches none is listed with
+  `ivg_owned` false and a `note` saying it is not IVG's, and is kept; `status().legacy_objects` and setup's grant copy
+  count IVG's objects only. Each item gains the fields `ivg_owned` and `note`. The fingerprints are in
+  `iris_vector_graph/legacy_bodies.py`, generated from the release tags by `scripts/dev/gen_legacy_bodies.py`.
 
 **Documented: upgrading**
 

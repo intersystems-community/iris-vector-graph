@@ -775,7 +775,9 @@ engine.remove_legacy_objects()
 The list is empty here because this namespace never ran 4.5.x. Each item says what it is (`kind`, `sql_name`,
 `class_name`) and the grants it holds; `remove_legacy_objects(dry_run=False)` removes exactly those. It works from a
 fixed list of 4.5.x names, so a function of yours is never touched unless it has one of those names (a `User.SQL`
-class of your own, say); read the list before removing. `engine.status().legacy_objects` counts them.
+class of your own, say). Since 4.6.3 `remove_legacy_objects` keeps a same-named function, view or class whose body
+IVG never shipped, and lists it with `ivg_owned` false and a `note` saying it is not IVG's. Read the list before
+removing. `engine.status().legacy_objects` counts the ones that are IVG's.
 
 ---
 
