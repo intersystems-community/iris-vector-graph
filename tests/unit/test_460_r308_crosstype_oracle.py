@@ -147,7 +147,7 @@ def test_the_known_461_disagreements_are_real_cases_without_a_duration():
     of a temporal agrees."""
     cases = {(c.form, c.label) for c in ct.comparison_cases()}
     assert ct.KNOWN_WRONG_461 <= cases
-    assert {f for f, _ in ct.KNOWN_WRONG_461} == {"subscript", "collected"}
+    assert {f for f, _ in ct.KNOWN_WRONG_461} == {"collected"}  # 4.6.3 fixed the `subscript` read
     assert not any("duration" in label for _, label in ct.KNOWN_WRONG_461)
     # worked by hand: a date beside a string in a WITH-held list orders with nothing (openCypher), IVG answered
     # true for '2020-01-01' < 'b'

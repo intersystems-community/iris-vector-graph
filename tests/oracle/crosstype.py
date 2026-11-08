@@ -93,11 +93,11 @@ RIGHT.update({"duration": Temporal("duration", "P2D"), "date": Temporal("date", 
               "time": Temporal("time", "13:00:00Z"), "datetime": Temporal("datetime", "2020-01-02T00:00:00Z"),
               "localdatetime": Temporal("localdatetime", "2020-01-02T00:00:00")})
 COMPARISON_KINDS = KINDS + TEMPORAL_KINDS
-#: 4.6.1 (KNOWN_ISSUES "A date or time inside a list compares as its text"): a date, time, datetime or local datetime
-#: read by position from a list (a WITH-held literal list or a collect()ed one) compares as its ISO text against a
-#: string or another temporal type (and, collected, against a list or a map), where openCypher answers null for the
-#: orderings. Measured on 4.6.0 fixes81 (both drivers, both graph modes); the E2E family requires exactly these to
-#: still disagree, so a fix shows as a failure until this set is emptied.
+#: KNOWN_ISSUES "A date or time read by position from a collected list compares as its text": a date, time, datetime
+#: or local datetime read by position from a collect()ed list compares as its ISO text against a string, another
+#: temporal type, a list or a map, where openCypher answers null for the orderings. Measured on 4.6.0 fixes81 (both
+#: drivers, both graph modes); the E2E family requires exactly these to still disagree, so a fix shows as a failure
+#: until this set is emptied. 4.6.3 fixed the same read from a WITH-held literal list (`subscript`, 20 cases).
 KNOWN_WRONG_461 = frozenset({
     ('collected', 'date vs datetime'),
     ('collected', 'date vs list'),
@@ -135,26 +135,6 @@ KNOWN_WRONG_461 = frozenset({
     ('collected', 'time vs localdatetime'),
     ('collected', 'time vs map'),
     ('collected', 'time vs string'),
-    ('subscript', 'date vs datetime'),
-    ('subscript', 'date vs localdatetime'),
-    ('subscript', 'date vs string'),
-    ('subscript', 'date vs time'),
-    ('subscript', 'datetime vs date'),
-    ('subscript', 'datetime vs localdatetime'),
-    ('subscript', 'datetime vs string'),
-    ('subscript', 'datetime vs time'),
-    ('subscript', 'localdatetime vs date'),
-    ('subscript', 'localdatetime vs datetime'),
-    ('subscript', 'localdatetime vs string'),
-    ('subscript', 'localdatetime vs time'),
-    ('subscript', 'string vs date'),
-    ('subscript', 'string vs datetime'),
-    ('subscript', 'string vs localdatetime'),
-    ('subscript', 'string vs time'),
-    ('subscript', 'time vs date'),
-    ('subscript', 'time vs datetime'),
-    ('subscript', 'time vs localdatetime'),
-    ('subscript', 'time vs string'),
 })
 OPS = ("<", "<=", ">", ">=", "=", "<>")
 FORMS = ("literal", "with", "param", "subscript", "unwound", "collected", "stored")

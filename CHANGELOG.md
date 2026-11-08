@@ -14,6 +14,10 @@
 - **A duration's field reads straight off the duration.** `RETURN duration('PT1H').seconds` failed with SQLCODE -25,
   and `a.d.seconds` over a stored duration and `duration.inSeconds(...).seconds` with -149; only a `WITH` column's
   field read. Each now answers what the `WITH` form does (3600 here), and the KNOWN_ISSUES entry is gone.
+- **A date or time read by position from a list literal or a `WITH`-held list compares as its value.**
+  `WITH [date('2020-01-01'), 'b'] AS l RETURN l[0] < l[1]` answered true (the date's text ordered as a string); it
+  now answers null, as openCypher does for a date against a string or another temporal type. The same read from a
+  `collect()`ed list still compares the text (KNOWN_ISSUES).
 
 **Fixed: algorithms**
 

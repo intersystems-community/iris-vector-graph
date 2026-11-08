@@ -444,19 +444,20 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
   answers its elements as their types.
 - **Check:** the answer holds a string where you expected a list or a boolean.
 
-### A date or time read by position from a list compares as its text
+### A date or time read by position from a collected list compares as its text
 
-- **Symptom:** a date, time, datetime or local datetime read by position from a list (`WITH [date('2020-01-01'),
-'b'] AS l RETURN l[0] < l[1]`, or from a `collect()`ed list) orders against a string or a temporal value of
-  another type as its ISO text, and from a `collect()`ed list against a list or a map too: the example answers true.
-  openCypher answers null for `<`, `<=`, `>` and `>=` there. `=` and `<>` answer correctly. Read any other way (a
-  literal, a `WITH` column, a parameter, an `UNWIND` variable, a stored property) the comparison answers as openCypher
-  does, and a duration read by position does too.
-- **Cause:** inside a list a temporal value is held as its ISO text, which is the same text as a string; the run-time
-  comparison cannot tell them apart.
-- **Versions:** 4.6.0 and earlier; on the 4.6.1 list.
-- **Workaround:** compare values of one type, or compare the values before putting them in the list.
-- **Check:** `RETURN [date('2020-01-01'), 'b'][0] < [date('2020-01-01'), 'b'][1]` answers true rather than null.
+- **Symptom:** a date, time, datetime or local datetime read by position from a `collect()`ed list
+  (`UNWIND [date('2020-01-01'), 'b'] AS e WITH collect(e) AS l RETURN l[0] < l[1]`) orders against a string, a
+  temporal value of another type, a list or a map as its ISO text: the example answers true. openCypher answers null
+  for `<`, `<=`, `>` and `>=` there. `=` and `<>` answer correctly. Read any other way (a literal, a `WITH` column, a
+  parameter, an `UNWIND` variable, a stored property, or by position from a list literal or a `WITH`-held one, fixed
+  in 4.6.3) the comparison answers as openCypher does, and a duration read by position does too.
+- **Cause:** inside a collected list a temporal value is held as its ISO text, which is the same text as a string; the
+  run-time comparison cannot tell them apart.
+- **Versions:** 4.6.3 and earlier (4.6.2 and earlier for a list literal or a `WITH`-held list).
+- **Workaround:** compare values of one type, or compare the values before collecting them.
+- **Check:** `UNWIND [date('2020-01-01'), 'b'] AS e WITH collect(e) AS l RETURN l[0] < l[1]` answers true rather
+  than null.
 
 ### A query that reads many properties prepares slowly
 

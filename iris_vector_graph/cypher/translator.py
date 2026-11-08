@@ -19464,13 +19464,17 @@ def _cmp_literal_value(node):
     return _NO_STATIC_VALUE
 
 
-def _cmp_literal_list(name, context):
+def _cmp_literal_list(name, context, temporal=False):
     """The elements of the literal list a WITH variable holds, else None. A WITH that binds the name to anything else
-    forgets the list (translate_with_clause), an UNWIND does too; a node or relationship of the name is no list."""
+    forgets the list (translate_with_clause), an UNWIND does too; a node or relationship of the name is no list.
+    `temporal`: a temporal constructor of a literal text is its _TemporalStatic, and an element known no other way is
+    _NO_STATIC_VALUE in place of making the list None (4.6.3)."""
     elems = getattr(context, "literal_list_vars", {}).get(name)
     alias = str(context.variable_aliases.get(name, ""))
     if not isinstance(elems, list) or not alias.startswith("Stage") or name in context.rel_variables:
         return None
+    if temporal:
+        return [_temporal_static(e, context) or _cmp_literal_value(e) for e in elems]
     values = [_cmp_literal_value(e) for e in elems]
     return None if any(v is _NO_STATIC_VALUE for v in values) else values
 
@@ -19515,6 +19519,26 @@ def _cmp_static_value(e, context):
     ):
         values = _cmp_literal_list(e.expression.name, context)
         if values is not None:
+            i = e.index.value
+            return values[i] if -len(values) <= i < len(values) else None
+        # 4.6.3: in a list holding a temporal value each element known before the query runs is that value, a temporal
+        # one included (`WITH [date('2020-01-01'), 'b'] AS l RETURN l[0] < l[1]` compared the date's ISO text as a
+        # string: true where openCypher answers null)
+        values = _cmp_literal_list(e.expression.name, context, temporal=True)
+        if values is not None and any(isinstance(v, _TemporalStatic) for v in values):
+            i = e.index.value
+            return values[i] if -len(values) <= i < len(values) else None
+    if (
+        isinstance(e, ast.SubscriptExpression)
+        and isinstance(e.expression, ast.Literal)
+        and isinstance(e.expression.value, list)
+        and isinstance(e.index, ast.Literal)
+        and isinstance(e.index.value, int)
+        and not isinstance(e.index.value, bool)
+    ):
+        # 4.6.3: the same of a list literal (`[date('2020-01-01'), 'b'][0] < 'c'`)
+        values = [_temporal_static(x, context) or _cmp_literal_value(x) for x in e.expression.value]
+        if any(isinstance(v, _TemporalStatic) for v in values):
             i = e.index.value
             return values[i] if -len(values) <= i < len(values) else None
     return _NO_STATIC_VALUE
