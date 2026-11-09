@@ -13,7 +13,8 @@ it would do without writing.
 
 | The namespace runs | Do                                                                                                     |
 | ------------------ | ------------------------------------------------------------------------------------------------------ |
-| 4.5.x              | [To 4.6.0](#to-460-the-ivg-schema)                                                                     |
+| 4.6.0 to 4.6.3     | [To 4.6.4](#to-464-numbers-the-python-api-writes)                                                      |
+| 4.5.x              | [To 4.6.0](#to-460-the-ivg-schema), then 4.6.4                                                         |
 | 4.3.x or 4.4.x     | [To 4.4 and 4.5](#to-44-and-45-redeploy-the-classes), then 4.6.0                                       |
 | 4.1.x or 4.2.x     | [To 4.2](#to-42-upgrade-each-bm25-index) and [to 4.3](#to-43-the-adjacency-index), then the rows above |
 | 4.0.x              | [To 4.1](#to-41-from-400), then the rows above                                                         |
@@ -51,6 +52,29 @@ Answers that change in 4.6.0, with no action needed beyond the redeploy:
 
 `initialize_schema()` also builds the new index `idx_edges_graph_oid` on `rdf_edges` (a single pass, 0.3 s for
 300,000 rows when measured).
+
+## To 4.6.4: numbers the Python API writes
+
+From 4.6.4 `create_node`, `store_node`, `bulk_create_nodes` and the other Python writers store a node number as a
+Cypher write does, so it reads back as the number; before, they stored its text, which read back as a string. Run
+`initialize_schema()`: until it compiles the changed `Graph.KG.EdgeScan`, `bulk_create_nodes` with the classes
+deployed still stores the text.
+
+The numbers an earlier release's Python writers stored stay text. A text row cannot be told from a string written on
+purpose, so `initialize_schema()` does not retype them; filters, `ORDER BY` and arithmetic already treat them as
+numbers. To retype a property you know is numeric, read it and write the number back:
+
+<!-- doc-test: skip reason="a recipe for a namespace holding 4.6.3 data, with no such nodes here" -->
+
+```python
+rows = engine.execute_cypher("MATCH (n:Person) WHERE n.age IS NOT NULL RETURN n.node_id, n.age").rows
+for node_id, age in rows:
+    if isinstance(age, str):
+        engine.store_node(node_id, properties={"age": int(age)})  # graph= for a named graph
+```
+
+A Cypher `SET n.age = toInteger(n.age)` does not retype it in 4.6.4 ([Known issues](../KNOWN_ISSUES.md), "A property
+cannot tell a number from a string that spells it").
 
 ## To 4.4 and 4.5: redeploy the classes
 

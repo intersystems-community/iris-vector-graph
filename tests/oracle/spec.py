@@ -6,11 +6,11 @@ documentation says nothing, the answer is openCypher's, and the cell's source sa
 read from IVG's output.
 
 The rules, in short (the citations below hold the exact words):
-- A node property written by the Python API (`create_node`, `bulk_create_nodes`, an NDJSON node line, which
-  `import_graph_ndjson` writes with `create_node`) is the text `prop_text` makes. A number reads back as that text, a
-  string (`'0.95'`), from `RETURN n.p`, `get_node()` and a whole node; `properties(n)` reads a canonical number text
-  (`'7'`, `'0.95'`, `'1.0'`) as the number, and so it reads the string `"0.95"` as 0.95 too.
-- A node property written by Cypher (CREATE, SET, MERGE, literal or parameter) reads back with its type.
+- A node property written by Cypher (CREATE, SET, MERGE, literal or parameter) reads back with its type, and from
+  4.6.4 so does one written by the Python API (`create_node`, `bulk_create_nodes`, an NDJSON node line, which
+  `import_graph_ndjson` writes with `create_node`), which binds a number as Cypher does. Before 4.6.4 the API stored
+  a number as its text, which read back as a string. `properties(n)` reads a canonical number text (`'7'`, `'0.95'`,
+  `'1.0'`) as the number, and so it reads the string `"0.95"` as 0.95 too.
 - A relationship property comes back with its type. A canonical number string (`"7"`, `"0.95"`) reads as the number on
   every relationship read; `".95"` and `'007'` stay strings. `SET r.p = 1.0` stores the JSON number 1.
 - `toString()` answers a stored string as it is and a stored number in openCypher's text (Java's `Double.toString`).
@@ -33,10 +33,10 @@ from tests.oracle.values import VALUES, Value
 # ── citations ──────────────────────────────────────────────────────────────────────────────────────────────────────
 #: name -> (file, phrase). The phrase is matched with runs of whitespace collapsed (the docs wrap at 120 columns).
 CITATIONS = {
-    "node_api_number_text": (
-        "docs/KNOWN_ISSUES.md",
-        "`RETURN n.score` and `get_node()` read the number 0.95 as the string `'0.95'` when `create_node`, "
-        "`bulk_create_nodes` or `store_node` wrote it, and as the float 0.95 when a Cypher `CREATE` or `SET` wrote it",
+    "node_api_typed": (
+        "CHANGELOG.md",
+        "`create_node`, `store_node`, `bulk_create_nodes` (both its paths) and the other Python writers store a number "
+        "as a Cypher write stores it",
     ),
     "whole_node_as_prop": (
         "docs/KNOWN_ISSUES.md",
@@ -421,14 +421,10 @@ def _read_node(cls: str, v: Value, family: str) -> Expect:
     if v.temporal:
         return Expect(v.oc, OPENCYPHER)
     if v.group in ("int", "float"):
-        if cls == "api":
-            text = prop_text(v.py)
-            if family == "props":
-                return Expect(json_number(text), "props_fn_number_text")
-            return Expect(text, "node_api_number_text")
         if v.group == "float" and math.isfinite(v.oc) and v.oc.is_integer():
             return Expect(v.oc, "whole_float_point")
-        return Expect(v.oc, "node_cypher_typed")
+        # 4.6.4: the API binds a number as a Cypher write does (it stored the number's text, read as a string)
+        return Expect(v.oc, "node_api_typed" if cls == "api" else "node_cypher_typed")
     if family == "props" and isinstance(v.oc, str):
         number = json_number(v.oc)
         if number is not v.oc:

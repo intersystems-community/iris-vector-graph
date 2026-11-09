@@ -2,6 +2,35 @@
 
 # Changelog
 
+### v4.6.4 (unreleased)
+
+**Fixed: Python writes**
+
+- **A number written through the Python API reads back as a number.**
+  `create_node("p1", labels=["P"], properties={"age": 30, "score": 0.5, "name": "a"})` and then
+  `MATCH (n:P {node_id: 'p1'}) RETURN n.age, n.score, n.name` answered `['30', '0.5', 'a']`, where a Cypher `CREATE`
+  of the same values answers `[30, 0.5, 'a']`. The Python writers stored each number as its text. Now
+  `create_node`, `store_node`, `bulk_create_nodes` (both its paths) and the other Python writers store a number as a
+  Cypher write stores it: `reify_edge(props=...)`, `import_graph_ndjson`, the engine's `load_networkx`,
+  `BulkLoader.load_nodes` and `BulkLoader.load_networkx`, and `IRISGraphStore.write_nodes`. So `RETURN n.age`,
+  `get_node()`, a whole node, `ORDER BY` and arithmetic see 30 and 0.5, a float stays a float (2.0 reads as 2.0, NaN
+  and infinities as floats), and a string stays a string (`'30'` reads as `'30'`). Booleans, lists, maps and strings
+  are stored as before; an integer past 64 bits is still its text, as a Cypher parameter of one is.
+- **Two writers lost other values.** `IRISGraphStore.write_nodes` stored a string in JSON quotes, so `'TP53'` read
+  back as `'"TP53"'`, and stored a None as the text `null`; it now stores the string and skips a None, as
+  `create_node` does. The engine's `load_networkx` stored each attribute's `str()`: a list as Python's repr
+  (`"[1, 'a']"`), a map likewise, and `True` as `'True'`. It now passes a number, boolean, string, list or map to
+  `create_node` as it is; another type is still its `str()`.
+- **What to do:** run `initialize_schema()`, which compiles the changed `Graph.KG.EdgeScan`. Until then
+  `bulk_create_nodes` with the classes deployed stores a number as its text, as 4.6.3 did. A number that 4.6.3 or
+  earlier stored through the Python API is still the text it stored. Nothing tells that text from a string written
+  on purpose, so setup does not retype it ([Known issues](docs/KNOWN_ISSUES.md), "A property cannot tell a number from
+  a string that spells it", and the [upgrade notes](docs/migration/upgrading-from-older-releases.md#to-464-numbers-the-python-api-writes)
+  say how to retype a property you know is numeric). Code that parsed these values from text now gets the number.
+  Measured on `ivg-iris-enterprise`, 2,000 nodes, median of 5 to 7 runs: `bulk_create_nodes` with `{"i": i}` 0.262 s
+  before and 0.265 s after, with an int, a float and a string 0.393 s and 0.418 s; 2,000 `create_node` calls 1.70 s
+  and 1.86 s (run to run 1.5 to 2.5 s).
+
 ### v4.6.3 (2026-11-08)
 
 **Fixed: Cypher**

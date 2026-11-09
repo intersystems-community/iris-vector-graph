@@ -181,22 +181,25 @@ The sensor and its three readings have no edges left, so all four go.
     `x.code * 2` 14, where openCypher answers `'71'` and raises TypeError. Any other string concatenates with `+`
     (`'a7' + 1` is `'a71'`) and raises TypeError with `-`, `*`, `/`, `%` and `^`, as openCypher does. A
     concatenation whose text spells a number reads back as the number: `'' + 1` answers `1`, not `'1'`.
-  - `RETURN n.score` and `get_node()` read the number 0.95 as the string `'0.95'` when `create_node`,
-    `bulk_create_nodes` or `store_node` wrote it, and as the float 0.95 when a Cypher `CREATE` or `SET` wrote it, on
-    both paths and under any version of the IRIS driver. Before 4.6.0 the SQL path and `get_node()` read the
-    Cypher-written one as IRIS's text, `'.94999999999999995559'`, with intersystems-irispython 5.4.1 or later. A
-    whole node (`RETURN n`, `collect(n)`, a node in a map, a variable-length path's target) carries each property as
+  - A node number that `create_node`, `bulk_create_nodes`, `store_node` or another Python writer stored under
+    4.6.3 or earlier is the text `'0.95'`, the same row as the string `"0.95"`, and `RETURN n.score` and `get_node()`
+    read it as that string, on both paths and under any version of the IRIS driver. From 4.6.4 those writers store a
+    number as a Cypher `CREATE` or `SET` does, and it reads as the float 0.95. Before 4.6.0 the SQL path and
+    `get_node()` read the Cypher-written one as IRIS's text, `'.94999999999999995559'`, with intersystems-irispython
+    5.4.1 or later. A whole node (`RETURN n`, `collect(n)`, a node in a map, a variable-length path's target) carries each property as
     `RETURN n.score` reads it; before 4.6.0 it carried every value as text. `properties(n)` reads both as 0.95, and
     reads the string `"0.95"` as 0.95 too.
 - **Cause:** neither store records a type the readers can rely on. A node property is the text column `rdf_props.val`:
-  the API writes a number as the text `0.95`, the same text as the string `"0.95"`, and a Cypher write stores the float
-  as an IRIS double. A relationship property is a leaf of the `qualifiers` JSON: `create_edge` writes a JSON number,
+  before 4.6.4 the Python API wrote a number as the text `0.95`, the same text as the string `"0.95"`, and a Cypher
+  write (and from 4.6.4 the API) stores the float as an IRIS double. A relationship property is a leaf of the `qualifiers` JSON: `create_edge` writes a JSON number,
   but a Cypher write stores a number as the JSON string `"0.95"`, the same as the string. Existing data cannot be
-  re-typed without a stored marker telling the two apart, so the readers treat number-shaped text the way 4.5.x did.
+  re-typed without a stored marker telling the two apart, so the readers treat number-shaped text the way 4.5.x did,
+  and `initialize_schema()` leaves an earlier release's text as it is.
 - **Versions:** all 4.x for the reads. The filters match every form of the number from 4.6.0; before, an inline or
   literal number missed the API's `0.95` (and a node filter missed the Cypher-written double). From 4.6.0 a node
   value reads with the type it is stored with whatever the driver version; before, which type a Cypher-written number
-  read as depended on the query's path and on the driver (5.4.0 read the number, 5.4.1 the text).
+  read as depended on the query's path and on the driver (5.4.0 read the number, 5.4.1 the text). The Python writers
+  store a node number as a number from 4.6.4.
 - **Workaround:** keep a property either numeric or text on every node or relationship that has it, and put
   number-like text under a property name of its own. Read a numeric property with `toFloat(x.score)`, which answers
   the float for every stored form. `toString(x.score)` answers a stored string as it is, and a stored number in
@@ -204,7 +207,11 @@ The sensor and its three readings have no edges left, so all four go.
   `'0.95'`. One form loses its type before any read. `SET r.score = 1.0` on a relationship stores the JSON
   number `1`, so `toString(r.score)` answers `'1'`, as it does for the integer 1. A Cypher `CREATE` or `MERGE` stores
   a relationship's float as Python spells it, so one Python spells with an exponent (`1e-07`, `1e+20`) reads back as
-  that string, and so does NaN or an infinity written by any Cypher write (`'nan'`, `'inf'`).
+  that string, and so does NaN or an infinity written by any Cypher write (`'nan'`, `'inf'`). To retype a node
+  property an earlier release's Python writer stored, when you know it is numeric, read it and write the number back
+  with `store_node` (pass `graph=` for a named graph). In 4.6.4 a Cypher `SET n.age = toInteger(n.age)` does not do
+  it: it fails with SQLCODE -23, and `WITH n, toInteger(n.age) AS a SET n.age = a` leaves the text, which it finds
+  equal to the number.
 - **Check:** return the property next to the filter's answer and look at the types.
 
 ```python
@@ -231,10 +238,11 @@ engine.execute_cypher(
 # → [['q1', 0.95], ['q2', '.95'], ['q3', 0.95]]
 ```
 
-A node number written by the API reads back as text; `toFloat` reads every form as the number:
+A node number that 4.6.3 or earlier wrote through the API reads back as text (written here as the string it stored);
+`toFloat` reads every form as the number:
 
 ```python
-engine.create_node("m1", labels=["Measure"], properties={"score": 0.95})
+engine.create_node("m1", labels=["Measure"], properties={"score": "0.95"})
 engine.execute_cypher("CREATE (:Measure {id: 'm2', score: 0.95})")
 engine.execute_cypher(
     "MATCH (m:Measure) RETURN m.id, m.score, toFloat(m.score) ORDER BY m.id"

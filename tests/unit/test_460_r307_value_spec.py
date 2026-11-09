@@ -95,10 +95,10 @@ def test_durations_sort_by_length():
          ["fminf", "im1", "fm05", "i0", "f1em7", "f095", "f1", "f2", "i7", "i2p53", "ibig", "f1e20", "finf", "fnan"]),
         ("node", "cy_create", "num",
          ["im1", "fm05", "i0", "f1em7", "f095", "f1", "f2", "i7", "i2p53", "ibig", "f1e20"]),
-        # the API's number text sorts as the number; 'nan', 'inf' and '-inf' spell none, so they are strings, which
-        # sort before numbers
+        # 4.6.4: the API's numbers are numbers, sorted as Cypher's are (NaN after +infinity); before, 'nan', 'inf'
+        # and '-inf' were text spelling no number, which sorted before every number
         ("node", "api_create", "num",
-         ["fminf", "finf", "fnan", "im1", "fm05", "i0", "f1em7", "f095", "f1", "f2", "i7", "i2p53", "ibig", "f1e20"]),
+         ["fminf", "im1", "fm05", "i0", "f1em7", "f095", "f1", "f2", "i7", "i2p53", "ibig", "f1e20", "finf", "fnan"]),
         # a string that spells a number sorts as the number whoever wrote it (KNOWN_ISSUES; openCypher would sort the
         # text, '.95' < '0.95' < '007' < '1.0' < '1e3' < '7')
         ("node", "cy_create", "numstr", ["s095", "sd95", "s10", "s007", "s7", "s1e3"]),
@@ -121,8 +121,9 @@ def _typed(x):
 
 def test_known_issues_number_examples():
     """docs/KNOWN_ISSUES.md, "A property cannot tell a number from a string that spells it", worked examples."""
-    # m1 by create_node, m2 by CREATE: m.score '0.95' and 0.95; toString both '0.95'
-    assert _typed(_e("node", "api_create", "f095", "ret")) == ("str", "0.95")
+    # m1 by create_node, m2 by CREATE: m.score 0.95 for both from 4.6.4 (create_node's read '0.95' before); toString
+    # both '0.95'
+    assert _typed(_e("node", "api_create", "f095", "ret")) == ("float", 0.95)
     assert _typed(_e("node", "cy_create", "f095", "ret")) == ("float", 0.95)
     assert _e("node", "api_create", "f095", "tostring") == _e("node", "cy_create", "f095", "tostring") == "0.95"
     # properties(n) reads both as 0.95, and the string "0.95" too
@@ -146,7 +147,8 @@ def test_known_issues_number_examples():
 def test_opencypher_where_the_docs_are_silent():
     assert _typed(_e("node", "cy_create", "f1", "ret")) == ("float", 1.0)
     assert _e("node", "cy_create", "f1em7", "tostring") == "1.0E-7"
-    assert _e("node", "api_create", "f1em7", "tostring") == "1e-07"  # a stored string as it is
+    # 4.6.4: the API's 1e-7 is a number, as Cypher's is (it was the stored string '1e-07')
+    assert _e("node", "api_create", "f1em7", "tostring") == "1.0E-7"
     assert _e("node", "cy_create", "dP2W", "ret") == "P14D"
     assert _typed(_e("node", "cy_create", "sTrue", "ret")) == ("str", "True")
     assert _typed(_e("node", "api_create", "btrue", "ret")) == ("bool", True)
@@ -182,7 +184,7 @@ def test_write_errors():
     assert spec.write_error("node", "api_create", BY_KEY["mnest"]) is None  # the Python API stores JSON
     assert spec.write_error("rel", "api_edge", BY_KEY["fnan"]).value == "ValueError"
     assert spec.write_error("rel", "ndjson_edge", BY_KEY["finf"]).value == "ValueError"  # import_graph_ndjson raises it
-    assert spec.write_error("node", "api_create", BY_KEY["fnan"]) is None   # a node's text 'nan'
+    assert spec.write_error("node", "api_create", BY_KEY["fnan"]) is None   # a node's NaN (its text 'nan' before 4.6.4)
 
 
 def test_writers_and_values():

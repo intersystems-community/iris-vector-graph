@@ -103,8 +103,9 @@ from binding. Any new procedure called from a `JSON_TABLE` needs the same.
 
 ## 7. Property values are text
 
-`rdf_props.val` is `VARCHAR(64000)`: every property value is stored as its text (`prop_text` in
-`iris_vector_graph/prop_values.py`: `true`/`false` for booleans, JSON for lists and maps). The translator wraps a
+`rdf_props.val` is `VARCHAR(64000)`: a property value is stored as its text (`prop_text` in
+`iris_vector_graph/prop_values.py`: `true`/`false` for booleans, JSON for lists and maps), except a number, which every
+writer stores as an IRIS number in the same column (the Python writers since 4.6.4, `prop_value`). The translator wraps a
 property in `CAST(... AS DOUBLE)` where Cypher does arithmetic on it, and leaves string comparisons uncast. SQL of
 your own over `rdf_props` should cast the same way rather than rely on how IRIS compares two strings: IRIS compares
 two literals that look like numbers as numbers (`'10' < '9'` is false), so a test on literals says nothing about a

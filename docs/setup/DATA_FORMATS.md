@@ -66,7 +66,7 @@ engine.bulk_create_nodes([
 ])
 # → ['drug:Olaparib', 'disease:BRCA']
 engine.get_node("drug:Olaparib")["approved"]
-# → '2014'
+# → 2014
 engine.bulk_create_edges([
     {"source_id": "gene:BRCA1", "predicate": "TARGETS", "target_id": "drug:Olaparib"},
     {"source_id": "drug:Olaparib", "predicate": "TREATS", "target_id": "disease:BRCA"},
@@ -86,11 +86,13 @@ engine.bulk_ingest_edges(
 # → 2
 ```
 
-**Numbers come back as strings.** `bulk_create_nodes` (like `create_node`) stores a node property as its text, so
-the integer `2014` above reads back from `get_node()` and Cypher's `RETURN` as the string `'2014'`. A Cypher `CREATE`
-or `SET` stores a number as a number. Filters, `ORDER BY` and arithmetic treat the string as the number
+**Numbers come back as numbers.** `bulk_create_nodes` (like `create_node`) stores a node number as a Cypher `CREATE`
+does, so the integer `2014` above reads back from `get_node()` and Cypher's `RETURN` as 2014, and a string as the
+string. Before 4.6.4 the Python writers stored a number as its text, and a number they stored then still reads back
+as the string `'2014'`. Filters, `ORDER BY` and arithmetic treat the string as the number
 (`WHERE d.approved > 2010` matches it), and `toInteger()` or `toFloat()` in Cypher, or `int()` in Python, gives the
-number back. This matters most for CSV loads, where every numeric column takes this path.
+number back. Python's `csv` module reads every column as a string, so convert numeric columns to `int` or `float`
+before the call to store numbers.
 [Known issues](../KNOWN_ISSUES.md#a-property-cannot-tell-a-number-from-a-string-that-spells-it) has the details.
 
 **Lists and maps come back as lists and maps.** A list or map property (`{"aliases": ["ERBB1", "HER1"]}`) is stored

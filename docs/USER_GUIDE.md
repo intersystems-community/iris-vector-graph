@@ -422,11 +422,11 @@ engine.execute_cypher(
 ```
 
 A relationship property comes back with its type: `2019` is an integer, as it was written. A node property comes back
-with the type it is stored with, which depends on the writer: a Cypher `CREATE` or `SET` stores a number as a number,
-and `create_node`, `bulk_create_nodes` and `store_node` store it as its text, so `{"age": 34}` reads back as the
-string `'34'`. Filters and `ORDER BY` treat both as the number; read one with `toFloat()` or `toInteger()` to get a
-number whichever wrote it (see [Known issues](KNOWN_ISSUES.md), "A property cannot tell a number from a string that
-spells it").
+with the type it is stored with: a Cypher `CREATE` or `SET` stores a number as a number, and so, from 4.6.4, do
+`create_node`, `bulk_create_nodes`, `store_node` and the other Python writers, so `{"age": 34}` reads back as 34. A
+number one of them stored under 4.6.3 or earlier is its text and reads back as the string `'34'`. Filters and
+`ORDER BY` treat both as the number; read one with `toFloat()` or `toInteger()` to get a number whichever wrote it
+(see [Known issues](KNOWN_ISSUES.md), "A property cannot tell a number from a string that spells it").
 
 A list or map property reads back as the list or map, from every writer and on every read: `RETURN n.p`, `WITH`,
 `DISTINCT`, `collect()`, a map projection, `properties(n)` and a whole node carry `['a', 'b']`, not the text

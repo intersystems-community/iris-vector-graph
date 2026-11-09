@@ -10,14 +10,15 @@ R230).
 ## What differs
 
 `rdf_props.val` is VARCHAR. A Cypher write stores a number there as an IRIS number (a `$DOUBLE`, an integer or a
-decimal), and the API stores the number's text. Reading `val` straight through the driver gives:
+decimal), and so does the Python API from 4.6.4; before, the API stored the number's text (the last row below).
+Reading `val` straight through the driver gives:
 
-| stored by                     | 5.4.0                     | 5.4.1                     |
-| ----------------------------- | ------------------------- | ------------------------- |
-| `CREATE (... {score: 0.95})`  | `0.95` (float)            | `'.94999999999999995559'` |
-| `CREATE (... {count: 29})`    | `29` (int)                | `'29'`                    |
-| `SET n.k = 2.5 * 2` (decimal) | `Decimal('5')`            | `'5'`                     |
-| `create_node(..., {f: 0.95})` | `'0.95'` (the API's text) | `'0.95'`                  |
+| stored by                     | 5.4.0                   | 5.4.1                     |
+| ----------------------------- | ----------------------- | ------------------------- |
+| `CREATE (... {score: 0.95})`  | `0.95` (float)          | `'.94999999999999995559'` |
+| `CREATE (... {count: 29})`    | `29` (int)              | `'29'`                    |
+| `SET n.k = 2.5 * 2` (decimal) | `Decimal('5')`          | `'5'`                     |
+| `create_node(..., {f: 0.95})` | `'0.95'` (4.6.3's text) | `'0.95'`                  |
 
 5.4.0 decodes the list item's own type; 5.4.1 converts it to the column's type. The figures above are from 2026-11-04,
 on `irishealth:2026.3.0AI.113.0` (`ivg-iris-enterprise`): the red runs of
