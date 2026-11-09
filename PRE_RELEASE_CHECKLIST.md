@@ -246,6 +246,41 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.6.3 — wrong answers and silent failures from the deferred list (2026-11-PUBLISH)
+
+Patch release (Tom 2026-11-08: "yes to all" for the deferred list; the lead's cutoff, wrong answers and silent failures
+only, the rest to 4.7.0). Branch `release-4.6.3` from main `1b48c8cc`; product code final at `407777a8`, then the
+version (`4f8c4e09`) and this record. Twelve items: the Cypher fixes (an `UNWIND` of a known list keeps `''`, `$l1 + $l2`
+concatenates, duration fields read directly, a temporal list element at a literal position compares as its value),
+algorithm fixes (weighted path costs are floats, `kg_EdgeEmbeddings` registry rows say `edge`, ids with `"` or `\`
+escaped in five classes' JSON), writes and errors (an edge write whose `^KG` part fails raises and writes no row; a
+privilege refusal logs at WARNING; `kg_PAGERANK` and `delete_node` raise IVG's errors; the sample API's `/health`
+checks the database), and `remove_legacy_objects` keeping a same-named function whose body IVG never shipped (with the
+python-devx docs note on 4.5.x overwriting `SQLUser` functions). Two items were already fixed in 4.6.0 (tests added);
+personalized PageRank's missing zero-score nodes stays as documented in USER_GUIDE. Tom: **PENDING** ("push it" /
+"publish it" not given yet).
+
+| Gate                                                                   | Commit     | Result                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit suite (laptop)                                                    | `407777a8` | 23,519 passed, 0 failed                                                                                                                                                                                                                                                 |
+| 4.6.3 E2E files and every legacy-objects E2E file (laptop, enterprise) | `407777a8` | 145 passed, 0 failed (16 files)                                                                                                                                                                                                                                         |
+| Full E2E, two shards and driver 5.4.1 (dpgenai1)                       | `10efb3cb` | 3,782 + 11,041 + 191 passed, 0 failed; 2 errors, `test_embedded_wgproto_e2e` TestEmbeddedCommunityIRIS needs `ivg-gate-com`, which an e2e-only run does not start. `10efb3cb` is `407777a8` without item 12 (`remove_legacy_objects`), whose files are in the row above |
+| TCK, enterprise 2026.3, drivers 5.4.0 and 5.4.1 (dpgenai1)             | `407777a8` | 3895 / 3896 each; only Temporal2 [6], environment-dependent                                                                                                                                                                                                             |
+| `scripts/ci-parity.sh` (dpgenai1)                                      | `407777a8` | exit 0 on the second run. The first failed one document in the docs run (`DATA_FORMATS.md` block 12: `create_edge` SQLCODE -400); it did not recur there, nor in three full 16-document runs on a fresh laptop namespace (two drivers, ci-parity's venv recipe)         |
+| Speed (laptop, before/after)                                           | `407777a8` | `bulk_ingest_edges` 2,000 new: 0.32 s / 0.35 s; 2,000 repeated: 0.13 s / 0.16 s                                                                                                                                                                                         |
+
+Not run: the Community TCK and the walkthroughs (no reader-facing change beyond the CHANGELOG, KNOWN_ISSUES and three
+doc passages), the spec 262 speed gate (no change to the timed paths beyond the edge writers measured above).
+
+Found during 4.6.3 and listed for 4.6.4 or 4.7.0: Python-API numbers stored as text and writes committing the caller's
+transaction (4.6.4, branch `release-4.6.4`); `create_edge` answering True without `^KG` when the adjacency writer lock
+is not granted; the driver's `executemany` skipping a refused row; `RETURN exists(n.id)` beside other columns (SQLCODE
+-12); `VecIndex` cosine `score` is cos − 1; `properties(n)` reading the string `'30'` as 30; `SET n.p = toInteger(n.p)`
+(SQLCODE -23); DETACH DELETE leaving an `rdf_reifications` row; the 36 `collect()`ed temporal cases.
+
+§9: PENDING Tom's word (push, CI, fast-forward main, tag `v4.6.3`, build at the tag, `twine check`, PyPI, GitHub
+release, clean venv install check).
+
 ### 4.6.2 — shortestPath walks the graph it reads (2026-11-08)
 
 Hotfix (Tom: "yes a", "Push and publish 4.6.2"), found by both round 6 walkthroughs on the published 4.6.1. Commit
