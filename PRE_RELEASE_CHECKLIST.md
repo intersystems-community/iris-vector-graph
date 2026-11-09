@@ -246,6 +246,44 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.6.4 — Python-API numbers keep their type; IVG writes stay inside the caller's transaction (2026-11-09)
+
+Patch release (Tom 2026-11-08: "Ship 4.6.3, then 4.6.4", for the two python-devx defects). Branch `release-4.6.4` from
+main `b4d9f446`. Two items: the Python writers (`create_node`, `store_node`, both `bulk_create_nodes` paths,
+`reify_edge`, `import_graph_ndjson`, both `load_networkx`, `BulkLoader.load_nodes`, `IRISGraphStore.write_nodes`) bind
+a number as a Cypher write does, so it reads back as a number, with NaN and the infinities kept as their text; and every
+IVG write runs as a nested level of its own (`Graph.KG.Txn`, `Txn_Begin` / `Txn_End` / `Txn_Undo`), so it never
+commits or rolls back a transaction its caller opened (autocommit off counts as one).
+
+The first full gate (`b5b6dabf`) failed six E2E tests, fixed in `3b98cdf0` and `34b5bf31`:
+
+- `test_460_r310` and `test_460_r307` (`any_beside`, two routes): a real regression. Stored as `$DOUBLE`s, an
+  API-written NaN or infinity failed every read of a list holding it (SQLCODE -400 `Parsing error`, IRIS's JSON has
+  no NaN), which 4.6.3's text did not. The API stores them as text again (`'nan'`, `'inf'`, `'-inf'`); CHANGELOG,
+  KNOWN_ISSUES and the oracle spec say so.
+- `test_411` (asserted every bulk-written value is text) and `test_460_r235` (the procedure table lacked the three
+  `Txn_*` procedures): the tests asserted 4.6.3.
+- `test_460_r202` (no WARNING from betweenness at R): test isolation. `test_460_r192` leaves its named graph, and with
+  a named graph holding edges betweenness skips its ObjectScript tier by design and logs nothing; the two files had
+  not shared a shard before. `reading_role460.seed` erases every graph; ADMIN_GUIDE §3 names the case.
+
+| Gate                                                       | Commit     | Result                                                                                                                                                                  |
+| ---------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit suite (laptop)                                        | `34b5bf31` | 23,487 passed, 0 failed                                                                                                                                                 |
+| Full E2E, two shards and driver 5.4.1 (dpgenai1)           | `b5b6dabf` | 3,448 + 11,481 + 191 passed; 6 failed (above, fixed); 2 errors, `test_embedded_wgproto_e2e` TestEmbeddedCommunityIRIS needs `ivg-gate-com`, which an e2e-only run lacks |
+| Affected E2E: 30 files, one shard (dpgenai1, driver 5.4.0) | `34b5bf31` | 706 passed, 0 failed: the six, every 4.6.4 E2E file, every `reading_role460.seed` user, and the primary-namespace files, `test_460_r192` before `test_460_r202`         |
+| Typed-read E2E, 7 files (dpgenai1, driver 5.4.1)           | `34b5bf31` | 301 passed, 0 failed                                                                                                                                                    |
+| TCK, enterprise 2026.3, drivers 5.4.0 and 5.4.1 (dpgenai1) | `b5b6dabf` | 3895 / 3896 each; only Temporal2 [6], environment-dependent. The fixes after it change no Cypher write or read                                                          |
+| `scripts/ci-parity.sh` (dpgenai1)                          | `34b5bf31` | exit 0 (also on `b5b6dabf`)                                                                                                                                             |
+| Speed (laptop, before/after, in the CHANGELOG)             | 4.6.4      | `bulk_create_nodes` 2,000 nodes 0.262 s / 0.265 s; mixed types 0.393 s / 0.418 s; 2,000 `create_node` 1.70 s / 1.86 s                                                   |
+
+Not run: the Community TCK and the walkthroughs (reader-facing changes are the CHANGELOG, KNOWN_ISSUES, the upgrade notes and passages of USER_GUIDE, ADMIN_GUIDE, API_REFERENCE, DATA_FORMATS and iris-sql-quirks, whose code blocks ci-parity's docs run executes), the full E2E on `34b5bf31` (the files after
+`b5b6dabf` are tests, docs and `prop_value`'s non-finite branch, whose readers the rows above cover).
+
+Found during 4.6.4 and listed for 4.7.0: `bulk_create_nodes`'s batch path adds `"id"` to the caller's own properties
+dict (4.6.3 too); `bulk_load_session`, `embed_nodes` and setup still commit the caller's work; the ledger cannot join a
+caller's transaction; the 4.6.3 list above.
+
 ### 4.6.3 — wrong answers and silent failures from the deferred list (2026-11-08)
 
 Patch release (Tom 2026-11-08: "yes to all" for the deferred list; the lead's cutoff, wrong answers and silent failures
