@@ -2,7 +2,7 @@
 
 # Changelog
 
-### v4.6.3 (unreleased)
+### v4.6.3 (2026-11-08)
 
 **Fixed: Cypher**
 

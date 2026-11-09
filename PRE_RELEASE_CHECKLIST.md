@@ -246,7 +246,7 @@ gh release create v<version> \
 
 ## Sign-off
 
-### 4.6.3 — wrong answers and silent failures from the deferred list (2026-11-PUBLISH)
+### 4.6.3 — wrong answers and silent failures from the deferred list (2026-11-08)
 
 Patch release (Tom 2026-11-08: "yes to all" for the deferred list; the lead's cutoff, wrong answers and silent failures
 only, the rest to 4.7.0). Branch `release-4.6.3` from main `1b48c8cc`; product code final at `407777a8`, then the
@@ -257,8 +257,7 @@ escaped in five classes' JSON), writes and errors (an edge write whose `^KG` par
 privilege refusal logs at WARNING; `kg_PAGERANK` and `delete_node` raise IVG's errors; the sample API's `/health`
 checks the database), and `remove_legacy_objects` keeping a same-named function whose body IVG never shipped (with the
 python-devx docs note on 4.5.x overwriting `SQLUser` functions). Two items were already fixed in 4.6.0 (tests added);
-personalized PageRank's missing zero-score nodes stays as documented in USER_GUIDE. Tom: **PENDING** ("push it" /
-"publish it" not given yet).
+personalized PageRank's missing zero-score nodes stays as documented in USER_GUIDE. Tom: "Push and publish 4.6.3" (2026-11-08).
 
 | Gate                                                                   | Commit     | Result                                                                                                                                                                                                                                                                  |
 | ---------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
