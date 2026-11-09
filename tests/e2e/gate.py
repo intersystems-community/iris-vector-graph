@@ -124,6 +124,9 @@ GROUPS: Dict[str, Group] = {
     # record removed), so it needs one of its own; test_463_refused_reads_e2e makes a user without SELECT there.
     "r463half": Group("IVG_R463_HALF_NS", "463H", "graph_kg"),
     "r463priv": Group("IVG_R463_PRIV_NS", "463P", "graph_kg"),
+    # 4.6.4: test_464_caller_txn_e2e makes a table of its own (the caller's rows) beside IVG's and opens transactions
+    # on several connections at once, so it has a namespace to itself.
+    "r464txn": Group("IVG_R464_TXN_NS", "464T", "graph_kg"),
 }
 #: Namespace variables an E2E module cannot be given per run, and why (tests/unit/test_460_gate_namespace_vars.py).
 SESSION_NAMESPACES: Dict[str, str] = {
