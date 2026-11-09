@@ -455,7 +455,8 @@ replace those. The reading row, as written here, is checked on 2026.3.0AI and on
   global) and `CALL ivg.ppr(['a'], 0.85, 20) YIELD node, score`, which runs it. `betweenness_centrality` answers the
   same list with either: the nodes on some shortest path, highest first. At `R` its ObjectScript tier cannot write its
   work area, so the slower Python walk answers, and a WARNING carrying IRIS's `<PROTECT>` says so on every call: a log
-  alert on WARNING sees one for each call a reading role makes.
+  alert on WARNING sees one for each call a reading role makes. A namespace where a named graph holds edges skips
+  that tier at every role and says nothing: the Python walk answers there anyway, from the default graph.
 - The class dictionary is not readable in SQL by these roles; IVG asks it over the Native API instead. That includes
   which ANN (HNSW) indexes the vector tables have: `status()` asks `Graph.KG.Meta.HnswIndexes`, a class method these
   roles may run, and reports the index state as it does for `_SYSTEM`.

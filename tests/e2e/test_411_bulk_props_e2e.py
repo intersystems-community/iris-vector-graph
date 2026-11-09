@@ -79,7 +79,10 @@ class TestBulkPropsMatchCreateNode:
         one, bulk = _props(iris_connection, pfx + "one"), _props(iris_connection, pfx + "bulk")
         assert bulk == one, f"bulk {bulk!r} != create_node {one!r}"
         assert bulk["name"] == "Olaparib" and bulk["b"] == "true"
-        assert all(isinstance(v, str) for v in bulk.values()), bulk
+        # 4.6.4: a number is stored as a number (it was its text), so it reads back typed; how the raw column reads
+        # depends on the driver (5.4.1 answers a $DOUBLE's text), get_node() does not
+        node = engine.get_node(pfx + "bulk")
+        assert (type(node["k"]), node["k"], type(node["n"]), node["n"]) == (int, 7, float, 1.5), node
 
 
 class TestQuickstartShapedQueries:

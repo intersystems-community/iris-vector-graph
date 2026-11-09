@@ -149,6 +149,18 @@ def _calls(engine, conn) -> dict:
             assert want <= _ids(_one(conn, f"SELECT {s}{sql}", params)), sql
         return check
 
+    def txn():
+        # Graph.KG.Txn (4.6.4): Begin opens one level over the process's and answers it; End and Undo of that level
+        # answer the level under it; a level below 1 answers $TLEVEL and changes nothing
+        base = int(_one(conn, f"SELECT {s}Txn_End(0)"))
+        assert int(_one(conn, f"SELECT {s}Txn_Undo(0)")) == base
+        level = int(_one(conn, f"SELECT {s}Txn_Begin(0)"))
+        assert level == base + 1
+        assert int(_one(conn, f"SELECT {s}Txn_Undo(?)", [level])) == base
+        level = int(_one(conn, f"SELECT {s}Txn_Begin(0)"))
+        assert level == base + 1
+        assert int(_one(conn, f"SELECT {s}Txn_End(?)", [level])) == base
+
     def dijkstra():
         got = json.loads(_one(conn, f"SELECT {s}DijkstraPath(?, ?)", ["n1", "n3"]))
         text = json.dumps(got)
@@ -183,6 +195,10 @@ def _calls(engine, conn) -> dict:
         "MatchEdges": edges("MatchEdges(?, ?, ?)", ["n1", "knows", 0], {"n2"}),
         "MatchEdgesAllGraphs": edges("MatchEdgesAllGraphs(?, ?, ?)", ["n5", "knows", 0], {"n6"}),
         "DijkstraPath": dijkstra,
+        # one round trip calls all three
+        "Txn_Begin": txn,
+        "Txn_End": txn,
+        "Txn_Undo": txn,
         # the seed's three temporal edges are three distinct triples, each asserted
         "backfill_temporal_rows": eq("backfill_temporal_rows()", [], 3, int),
         # nodes, rdf_labels, rdf_props, rdf_edges

@@ -146,8 +146,11 @@ def drop_reader(tag: str, prefix: str = PREFIX, namespace: str = "") -> None:
 
 
 def seed(engine) -> None:
-    """The default graph a -> b -> c -> d (KNOWS), each node labelled P with a name; nothing else in it."""
-    engine.erase_graph(None)
+    """The default graph a -> b -> c -> d (KNOWS), each node labelled P with a name; nothing else in it.
+
+    Every graph is erased first: a named graph another module left with edges (test_460_r192's r192g) makes
+    betweenness skip its ObjectScript tier, whose WARNING at R test_460_r202 reads (the 4.6.4 gate, b5b6dabf)."""
+    engine.erase_all()
     for n in "abcd":
         assert engine.create_node(n, labels=["P"], properties={"name": n.upper()}) is True
     for s, o in (("a", "b"), ("b", "c"), ("c", "d")):
