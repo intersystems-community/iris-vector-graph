@@ -6868,12 +6868,12 @@ def _bind_params_in(node, params, inside=False):
         if inside and node.is_parameter and node.name in params:
             return ast.Literal(params[node.name])
         return node
-    if isinstance(node, (list, dict)):
-        items = list(node.items()) if isinstance(node, dict) else list(enumerate(node))
-        new = {k: _bind_params_in(x, params, inside) for k, x in items}
-        if all(new[k] is x for k, x in items):
-            return node
-        return new if isinstance(node, dict) else [new[i] for i in range(len(node))]
+    if isinstance(node, list):
+        bound = [_bind_params_in(x, params, inside) for x in node]
+        return node if all(b is x for b, x in zip(bound, node)) else bound
+    if isinstance(node, dict):
+        bound = {k: _bind_params_in(x, params, inside) for k, x in node.items()}
+        return node if all(bound[k] is x for k, x in node.items()) else bound
     if isinstance(node, ast.Literal):
         if not isinstance(node.value, (list, dict)):
             return node
