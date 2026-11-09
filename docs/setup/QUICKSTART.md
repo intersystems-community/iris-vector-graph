@@ -124,10 +124,10 @@ Output:
 ```
 
 Each node has an ID you choose (`gene:BRCA1`), any number of labels, and properties. The edges name their endpoints by
-ID. A number in a node's properties, `{"year": 2014}` say, reads back as the string `'2014'` when `bulk_create_nodes`
-wrote it; filters and `ORDER BY` still treat it as the number
-([Known issues](../KNOWN_ISSUES.md#a-property-cannot-tell-a-number-from-a-string-that-spells-it)). Other ways to load
-data (NDJSON, RDF, OBO, networkx) are in [Data formats](DATA_FORMATS.md#2-batches).
+ID. A number in a node's properties, `{"year": 2014}` say, reads back as the number 2014, as a Cypher `CREATE` of it
+does; one that 4.6.3 or earlier stored reads back as the string `'2014'`, which filters and `ORDER BY` still treat as
+the number ([Known issues](../KNOWN_ISSUES.md#a-property-cannot-tell-a-number-from-a-string-that-spells-it)). Other
+ways to load data (NDJSON, RDF, OBO, networkx) are in [Data formats](DATA_FORMATS.md#2-batches).
 
 ---
 
