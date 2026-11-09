@@ -264,7 +264,7 @@ def _server_loader_node(node: Dict[str, Any]) -> Dict[str, Any]:
         bound = prop_value(v)
         if isinstance(bound, float):
             doubles.append(k)
-            bound = repr(bound)  # 'nan', 'inf' and '-inf' too, which $DOUBLE reads
+            bound = repr(bound)
         props[k] = bound
     out = {"id": node["id"], "labels": node.get("labels", []), "props": props}
     if doubles:

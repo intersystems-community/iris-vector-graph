@@ -339,7 +339,8 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
   (`Parsing error`). So does an `UNWIND` of such a list (`WITH collect(n.p) AS c UNWIND c AS e RETURN e`).
 - **Cause:** the predicates and the `UNWIND` read the list's elements through IRIS's `JSON_TABLE`, whose JSON has no
   NaN or infinity.
-- **Versions:** all 4.x.
+- **Versions:** all 4.x. The Python API (`create_node`, `bulk_create_nodes` and the other Python writers) stores NaN
+  and the infinities as their text (`'nan'`), so a value it wrote is not affected.
 - **Workaround:** filter such values out first (`WHERE n.p = n.p`, which NaN fails, or `toString(n.p) <> 'NaN'`).
 - **Check:** the error names `Parsing error`.
 

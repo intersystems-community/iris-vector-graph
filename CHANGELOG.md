@@ -13,9 +13,12 @@
   `create_node`, `store_node`, `bulk_create_nodes` (both its paths) and the other Python writers store a number as a
   Cypher write stores it: `reify_edge(props=...)`, `import_graph_ndjson`, the engine's `load_networkx`,
   `BulkLoader.load_nodes` and `BulkLoader.load_networkx`, and `IRISGraphStore.write_nodes`. So `RETURN n.age`,
-  `get_node()`, a whole node, `ORDER BY` and arithmetic see 30 and 0.5, a float stays a float (2.0 reads as 2.0, NaN
-  and infinities as floats), and a string stays a string (`'30'` reads as `'30'`). Booleans, lists, maps and strings
-  are stored as before; an integer past 64 bits is still its text, as a Cypher parameter of one is.
+  `get_node()`, a whole node, `ORDER BY` and arithmetic see 30 and 0.5, a float stays a float (2.0 reads as 2.0),
+  and a string stays a string (`'30'` reads as `'30'`). Booleans, lists, maps and strings are stored as before; an
+  integer past 64 bits is still its text, as a Cypher parameter of one is. NaN and the infinities are still stored as
+  their text (`'nan'`, `'inf'`, `'-inf'`) and read back as it: stored as numbers, they failed every read of a list
+  holding one (`collect(n.p)` then `UNWIND`, `any(e IN [n.p] WHERE ...)`, SQLCODE -400
+  `Parsing error`), as one a Cypher write stores does ([Known issues](docs/KNOWN_ISSUES.md)).
 - **Two writers lost other values.** `IRISGraphStore.write_nodes` stored a string in JSON quotes, so `'TP53'` read
   back as `'"TP53"'`, and stored a None as the text `null`; it now stores the string and skips a None, as
   `create_node` does. The engine's `load_networkx` stored each attribute's `str()`: a list as Python's repr

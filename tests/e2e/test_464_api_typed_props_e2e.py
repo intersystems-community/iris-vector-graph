@@ -205,23 +205,26 @@ def test_text_a_4_6_3_write_left_reads_as_text_until_rewritten(engines):
 #: Not 1e300 or 1e-300, whose IRIS text is 40 characters or more, which CY_TYPED leaves unmarked: the default route
 #: reads 1e300 as an int, and under driver 5.4.1 the SQL route reads both as IRIS's text, whoever wrote them (a Cypher
 #: CREATE of them too, measured). An open defect of the read, not of these writes.
-FLOATS = {"a": 0.1, "b": 1 / 3, "c": 1e20, "d": 1e-10, "e": -2.5e-7, "f": 123456789.123, "g": float("inf"),
-          "h": float("-inf"), "n": float("nan")}
+FLOATS = {"a": 0.1, "b": 1 / 3, "c": 1e20, "d": 1e-10, "e": -2.5e-7, "f": 123456789.123}
+#: NaN and the infinities stay their text, as 4.6.3 stored them: a stored $DOUBLE NaN fails a read of a list holding it
+#: (`collect()` then UNWIND, `any(e IN [n.p] ...)`, -400 "Parsing error": IRIS's JSON has no NaN; KNOWN_ISSUES),
+#: which the 4.6.4 gate found when the API stored them as $DOUBLEs (b5b6dabf).
+NON_FINITE = {"g": (float("inf"), "inf"), "h": (float("-inf"), "-inf"), "n": (float("nan"), "nan")}
 
 
 @pytest.mark.parametrize("path", ["create_node", "bulk_server", "bulk_sql"])
 def test_floats_round_trip_exactly(engines, path):
-    """Each float reads back as the same float (the $DOUBLE a Cypher write of it stores), NaN and infinities too."""
-    import math
-
+    """Each finite float reads back as the same float (the $DOUBLE a Cypher write of it stores); NaN and the
+    infinities read back as their text, and a list read over them answers."""
     from iris_vector_graph import IRISGraphEngine
     from iris_vector_graph.capabilities import IRISCapabilities
 
     e = engines["default"]
     nid = f"t464:floats:{path}"
+    props = {**FLOATS, **{k: v for k, (v, _) in NON_FINITE.items()}}
     try:
         if path == "create_node":
-            assert e.create_node(nid, labels=[LABEL], properties=FLOATS)
+            assert e.create_node(nid, labels=[LABEL], properties=props)
         else:
             w = e
             if path == "bulk_sql":
@@ -230,17 +233,18 @@ def test_floats_round_trip_exactly(engines, path):
             else:
                 e.capabilities = None
                 assert e.capabilities.objectscript_deployed
-            assert w.bulk_create_nodes([{"id": nid, "labels": [LABEL], "properties": dict(FLOATS)}]) == [nid]
+            assert w.bulk_create_nodes([{"id": nid, "labels": [LABEL], "properties": dict(props)}]) == [nid]  # the batch path adds "id"
         e.conn.commit()
-        q = f"MATCH (n:{LABEL} {{node_id: $id}}) RETURN {', '.join('n.' + k for k in FLOATS)}"
+        q = f"MATCH (n:{LABEL} {{node_id: $id}}) RETURN {', '.join('n.' + k for k in props)}"
+        want = list(FLOATS.values()) + [text for _, text in NON_FINITE.values()]
+        listed = (f"MATCH (n:{LABEL} {{node_id: $id}}) WITH n, collect(n.n) AS c UNWIND c AS x "
+                  "RETURN x, any(y IN [n.h] WHERE y IS NOT NULL)")
         for route in ns463.ROUTES:
             (row,) = ns463.rows(engines[route], q, {"id": nid})
-            assert [type(v).__name__ for v in row] == ["float"] * len(FLOATS), (route, row)
-            assert math.isnan(row[-1]), (route, row)
-            assert row[:-1] == list(FLOATS.values())[:-1], (route, row)
+            assert [(type(v).__name__, v) for v in row] == [(type(v).__name__, v) for v in want], (route, row)
+            assert [list(r) for r in ns463.rows(engines[route], listed, {"id": nid})] == [["nan", True]], route
         node = e.get_node(nid)
-        assert [node[k] for k in FLOATS if k != "n"] == [v for k, v in FLOATS.items() if k != "n"]
-        assert math.isnan(node["n"])
+        assert [node[k] for k in props] == want
     finally:
         e.delete_node(nid)
         e.conn.commit()

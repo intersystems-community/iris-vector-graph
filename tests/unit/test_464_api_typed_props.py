@@ -14,7 +14,6 @@ The paths: `create_node`, `store_node`, `bulk_create_nodes` (batch SQL and the s
 from __future__ import annotations
 
 import json
-import math
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -54,11 +53,11 @@ def test_prop_value(value, bound, kind):
     assert (got, type(got)) == (bound, kind)
 
 
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
-def test_non_finite_floats_bind_as_floats(value):
-    # A Cypher write of $v = nan / inf stores the IRIS $DOUBLE and reads it back as the float.
-    got = prop_value(value)
-    assert type(got) is float and (math.isnan(got) if math.isnan(value) else got == value)
+@pytest.mark.parametrize("value,text", [(float("nan"), "nan"), (float("inf"), "inf"), (float("-inf"), "-inf")])
+def test_non_finite_floats_bind_as_their_text(value, text):
+    # A stored $DOUBLE NaN or infinity fails a list read over it (`collect(n.p)` then UNWIND, `any(e IN [n.p] ...)`:
+    # IRIS's JSON has no NaN, KNOWN_ISSUES), which a Cypher write of $v = nan already hits; the API keeps 4.6.3's text.
+    assert (prop_value(value), type(prop_value(value))) == (text, str)
 
 
 def test_int_and_float_subclasses_bind_as_plain_numbers():

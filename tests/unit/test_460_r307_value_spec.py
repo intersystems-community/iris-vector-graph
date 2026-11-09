@@ -95,10 +95,10 @@ def test_durations_sort_by_length():
          ["fminf", "im1", "fm05", "i0", "f1em7", "f095", "f1", "f2", "i7", "i2p53", "ibig", "f1e20", "finf", "fnan"]),
         ("node", "cy_create", "num",
          ["im1", "fm05", "i0", "f1em7", "f095", "f1", "f2", "i7", "i2p53", "ibig", "f1e20"]),
-        # 4.6.4: the API's numbers are numbers, sorted as Cypher's are (NaN after +infinity); before, 'nan', 'inf'
-        # and '-inf' were text spelling no number, which sorted before every number
+        # 4.6.4: the API's numbers are numbers, sorted as Cypher's are, but NaN and the infinities, which it still
+        # stores as the text 'nan', 'inf' and '-inf': strings spelling no number, which sort before every number
         ("node", "api_create", "num",
-         ["fminf", "im1", "fm05", "i0", "f1em7", "f095", "f1", "f2", "i7", "i2p53", "ibig", "f1e20", "finf", "fnan"]),
+         ["fminf", "finf", "fnan", "im1", "fm05", "i0", "f1em7", "f095", "f1", "f2", "i7", "i2p53", "ibig", "f1e20"]),
         # a string that spells a number sorts as the number whoever wrote it (KNOWN_ISSUES; openCypher would sort the
         # text, '.95' < '0.95' < '007' < '1.0' < '1e3' < '7')
         ("node", "cy_create", "numstr", ["s095", "sd95", "s10", "s007", "s7", "s1e3"]),

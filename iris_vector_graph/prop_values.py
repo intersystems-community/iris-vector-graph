@@ -79,6 +79,7 @@ outside a Cypher result (`get_node`, the embedding reads, a write's capture) dec
 from __future__ import annotations
 
 import json
+import math
 import numbers
 import re
 from typing import Any
@@ -105,11 +106,12 @@ _INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
 def prop_value(value: Any) -> Any:
     """What a Python write binds into `rdf_props.val`: what a Cypher write binds for the same value (4.6.4).
 
-    An integer within 64 bits as an int and a float as a float, so IRIS stores the number with its type and
-    `CY_TYPED` reads it back as one (an int 30 as 30, a float 2.0 as 2.0, NaN and infinities as floats); anything
-    else as `prop_text`: a boolean 'true' / 'false', a list or map its JSON text, a string itself. An integer past
-    64 bits is its text, as a Cypher parameter of one is. Before 4.6.4 every Python path bound `prop_text(v)`, so 30
-    was stored, and read back, as the string '30'.
+    An integer within 64 bits as an int and a finite float as a float, so IRIS stores the number with its type and
+    `CY_TYPED` reads it back as one (an int 30 as 30, a float 2.0 as 2.0); anything else as `prop_text`: a boolean
+    'true' / 'false', a list or map its JSON text, a string itself. An integer past 64 bits is its text, as a Cypher
+    parameter of one is. NaN and the infinities stay their text ('nan', 'inf', '-inf'), as before: a stored $DOUBLE
+    NaN fails every read of a list holding it (IRIS's JSON has no NaN; docs/KNOWN_ISSUES.md). Before 4.6.4 every
+    Python path bound `prop_text(v)`, so 30 was stored, and read back, as the string '30'.
     """
     if isinstance(value, bool) or type(value).__name__ in ("bool_", "bool"):  # numpy's bool is not a bool
         return prop_text(bool(value))
@@ -120,7 +122,8 @@ def prop_value(value: Any) -> Any:
         return v if _INT64_MIN <= v <= _INT64_MAX else str(v)
     if isinstance(value, numbers.Rational):  # a Fraction: its text, as before
         return prop_text(value)
-    return float(value)
+    f = float(value)
+    return f if math.isfinite(f) else prop_text(value)
 
 
 def parse_prop_text(text: Any) -> Any:
