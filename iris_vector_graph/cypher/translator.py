@@ -4635,6 +4635,9 @@ def _run_unwind_dml_rows(
             context.variable_aliases[_ualias] = "__foreach_literal__"
             context.foreach_literals[_ualias] = item_val
             _map_val = _extract_literal_value(item_val)
+            if isinstance(_map_val, ast.MapLiteral):
+                # `UNWIND [{k: $p}, {k: 1}] AS m CREATE (:X {v: m.k})`: the entries as a parameter's map has them (4.6.5)
+                _map_val = _constant_value(_map_val, context)
             if isinstance(_map_val, dict):
                 _iter_clauses = _bind_unwound_map_props(_iter_clauses, _ualias, _map_val)
         _bindings_changed(context)  # each row's writes follow the last row's
@@ -6844,6 +6847,68 @@ def _simple_having(expr, aggs: set) -> bool:
     return False
 
 
+_BIND_THROUGH = (
+    ast.CreateClause,
+    ast.MergeClause,
+    ast.MergeAction,
+    ast.SetClause,
+    ast.SetItem,
+    ast.UnwindClause,
+    ast.ForeachClause,
+    ast.GraphPattern,
+    ast.NodePattern,
+    ast.RelationshipPattern,
+)
+
+
+def _bind_params_in(node, params, inside=False):
+    """`node` with each `$name` inside a list or map literal replaced by the parameter's value, as a literal; `node`
+    itself when there is none (the tree is cached: it is copied, never changed)."""
+    if isinstance(node, ast.Variable):
+        if inside and node.is_parameter and node.name in params:
+            return ast.Literal(params[node.name])
+        return node
+    if isinstance(node, (list, dict)):
+        items = list(node.items()) if isinstance(node, dict) else list(enumerate(node))
+        new = {k: _bind_params_in(x, params, inside) for k, x in items}
+        if all(new[k] is x for k, x in items):
+            return node
+        return new if isinstance(node, dict) else [new[i] for i in range(len(node))]
+    if isinstance(node, ast.Literal):
+        if not isinstance(node.value, (list, dict)):
+            return node
+        value = _bind_params_in(node.value, params, True)
+        return node if value is node.value else ast.Literal(value)
+    if isinstance(node, ast.MapLiteral):
+        entries = _bind_params_in(node.entries, params, True)
+        return node if entries is node.entries else ast.MapLiteral(entries=entries)
+    if inside or not isinstance(node, _BIND_THROUGH):
+        return node
+    changes = {}
+    for f in dataclasses.fields(node):
+        old = getattr(node, f.name)
+        new = _bind_params_in(old, params)
+        if new is not old:
+            changes[f.name] = new
+    return dataclasses.replace(node, **changes) if changes else node
+
+
+def _bind_literal_params(cypher_query, params):
+    """The query with the parameters held in a write's list and map literals bound (4.6.5): `UNWIND ['w1', $b] AS x
+    MERGE (:WT {id: x})` raised KeyError, and `CREATE (:WT {l: [1, $b]})` or `SET n.l = [1, $b]` bound the Variable
+    as the list's element (TypeError, not JSON serializable). A parameter on its own, or in a read, was never the
+    defect. Only what a write stores is bound: its patterns, SET values, UNWIND lists and FOREACH bodies."""
+    if not params or not cypher_query.is_mutation:
+        return cypher_query
+    parts = []
+    for part in cypher_query.query_parts:
+        clauses = _bind_params_in(part.clauses, params)
+        parts.append(part if clauses is part.clauses else dataclasses.replace(part, clauses=clauses))
+    if all(a is b for a, b in zip(parts, cypher_query.query_parts)):
+        return cypher_query
+    return dataclasses.replace(cypher_query, query_parts=parts)
+
+
 def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     # The graph is stamped on whichever SQLQuery we return, so a caller that never
     # runs the SQL (the variable-length path) can still see it. Set once here rather
@@ -6854,6 +6919,7 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     _check_deleted_entity_access(cypher_query)
     cypher_query = _clip_unwind_range_to_with_limit(cypher_query)
     cypher_query = _lower_delete_containers(cypher_query, params or {})
+    cypher_query = _bind_literal_params(cypher_query, params or {})
     cypher_query = _inline_plain_subqueries(cypher_query)
     cypher_query = _split_aggregate_with_where(cypher_query)
 
@@ -8527,6 +8593,10 @@ _TEMPORAL_CREATE_FNS = frozenset(
 #: `_fold_constant`'s answer for an expression it cannot work out (a variable in it, an operator it does not know)
 _NOT_CONSTANT = object()
 
+#: True while `_fold_or_raise` looks for the error a write's constant expression raises: an integer divided by an
+#: integer zero (`_fold_constant` otherwise answers `_NOT_CONSTANT` and leaves the expression to the caller).
+_fold_raises_zero: contextvars.ContextVar = contextvars.ContextVar("_fold_raises_zero", default=False)
+
 
 def _java_double_text(v: float):
     """openCypher's `toString()` of a float (Java's Double.toString) where Python's repr spells it the same, which is
@@ -8639,7 +8709,12 @@ def _fold_constant(expr, context=None):
     op = name[len("__arith_"):]
     if op == "+" and isinstance(a, str) and isinstance(b, str):
         return a + b
+    if op == "+" and ((isinstance(a, str) and number(b)) or (number(a) and isinstance(b, str))):
+        # a string and a number concatenate, the number as toString spells it (4.6.5: the AST was bound)
+        return "".join(_java_double_text(x) if isinstance(x, float) else str(x) for x in (a, b))
     if not (number(a) and number(b)):
+        if op in ("-", "*", "/", "%") and _fold_raises_zero.get():
+            raise TypeError(_ARITH_TYPE_MSG.format(op=op))
         return _NOT_CONSTANT
     both_int = isinstance(a, int) and isinstance(b, int)
     if op in ("+", "-", "*"):
@@ -8648,7 +8723,14 @@ def _fold_constant(expr, context=None):
         return a + b if op == "+" else a - b if op == "-" else a * b
     if op in ("/", "%"):
         if b == 0:
-            return _NOT_CONSTANT
+            if both_int:
+                if _fold_raises_zero.get():
+                    raise ZeroDivisionError(_ARITH_ZERO_MSG.format(kind="modulo" if op == "%" else "division"))
+                return _NOT_CONSTANT
+            # a float over zero is IEEE (4.6.0 R297; 4.6.5: a CREATE stores it as SET does)
+            if op == "%" or a == 0 or a != a:
+                return math.nan
+            return math.copysign(math.inf, float(a)) * math.copysign(1.0, float(b))
         if both_int:
             q = abs(a) // abs(b)
             q = q if (a < 0) == (b < 0) else -q
@@ -8754,9 +8836,60 @@ def _fold_case(expr, context):
     return None if expr.else_result is None else _fold_constant(expr.else_result, context)
 
 
+def _fold_or_raise(expr, context):
+    """`_fold_constant`, and when it cannot work `expr` out, the error a write of it raises (4.6.5).
+
+    An expression over literals that divides an integer by an integer zero, or takes `-`, `*`, `/` or `%` of a value
+    that is no number, fails as a read of it does: GraphWriteError naming `ArithmeticError: integer division by zero`
+    or the TypeError, raised before anything is written. It was bound as its AST, and the driver's `<LIST ERROR>` or
+    `<ARGUMENT ERROR>` named nothing. Any other expression `_fold_constant` leaves is `_NOT_CONSTANT`, left to the
+    caller as before.
+    """
+    from iris_vector_graph.errors import GraphWriteError
+
+    folded = _fold_constant(expr, context)
+    if folded is not _NOT_CONSTANT:
+        return folded
+    token = _fold_raises_zero.set(True)
+    try:
+        _fold_constant(expr, context)
+    except (ZeroDivisionError, TypeError) as exc:
+        raise GraphWriteError("execute_cypher", exc) from exc
+    finally:
+        _fold_raises_zero.reset(token)
+    return _NOT_CONSTANT
+
+
+def _constant_value(v, context):
+    """The Python value of a list or map literal a write stores, its elements worked out (4.6.5): a literal, a
+    parameter, the UNWIND row's value, or a computation over them (`[1, 1 + 1]`, `[i, i * 2]`). `_NOT_CONSTANT` when an
+    element is none of these (a property of a matched node, say), which the caller keeps as it kept it."""
+    if isinstance(v, ast.Literal):
+        return _constant_value(v.value, context) if isinstance(v.value, (list, dict)) else v.value
+    if isinstance(v, ast.MapLiteral):
+        return _constant_value(v.entries, context)
+    if isinstance(v, (list, dict)):
+        items = v.items() if isinstance(v, dict) else enumerate(v)
+        out = {} if isinstance(v, dict) else [None] * len(v)
+        for k, x in items:
+            x = _constant_value(x, context)
+            if x is _NOT_CONSTANT:
+                return _NOT_CONSTANT
+            out[k] = x
+        return out
+    if isinstance(v, ast.Variable):
+        raw = (getattr(context, "foreach_literals", None) or {}).get(v.name)
+        if raw is not None and not v.is_parameter and context.variable_aliases.get(v.name) == "__foreach_literal__":
+            return _constant_value(raw, context)
+        return _fold_or_raise(v, context)
+    if isinstance(v, (ast.FunctionCall, ast.CaseExpression, ast.BooleanExpression)):
+        return _fold_or_raise(v, context)
+    return v if v is None or isinstance(v, (bool, int, float, str)) else _NOT_CONSTANT
+
+
 def _create_resolve_prop_value(v, context):
     if isinstance(v, (ast.FunctionCall, ast.CaseExpression, ast.BooleanExpression)):
-        folded = _fold_constant(v, context)
+        folded = _fold_or_raise(v, context)
         if folded is not _NOT_CONSTANT:
             return folded
     if isinstance(v, ast.Literal):
@@ -8786,7 +8919,9 @@ def _create_resolve_prop_value(v, context):
                     else:
                         resolved.append(item)
                 val = resolved
-            return json.dumps(val)
+            # the elements a write computes or reads from a parameter or the UNWIND row are worked out (4.6.5)
+            worked = _constant_value(val, context)
+            return json.dumps(val if worked is _NOT_CONSTANT else worked)
         return val
     if isinstance(v, ast.Variable) and v.name in context.input_params:
         val = context.input_params[v.name]
@@ -10310,6 +10445,34 @@ def _merge_incoming_rows(context, pre) -> Optional[tuple]:
     )
 
 
+def _merge_action_list_value(item, context):
+    """An ON CREATE / ON MATCH `SET n.k = v` of a node, `v` a list literal or a NaN or infinity (4.6.5). A list is
+    stored as the JSON text `SET` stores: the value reached the statement as the list of its Literal elements, which
+    the driver refuses (`<ARGUMENT ERROR> Unsupported argument type`), with or without a parameter in it. A
+    relationship's property keeps its own branch."""
+    value = getattr(item, "value", None)
+    if not (
+        isinstance(item, ast.SetItem)
+        and isinstance(item.expression, ast.PropertyReference)
+        and item.expression.variable not in context.rel_variables
+    ):
+        return item
+    if isinstance(value, (ast.FunctionCall, ast.CaseExpression, ast.BooleanExpression)):
+        # `ON CREATE SET n.v = 0.0 / 0.0`: NaN or an infinity, bound as the float, as SET and `= $v` store it. The SQL
+        # of the division stored the text 'NAN'.
+        folded = _fold_constant(value, context)
+        if isinstance(folded, float) and not math.isfinite(folded):
+            return dataclasses.replace(item, value=ast.Literal(folded))
+        return item
+    if not (isinstance(value, ast.Literal) and isinstance(value.value, list)):
+        return item
+    _check_property_value_type(value, context, item.expression.property_name)
+    worked = _constant_value(value, context)
+    if worked is _NOT_CONSTANT:
+        return item
+    return dataclasses.replace(item, value=ast.Literal(json.dumps(worked)))
+
+
 def _merge_action_items(items, context) -> list:
     """ON CREATE / ON MATCH `items`, a node's `SET n += {map}` (or `+= $map`) as one `SET n.k = v` per key.
 
@@ -10324,7 +10487,7 @@ def _merge_action_items(items, context) -> list:
         if isinstance(item, ast.SetItem) and isinstance(expr, ast.Variable) and expr.name not in context.rel_variables:
             entries = _set_map_entries(item.value, context)
         if entries is None:
-            out.append(item)
+            out.append(_merge_action_list_value(item, context))
             continue
         if not item.merge:
             raise SyntaxError(
@@ -11433,7 +11596,8 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
     if isinstance(expr, ast.Literal):
         val = _extract_literal_value(expr)
         if isinstance(val, (list, dict)):
-            val = json.dumps(val)
+            worked = _constant_value(val, context)  # `[1, 1 + 1]`, `[i, i * 2]` (4.6.5)
+            val = json.dumps(val if worked is _NOT_CONSTANT else worked)
         return ("?", [val], False)
 
     if isinstance(expr, ast.Variable):

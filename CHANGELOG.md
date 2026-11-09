@@ -2,6 +2,31 @@
 
 # Changelog
 
+### v4.6.5 (unreleased)
+
+**Fixed: Cypher writes**
+
+- **A `$param` inside a list literal of a write is stored as its value.** `UNWIND ['w1', $b] AS x MERGE (:WT {id: x})`
+  and `UNWIND [$b] AS x CREATE (:WT {id: x})` raised `KeyError: 'b'`, and `CREATE (:WT {id: 'w4', l: [1, $b]})` and
+  `MATCH (n {node_id: 'w4'}) SET n.l = [1, $b]` raised `TypeError: Object of type Variable is not JSON serializable`.
+  Each now stores what the same query with the value spelled in stores: the nodes `w1` and `w2`, and `n.l` read back as
+  `[1, 2]`. The same holds for a parameter in a `MERGE` pattern's list, in an `UNWIND` of lists or maps
+  (`UNWIND [{id: 'u1', l: [1, $b]}] AS m CREATE (:WT {id: m.id, l: m.l})`) and in a `FOREACH` list. A list element the
+  query computes (`[1, 1 + 1]`, `[i, i * 2]` after an `UNWIND`) is stored too: it raised the same `TypeError`. A nested
+  list or a map holding a parameter is refused as `InvalidPropertyType`, as the literal is. Three shapes raised the
+  driver's `<ARGUMENT ERROR>` with no parameter in them and are fixed with these: `MERGE (n:WT {id: 'm'}) ON CREATE
+SET n.l = [1, 2]` (and `ON MATCH SET`), `UNWIND [{id: 'u', l: 5}] AS m CREATE (:WT {id: m.id, l: m.l})`, and
+  `CREATE (:WT {v: 'a' + 1})`.
+- **A write of NaN, an infinity or a failing value says what happened.** `CREATE (:WT {id: 'w6', v: 0.0 / 0.0})` and
+  `{v: 1.0 / 0.0}` raised `GraphWriteError` with `<ARGUMENT ERROR> Bad argument given; Details: Unsupported argument
+type` (`<LIST ERROR>` under driver 5.4.1), where `SET n.w = 0.0 / 0.0` and `v: $v` with `float('nan')` stored the
+  value. `CREATE` and `MERGE` now store NaN, Infinity and -Infinity as those do (a float, read back as `nan` and `inf`),
+  and so does `MERGE ... ON CREATE SET n.v = 0.0 / 0.0`, which stored the text `'NAN'`. A value that fails raises
+  `GraphWriteError` with the cause in its text and writes nothing: `UNWIND [1, 0] AS x CREATE (n:Zh {node_id: 'zh' +
+toString(1 / x)})` said `<LIST ERROR>` and now says `execute_cypher failed, nothing written: ArithmeticError:
+integer division by zero`, as `RETURN 1 / 0` names it. An integer `% 0` says `modulo`, and `'a' * 2` says `TypeError:
+InvalidArgumentType: * needs two numbers and got a value that is not one`. The Python API still stores NaN as text.
+
 ### v4.6.4 (2026-11-09)
 
 **Fixed: Python writes**
