@@ -7,7 +7,8 @@ The graph, worked by hand (label L182, type T182, ids unique to the run). openCy
 `Double.toString` does: `0.95`, `1.0`, `1.23456789E7` (exponent above 6), `1.0E-4` (below -3), `0.001`.
 
 Nodes, `toString` of `s`, `f`, `i`:
-- n_api   `create_node(properties={s: 0.95, f: 1.0, i: 7})` (stored as the text '0.95', '1.0', '7'): '0.95', '1.0', '7'
+- n_api   `create_node(properties={s: 0.95, f: 1.0, i: 7})` (from 4.6.4 as Cypher stores them; the text '0.95',
+          '1.0', '7' before): '0.95', '1.0', '7'
 - n_cy    `CREATE (:L182 {s: 0.95, f: 1.0, i: 7})` (a $DOUBLE, a $DOUBLE, an integer): '0.95', '1.0', '7'
 - n_set   `SET n.s = 0.95, n.f = 1.0, n.i = 7`: '0.95', '1.0', '7'
 - n_param `SET n.s = $s, n.f = $f, n.i = $i` (0.95, 1.0, 7): '0.95', '1.0', '7'
@@ -158,5 +159,5 @@ def test_the_stored_values_read_as_before(g):
     """Read-side only: RETURN of the property itself answers what 4.6.0's R168/R169 entry says it does."""
     got = _by_id(g, "MATCH (n:L182) WHERE n.s IS NOT NULL RETURN n.id, n.s")
     assert got == {
-        "n_api": ["0.95"], "n_cy": [0.95], "n_set": [0.95], "n_param": [0.95], "n_str": [".95"], "n_cystr": [".95"],
+        "n_api": [0.95], "n_cy": [0.95], "n_set": [0.95], "n_param": [0.95], "n_str": [".95"], "n_cystr": [".95"],
     }

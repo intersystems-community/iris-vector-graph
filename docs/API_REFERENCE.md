@@ -323,7 +323,7 @@ def reify_edge(
     edge_id: int,
     reifier_id: str = None,
     label: str = 'Reification',
-    props: Dict[str, str] = None,
+    props: Dict[str, Any] = None,
 ) -> Optional[str]
 ```
 

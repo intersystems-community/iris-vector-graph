@@ -7,7 +7,8 @@ Cypher-written number on the SQL path as IRIS text: ``'.94999999999999995559'`` 
 
 The graph, by hand (label ``T218``, ids unique to the run):
 - ``c``, written by Cypher: ``CREATE {f: 0.95, h: 0.5, i: 29, s: 2.5}``, then ``SET g = 0.95, k = 2.5 * 2``;
-- ``a``, written by ``create_node``: ``{f: 0.95, h: 0.5, i: 29}``, which the API stores as the text '0.95', '0.5', '29';
+- ``a``, written by ``create_node`` with the strings ``{f: '0.95', h: '0.5', i: '29'}``: what 4.6.3 and earlier stored
+  for the numbers 0.95, 0.5 and 29 (4.6.4 stores an API-written number as a number: test_464_api_typed_props_e2e);
 - ``z1`` and ``z2``, written by Cypher: ``f`` 10.5 and 9.5.
 
 So:
@@ -49,7 +50,8 @@ def g(iris_connection):
     ):
         r = e.execute_cypher(q, params)
         assert r.error is None, (q, r.error)
-    assert e.create_node(ids["a"], labels=["T218"], properties={"f": 0.95, "h": 0.5, "i": 29, key: 0.95})
+    # the text 4.6.3's create_node stored for 0.95, 0.5, 29: such rows stay in a database, and read as text
+    assert e.create_node(ids["a"], labels=["T218"], properties={"f": "0.95", "h": "0.5", "i": "29", key: "0.95"})
     with contextlib.suppress(Exception):
         iris_connection.commit()
     yield e, ids, key

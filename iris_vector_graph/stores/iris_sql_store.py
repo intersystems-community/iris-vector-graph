@@ -13,7 +13,7 @@ from iris_vector_graph._collation import rank_key as _rank_key
 from iris_vector_graph._collation import collation_key
 from iris_vector_graph._write_txn import is_duplicate, rollback
 from iris_vector_graph.errors import GraphWriteError, PowerIterationFailedConvergence
-from iris_vector_graph.prop_values import read_node_value
+from iris_vector_graph.prop_values import prop_value, read_node_value
 from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph.result import IVGResult
 from iris_vector_graph.routing import graph_scope_predicate
@@ -1227,9 +1227,14 @@ class IRISGraphStore:
                 for label in node.get("labels") or []:
                     _skip_duplicate(cursor, f"INSERT INTO {self._ivg_schema}.rdf_labels (s, label) VALUES (?, ?)", [nid, label])
                 for key, val in (node.get("properties") or {}).items():
-                    val_str = json.dumps(val) if not isinstance(val, str) else f'"{val}"'
+                    if val is None:
+                        continue
+                    # 4.6.4: as create_node binds it (prop_value). A string was stored JSON-quoted ('"TP53"') and
+                    # anything else as its JSON text, which get_nodes (CY_TYPED since 4.6.0 R307) read back as the
+                    # quoted text and '30'
                     _skip_duplicate(
-                        cursor, f'INSERT INTO {self._ivg_schema}.rdf_props (s, "key", val) VALUES (?, ?, ?)', [nid, key, val_str]
+                        cursor, f'INSERT INTO {self._ivg_schema}.rdf_props (s, "key", val) VALUES (?, ?, ?)',
+                        [nid, key, prop_value(val)],
                     )
                 written += 1
             cursor.execute("COMMIT")

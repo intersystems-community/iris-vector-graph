@@ -34,7 +34,7 @@ from iris_vector_graph.embedding_identity import (
     identity_from_config,
 )
 from iris_vector_graph.exceptions import EmbeddingIdentityConflict
-from iris_vector_graph.prop_values import prop_text
+from iris_vector_graph.prop_values import prop_value
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 from iris_vector_graph._validate import graph_index_key
 
@@ -3174,7 +3174,7 @@ class SchemaMixin:
         edge_id: int,
         reifier_id: str = None,
         label: str = "Reification",
-        props: Dict[str, str] = None,
+        props: Dict[str, Any] = None,
     ) -> Optional[str]:
         """Attach a reifier node to the ``rdf_edges`` row ``edge_id``, to hold edge properties.
 
@@ -3218,7 +3218,7 @@ class SchemaMixin:
                         f'INSERT INTO {self._t("rdf_props")} (s, "key", val) '
                         f"SELECT ?, ?, ? WHERE NOT EXISTS "
                         f'(SELECT 1 FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?)',
-                        [reifier_id, key, prop_text(val), reifier_id, key],
+                        [reifier_id, key, prop_value(val), reifier_id, key],  # 4.6.4: a number as itself
                     )
             self.conn.commit()
             return reifier_id

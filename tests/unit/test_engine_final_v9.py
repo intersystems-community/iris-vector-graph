@@ -2064,7 +2064,7 @@ class TestLoadNetworkxProgressModulo:
         assert call_kw.get("node_id") == "12345"
 
     def test_non_str_prop_value_converted(self):
-        """Non-string property values converted via str()."""
+        """A number goes to create_node as the number (4.6.4: it was its str(), stored and read back as text)."""
         eng, conn, cur = make_engine()
         eng.create_node = MagicMock(return_value=True)
         eng.create_edge = MagicMock(return_value=False)
@@ -2080,7 +2080,7 @@ class TestLoadNetworkxProgressModulo:
         eng.load_networkx(G, auto_sync=False)
         call_kw = eng.create_node.call_args.kwargs
         props = call_kw.get("properties", {})
-        assert props.get("count") == "42"
+        assert (props.get("count"), type(props.get("count"))) == (42, int)
 
 
 # ---------------------------------------------------------------------------

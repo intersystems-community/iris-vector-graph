@@ -28,7 +28,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from iris_vector_graph.exceptions import BulkLoadError
-from iris_vector_graph.prop_values import prop_text
+from iris_vector_graph.prop_values import prop_value
 from iris_vector_graph.schema import _call_classmethod
 from iris_vector_graph.utils import execute_decoded, is_list_error
 
@@ -308,12 +308,13 @@ class BulkLoader:
                 for k, v in attrs.items():
                     if k in (label_attr, "namespace") or v is None:
                         continue
-                    s = prop_text(v)
-                    if len(s) > 60000:
+                    # 4.6.4: as create_node binds it, a number as the number (it was str(), read back as text)
+                    s = prop_value(v)
+                    if isinstance(s, str) and len(s) > 60000:
                         s = s[:60000]
                     props[k] = s
                 for k, v in props.items():
-                    prop_params.append([self.graph, nid, k, str(v)])
+                    prop_params.append([self.graph, nid, k, v])
 
             if prop_params:
                 logger.info(f"Phase 3: Loading {len(prop_params):,} properties (noindex={use_noindex})...")

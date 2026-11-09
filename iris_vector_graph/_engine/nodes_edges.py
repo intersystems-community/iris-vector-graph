@@ -17,7 +17,7 @@ from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED_
 from iris_vector_graph._write_txn import is_duplicate as _is_duplicate
 from iris_vector_graph._write_txn import rollback as _rollback
 from iris_vector_graph.errors import GraphWriteError, IVGError
-from iris_vector_graph.prop_values import decode_typed_text, prop_text, read_node_value
+from iris_vector_graph.prop_values import decode_typed_text, prop_value, read_node_value
 from iris_vector_graph.routing import graph_scope_predicate
 from iris_vector_graph.schema import GraphSchema
 from iris_vector_graph.schema_name import rewrite_schema_text
@@ -247,6 +247,29 @@ def _check_create_nodes(nodes: List[Any]) -> None:
                 f"bulk_create_nodes: node {i} has key(s) {', '.join(repr(k) for k in unknown)}, which it does not "
                 f"store; a node is {_CREATE_NODE_SHAPE}"
             )
+
+
+def _server_loader_node(node: Dict[str, Any]) -> Dict[str, Any]:
+    """One node of `Graph.KG.EdgeScan.BulkIngestNodesSQL`'s JSON: `id`, `labels`, `props` and, when a value is a
+    float, `doubles`, the keys whose value (sent as the float's repr text) the class stores as a $DOUBLE.
+
+    Every value is `prop_value`'s (4.6.4): an int a JSON integer, which the class stores as an IRIS integer; a
+    boolean, list, map or string its text. A class deployed before 4.6.4 ignores `doubles` and stores each value's
+    text, as it always did."""
+    props: Dict[str, Any] = {}
+    doubles = []
+    for k, v in {"id": node["id"], **(node.get("properties") or {})}.items():
+        if v is None:
+            continue
+        bound = prop_value(v)
+        if isinstance(bound, float):
+            doubles.append(k)
+            bound = repr(bound)  # 'nan', 'inf' and '-inf' too, which $DOUBLE reads
+        props[k] = bound
+    out = {"id": node["id"], "labels": node.get("labels", []), "props": props}
+    if doubles:
+        out["doubles"] = doubles
+    return out
 
 
 def _qualifiers_json(quals: Dict[str, Any], writer: str) -> Optional[str]:
@@ -991,7 +1014,8 @@ class NodesEdgesMixin:
             for k, v in props.items():
                 if v is None:
                     continue
-                val_str = prop_text(v)
+                # 4.6.4: the value as a Cypher write binds it (a number as the number; it was its text)
+                val_str = prop_value(v)
                 if _children_scoped:
                     prop_data.append([graph_id, node_id, k, val_str, graph_id, node_id, k])
                 else:
@@ -1578,19 +1602,10 @@ class NodesEdgesMixin:
                 # Serialised here, as the SQL path below does: the class method used
                 # to JSON-quote strings itself, so `name` read back as '"Olaparib"'.
                 # The `id` property is stored, as the SQL path and create_node store it (R089).
-                normalized = [
-                    {
-                        "id": n["id"],
-                        "labels": n.get("labels", []),
-                        "props": {
-                            k: prop_text(v)
-                            for k, v in {"id": n["id"], **(n.get("properties") or {})}.items()
-                            if v is not None
-                        },
-                    }
-                    for n in nodes
-                    if n.get("id")
-                ]
+                # 4.6.4: each value as create_node binds it (`prop_value`), so a number is stored as the number and
+                # reads back as one; it was its text. JSON cannot tell 2.0 from 2, so a float is sent as its repr and
+                # named in `doubles`, which the class stores as a $DOUBLE (what a Cypher write of a float stores).
+                normalized = [_server_loader_node(n) for n in nodes if n.get("id")]
                 created = []
                 for i in range(0, len(normalized), _BULK_CHUNK_SIZE):
                     chunk = normalized[i : i + _BULK_CHUNK_SIZE]
@@ -1676,7 +1691,7 @@ class NodesEdgesMixin:
                 for k, v in props.items():
                     if v is None:
                         continue
-                    val_str = prop_text(v)
+                    val_str = prop_value(v)  # 4.6.4: a number as the number, as create_node binds it
                     if _children_scoped:
                         # params: [graph_id, s, key, val, graph_id, s, key]
                         all_props.append(
@@ -2281,7 +2296,7 @@ class NodesEdgesMixin:
                         cursor.execute(
                             f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
                             "VALUES (?, ?, ?, ?)",
-                            [graph_id, node_id, k, prop_text(v)],
+                            [graph_id, node_id, k, prop_value(v)],
                         )
                 else:
                     cursor.execute(
@@ -2291,7 +2306,7 @@ class NodesEdgesMixin:
                     if v is not None:
                         cursor.execute(
                             f'INSERT INTO {self._t("rdf_props")} (s, "key", val) VALUES (?, ?, ?)',
-                            [node_id, k, prop_text(v)],
+                            [node_id, k, prop_value(v)],
                         )
             if "id" not in (properties or {}):
                 # 4.6.0 R181: the `id` property create_node writes, so `MATCH (n {id: ...})` and `n.id` find the

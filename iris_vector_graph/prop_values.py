@@ -79,6 +79,7 @@ outside a Cypher result (`get_node`, the embedding reads, a write's capture) dec
 from __future__ import annotations
 
 import json
+import numbers
 import re
 from typing import Any
 
@@ -96,6 +97,30 @@ def prop_text(value: Any) -> str:
     if isinstance(value, (dict, list)):
         return json.dumps(value)
     return str(value)
+
+
+_INT64_MIN, _INT64_MAX = -(2**63), 2**63 - 1
+
+
+def prop_value(value: Any) -> Any:
+    """What a Python write binds into `rdf_props.val`: what a Cypher write binds for the same value (4.6.4).
+
+    An integer within 64 bits as an int and a float as a float, so IRIS stores the number with its type and
+    `CY_TYPED` reads it back as one (an int 30 as 30, a float 2.0 as 2.0, NaN and infinities as floats); anything
+    else as `prop_text`: a boolean 'true' / 'false', a list or map its JSON text, a string itself. An integer past
+    64 bits is its text, as a Cypher parameter of one is. Before 4.6.4 every Python path bound `prop_text(v)`, so 30
+    was stored, and read back, as the string '30'.
+    """
+    if isinstance(value, bool) or type(value).__name__ in ("bool_", "bool"):  # numpy's bool is not a bool
+        return prop_text(bool(value))
+    if not isinstance(value, numbers.Real):  # a string, list, map or Decimal (a Decimal is no numbers.Real)
+        return prop_text(value)
+    if isinstance(value, numbers.Integral):
+        v = int(value)
+        return v if _INT64_MIN <= v <= _INT64_MAX else str(v)
+    if isinstance(value, numbers.Rational):  # a Fraction: its text, as before
+        return prop_text(value)
+    return float(value)
 
 
 def parse_prop_text(text: Any) -> Any:
@@ -179,7 +204,8 @@ def decode_typed_text(value: Any) -> Any:
     `rdf_props.val` is VARCHAR, and a Cypher write stores a number there as an IRIS number. intersystems-irispython
     5.4.0 read such a value as a Python number, 5.4.1 as IRIS's text (`.94999999999999995559`), so `CY_TYPED` marks
     it: a `$DOUBLE` is a float (0.95, and 5.0 for 5), an integer an int, a decimal with a fraction a float. Anything
-    without the mark (a string, an API-written number's text, a value a driver already typed) is returned as it is.
+    without the mark (a string, the text a Python write stored for a number before 4.6.4, a value a driver already
+    typed) is returned as it is.
     """
     if not isinstance(value, str) or not value.startswith(TYPED_MARK):
         return value

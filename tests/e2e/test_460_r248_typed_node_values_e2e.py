@@ -9,7 +9,8 @@ Run it under both drivers (the repo's .venv has 5.4.0; a fresh install gets 5.4.
 
 The graph, by hand (label ``T248``, ids unique to the run):
 - ``c``, written by Cypher: ``CREATE {f: 0.95, i: 29, s: 'x', g: 5.0}``, then ``SET k = 2.5 * 2``;
-- ``a``, written by ``create_node``: ``{f: 0.95, i: 29}``, which the API stores as the text '0.95', '29';
+- ``a``, written by ``create_node`` with the strings ``{f: '0.95', i: '29'}``: what 4.6.3 and earlier stored for the
+  numbers 0.95 and 29 (4.6.4 stores an API-written number as a number: test_464_api_typed_props_e2e);
 - ``a -[:R248]-> c``;
 - ``z1``, ``z2``, ``z3``, written by Cypher: ``price`` 10.0, 20.0, 30.0.
 
@@ -44,7 +45,8 @@ def g(iris_connection):
     run = uuid.uuid4().hex[:8]
     ids = {k: f"r248_{run}_{k}" for k in ("c", "a", "z1", "z2", "z3")}
     key = f"pp{run}"
-    assert e.create_node(ids["a"], labels=["T248"], properties={"f": 0.95, "i": 29, key: 0.95})
+    # the text 4.6.3's create_node stored for 0.95 and 29: such rows stay in a database, and read as text
+    assert e.create_node(ids["a"], labels=["T248"], properties={"f": "0.95", "i": "29", key: "0.95"})
     for q, params in (
         ("CREATE (:T248 {id: $id, f: 0.95, i: 29, s: 'x', g: 5.0})", {"id": ids["c"]}),
         ("MATCH (n:T248 {id: $id}) SET n.k = 2.5 * 2", {"id": ids["c"]}),

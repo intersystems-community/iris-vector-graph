@@ -8,7 +8,8 @@ Before R264, 5.4.1 read a Cypher-written 0.95 as IRIS's text, so the same stored
 The graph, by hand (label ``T264``, ids unique to the run):
 - ``c``, written by Cypher: ``CREATE {name: 'BRCA1', score: 0.95, count: 29}``, then ``SET k = 2.5 * 2`` (stored as an
   IRIS decimal, which reads as the integer 5, as R218 reads it);
-- ``a``, written by ``create_node``: ``{name: 'TP53', score: 0.95, count: 29}``, which the API stores as text.
+- ``a``, written by ``create_node`` with ``{name: 'TP53', score: '0.95', count: '29'}``: the text 4.6.3 and earlier
+  stored for the numbers 0.95 and 29 (4.6.4 stores them as numbers).
 
 So ``text_fn`` sees ``c`` as 'BRCA1', 0.95, 29, 5 (str, float, int, int) and ``a`` as 'TP53', '0.95', '29' (the API's
 text, as 4.5.x read it under either driver), and the embedder is asked for exactly those two texts.
@@ -37,7 +38,7 @@ def g(iris_connection):
     ):
         r = e.execute_cypher(q, {"id": ids["c"]})
         assert r.error is None, (q, r.error)
-    assert e.create_node(ids["a"], labels=["T264"], properties={"name": "TP53", "score": 0.95, "count": 29})
+    assert e.create_node(ids["a"], labels=["T264"], properties={"name": "TP53", "score": "0.95", "count": "29"})
     with contextlib.suppress(Exception):
         iris_connection.commit()
     yield e, ids

@@ -13,7 +13,8 @@ The batch, worked by hand. Before it: `a` exists, labels [Old], properties {name
     {id: b, labels: [L],   properties: {n: 5}}
     {id: c, labels: [G],   properties: {x: y}, graph: g89}
 After it: a has labels New and Old; name stays old, flag is 'true', keep k, id a. b in the default graph with
-label L, n '5', id b. c in graph g89 only, label G, x y, id c. Both answer [a, b, c].
+label L, n 5 (4.6.4: the number 5, as
+create_node stores it; the text '5' before), id b. c in graph g89 only, label G, x y, id c. Both answer [a, b, c].
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ def _engine(conn, server: bool):
 
 
 def _state(engine, ids):
+    from iris_vector_graph.prop_values import decode_typed_text
+
     marks = ",".join("?" * len(ids))
     cur = engine.conn.cursor()
     try:
@@ -42,8 +45,14 @@ def _state(engine, ids):
         nodes = set(cur.fetchall())
         cur.execute(f"SELECT graph_id, s, label FROM {engine._t('rdf_labels')} WHERE s IN ({marks})", ids)
         labels = set(cur.fetchall())
-        cur.execute(f'SELECT graph_id, s, "key", val FROM {engine._t("rdf_props")} WHERE s IN ({marks})', ids)
-        props = set(cur.fetchall())
+        # each value with the type it is stored with, whatever the driver (CY_TYPED's mark; 5.4.1 reads a stored
+        # number as IRIS's text); text without a mark ('true' here) as it is stored
+        cur.execute(
+            f'SELECT graph_id, s, "key", {engine._ivg_schema}.CY_TYPED(val) FROM {engine._t("rdf_props")} '
+            f"WHERE s IN ({marks})",
+            ids,
+        )
+        props = {(g, s, k, decode_typed_text(v)) for g, s, k, v in cur.fetchall()}
     finally:
         cur.close()
     return nodes, labels, props
@@ -84,7 +93,7 @@ def test_both_paths_write_the_hand_worked_rows(iris_connection, iris_master_clea
         ("", a, "keep", "k"),
         ("", a, "id", a),
         ("", a, "flag", "true"),
-        ("", b, "n", "5"),
+        ("", b, "n", 5),
         ("", b, "id", b),
         ("g89", c, "x", "y"),
         ("g89", c, "id", c),

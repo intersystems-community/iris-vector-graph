@@ -17,10 +17,10 @@ is NaN (Comparison1 [8], ReturnOrderBy1, WithOrderBy1). So, from the openCypher 
   for NaN); x % 0 is NaN;
 - null propagates first: `null / 0` and a missing property over 0 are null;
 - `-`, `*`, `/` and `%` over a string raise TypeError. A stored number keeps its stored form: a value the Python API
-  wrote as the text '7' is the number 7, as it was before (the API stores numbers as text).
+  stored as the text '7' (as it stored the number 7 before 4.6.4) is the number 7, as it was before.
 
 The graph, worked by hand: (:K297 {id: 'a', k: 2}), (:K297 {id: 'b', k: 3}), (:F297 {f: 2.5, g: -2.5, z: 0.0}),
-(:N297 {id: 'n'}) by Cypher CREATE; (:A297 {k: 7, f: 2.5}) by create_node (stored as the text '7', '2.5').
+(:N297 {id: 'n'}) by Cypher CREATE; (:A297 {k: '7', f: '2.5'}) by create_node (the text 4.6.3's create_node stored for 7 and 2.5).
 
 - k / 2: a 1, b 1 (integer division truncates); k % 2: a 0, b 1; k * 2: 4, 6; k - 1: 1, 2. A297 k * 2: 14.
 - every k / 0 and k % 0 (a literal zero, a computed one `n.k - n.k`, a parameter 0, a WITH column, an UNWIND
@@ -72,7 +72,7 @@ def engines():
         "(:N297 {id: 'n'}), (:O297 {k: true}), (:O297 {k: 'abc'}), (:D297 {dur: duration({months: 1, days: -14})})",
         raise_on_error=True,
     )
-    sql.create_node("r297api", labels=["A297"], properties={"k": 7, "f": 2.5})
+    sql.create_node("r297api", labels=["A297"], properties={"k": "7", "f": "2.5"})
     yield sql, native
     try:
         clean()

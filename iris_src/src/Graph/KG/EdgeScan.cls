@@ -356,13 +356,30 @@ ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 				}
 			}
 			If $IsObject(node.props) {
+				// 4.6.4: the keys whose value is a float, sent as its text and stored as a $DOUBLE, as a Cypher
+				// write stores a float (JSON cannot tell 2.0 from 2)
+				Kill tDoubles
+				If $IsObject(node.doubles) {
+					Set diter = node.doubles.%GetIterator()
+					While diter.%GetNext(.di, .dkey) {
+						If dkey '= "" { Set tDoubles(dkey) = "" }
+					}
+				}
 				Set piter = node.props.%GetIterator()
 				While piter.%GetNext(.key, .val) {
 					If key = "" { Continue }
-					// The caller sends prop_text() strings; stored as given, like create_node.
-					// Other JSON types are for direct callers: a boolean as true/false.
+					// The caller sends prop_value(): a number as a JSON number, stored as an IRIS number (4.6.4: it
+					// was stored as its text, which read back as a string), a float as its text named in doubles,
+					// anything else as its text, stored as given like create_node. A boolean (for direct callers)
+					// is stored as true/false.
 					Set tType = node.props.%GetTypeOf(key)
-					Set valStr = $Select($IsObject(val):val.%ToJSON(), tType="boolean":$Select(val:"true",1:"false"), 1:val_"")
+					If (tType = "string") && $Data(tDoubles(key)) {
+						Set valStr = $DOUBLE(val)
+					} ElseIf tType = "number" {
+						Set valStr = +val
+					} Else {
+						Set valStr = $Select($IsObject(val):val.%ToJSON(), tType="boolean":$Select(val:"true",1:"false"), 1:val_"")
+					}
 					// SQL's empty string is $Char(0): a host variable holding "" binds as NULL, and '' read back as null
 					// (4.6.0 R307; create_node stores '')
 					Set:valStr="" valStr = $Char(0)

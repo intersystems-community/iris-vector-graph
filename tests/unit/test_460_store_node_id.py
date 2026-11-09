@@ -73,7 +73,8 @@ def test_a_none_value_removes_the_property_instead_of_storing_none():
     eng.store_node("x", properties={"gone": None, "kept": 1})
     writes = _prop_writes(cursor)
     assert not any("None" in p for _, p in writes), writes
-    assert any(p == ["", "x", "kept", "1"] for _, p in writes), writes
+    # 4.6.4: the number itself, as a Cypher write binds it (it was the text "1")
+    assert any(p == ["", "x", "kept", 1] and type(p[3]) is int for _, p in writes), writes
     deletes = [c.args[1] for c in cursor.execute.call_args_list if c.args[0].lstrip().startswith("DELETE")]
     assert ["", "x", "gone"] in [list(d) for d in deletes], deletes
 

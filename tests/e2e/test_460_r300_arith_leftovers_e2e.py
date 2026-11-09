@@ -17,8 +17,8 @@ What openCypher says, worked by hand:
 
 - `+` of a string and a number, or of two strings, concatenates; the number is spelled as toString() spells it (the
   TCK has no scenario for string + number; openCypher 9 lists "+" as string concatenation, and Neo4j answers
-  'a3001' for 'a300' + 1 and 'a3002.0' for 'a300' + 2.0). A stored number keeps its stored form: the API writes 7 as
-  the text '7', which is still the number 7, so `n.k + 1` is 8 and `n.k + 'x'` '7x'.
+  'a3001' for 'a300' + 1 and 'a3002.0' for 'a300' + 2.0). A stored number keeps its stored form: the API wrote 7 as
+  the text '7' before 4.6.4, which is still the number 7, so `n.k + 1` is 8 and `n.k + 'x'` '7x'.
 - `-`, `*`, `/` over a string raise TypeError whatever its first letter (R297's rule); a duration is not a string.
 - SET computes what RETURN computes: `n.k % 2` is 0 for k 0 and 1 for k 3; `n.j / 0.0` is IEEE Infinity for j 5, 4.
 - `$a / n.k` with $a 5 and k 0, two integers: ArithmeticError (R297's rule), in a WHERE too.
@@ -31,7 +31,7 @@ What openCypher says, worked by hand:
 - `^` over a string raises TypeError (R297's rule for the other arithmetic operators; the TCK has no scenario).
 
 The graph: (:A300 {id: 'a300', name: 'Paris', k: 0, j: 5, f: 2.0}) and (:A300 {id: 'b300', name: 'Bob', k: 3, j: 4,
-f: 1.5}) by Cypher CREATE; (:N300 {k: 7}) by create_node (stored as the text '7'); (:D300 {dur: duration('P1D')}).
+f: 1.5}) by Cypher CREATE; (:N300 {k: '7'}) by create_node (the text 4.6.3's create_node stored for 7); (:D300 {dur: duration('P1D')}).
 Each read runs through an SQL-path engine and a native one (native_cypher=True), which must agree. The namespace is
 `IVG_NAMESPACE` (an IVG460*/IVG262* scratch namespace with IVG set up); this file's labels are removed before and after.
 """
@@ -71,7 +71,7 @@ def engines():
         "(:A300 {id: 'b300', name: 'Bob', k: 3, j: 4, f: 1.5}), (:D300 {dur: duration('P1D')})",
         raise_on_error=True,
     )
-    sql.create_node("r300api", labels=["N300"], properties={"k": 7})
+    sql.create_node("r300api", labels=["N300"], properties={"k": "7"})
     yield sql, native
     try:
         clean()

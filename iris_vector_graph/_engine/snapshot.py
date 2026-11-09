@@ -1,5 +1,6 @@
 import json
 import logging
+import numbers
 import re
 from typing import Any, Dict, List, Optional
 
@@ -411,7 +412,9 @@ class SnapshotMixin:
         type from its ``predicate``, ``label`` or ``key`` attribute, else ``is_a`` (4.6.0 R225).
 
         A node's labels come from ``label_attr`` (a string or a list), else its ``namespace`` attribute; its
-        other attributes become properties, as strings cut to 60000 characters. An edge's predicate is its
+        other attributes become properties, stored as ``create_node`` stores them (4.6.4: a number as the number, a
+        list or map as its JSON; they were their ``str()``), a value of another type as its ``str()``, text cut to 60000
+        characters. An edge's predicate is its
         ``predicate``, ``label`` or ``key`` attribute, else a multigraph's string edge key (where obonet keeps an OBO
         relationship's type), else ``is_a``; the rest become qualifiers.
         Returns ``nodes``, ``edges``, ``skipped_nodes`` and ``skipped_edges`` (calls that returned
@@ -445,8 +448,11 @@ class SnapshotMixin:
             for k, v in data.items():
                 if k in (label_attr, "namespace") or v is None:
                     continue
-                s = str(v) if not isinstance(v, str) else v
-                if len(s) > 60000:
+                # 4.6.4: a number, boolean, string, list or map goes to create_node as it is, which stores it as a
+                # Cypher write does; str() stored 30 as '30', True as 'True' and a list as its Python repr
+                passed = isinstance(v, (str, list, dict, numbers.Real)) or type(v).__name__ in ("bool_", "bool")
+                s = v if passed else str(v)
+                if isinstance(s, str) and len(s) > 60000:
                     s = s[:60000]
                 props[k] = s
             if self.create_node(node_id=str(node_id), labels=labels, properties=props):
