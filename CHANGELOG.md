@@ -27,6 +27,33 @@ toString(1 / x)})` said `<LIST ERROR>` and now says `execute_cypher failed, noth
 integer division by zero`, as `RETURN 1 / 0` names it. An integer `% 0` says `modulo`, and `'a' * 2` says `TypeError:
 InvalidArgumentType: * needs two numbers and got a value that is not one`. The Python API still stores NaN as text.
 
+**Fixed: procedures and errors**
+
+- **A `CALL ivg.*` procedure refuses an option its method refuses.** `CALL ivg.closeness({formula: 'classic'})` (and
+  `'bogus'`, and `1`) answered the harmonic scores, and `{maxHops: -1}` answered 0.0 for every node, where
+  `closeness_centrality(formula="classic")` raised: the procedures read their options with `int()` and `str()` and never
+  ran the checks the methods run. `ivg.degreeCentrality`, `ivg.betweenness`, `ivg.closeness`, `ivg.eigenvector`,
+  `ivg.leiden`, `ivg.triangleCount`, `ivg.scc` and `ivg.kcore` now take each option as their method does, and raise
+  `ValueError` naming the procedure and the option (`ivg.closeness: option formula: Input should be 'harmonic' or
+'classical' (got 'classic')`); a `$parameter` is read as in an argument, and a positional argument
+  (`CALL ivg.closeness('classical')`, which read nothing) is refused. `ivg.bm25.search` and `ivg.ivf.search` refuse
+  what `bm25_search` and `ivf_search` refuse (a `k` or `nprobe` below 1, a blank name or query, an empty or non-finite
+  query vector); `ivg.retrieve`, `ivg.ppr`, `ivg.neighbors`, `ivg.shortestPath.weighted`, `gds.pageRank.stream` and
+  `gds.betweenness.stream` name an argument of the wrong type, where `int()` truncated `2.5` and Python said "invalid
+  literal". **What to do:** a call that passed one of these values and read the answer raises now; correct the value.
+- **A write refused for an old namespace raises the `IVGSchemaError` the docs name.** On a namespace whose classes
+  predate 4.6.4, `create_edge` (or any write method) inside your open transaction raised `GraphWriteError`
+  ("Graph_KG.Txn_Begin is not in this namespace ..."), not the `IVGSchemaError` that the USER_GUIDE and the v4.6.4 entry
+  say. It raises `GraphWriteSchemaError` now, a subclass of both, with the same message: `except IVGSchemaError` and
+  `except GraphWriteError` each catch it.
+- **A refused write's message carries only its own failure.** As a user with the reading role, `delete_node("bob")`
+  fails (SQLCODE -415), then `create_edge("alice", "KNOWS", "carol")` fails with -99, and the -99 message held a second
+  `[Error: <<THROW> ... erase failed on rdf_edges with SQLCODE -415 ...>]` line from the first call, once. It was the
+  server process's `$ZERROR`, which IRIS prints in the next SQL error. Every write now clears it as it begins
+  (`Graph.KG.Txn.Begin`). **What to do:** run `initialize_schema()`, which compiles the changed `Graph.KG.Txn`.
+- **ADMIN_GUIDE §3 says a refused read is logged at WARNING.** It said "only at DEBUG ... `execute_sql error`", which
+  was 4.6.2; since 4.6.3 it is a WARNING from `iris_vector_graph.stores.iris_sql_store`.
+
 **Docs: corrected after the round 8 walkthroughs**
 
 - **Two links in this file went nowhere, and the link test did not look.** 4.6.4's entry linked a KNOWN_ISSUES heading

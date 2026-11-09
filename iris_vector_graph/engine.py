@@ -993,9 +993,14 @@ class IRISGraphEngine(
         start at 1 - dampingFactor each). ``nodeId`` is IVG's node ID. Without ``USE GRAPH`` it raises once a named
         graph has edges, since it cannot answer each graph's own (4.6.0 R192); ``USE GRAPH ''`` asks for the default
         graph's."""
+        from iris_vector_graph.cypher.translator import _int_argument, _number_argument
+
+        name = proc.procedure_name
         kw = self._gds_arguments(proc, parameters, graph)
-        ranks = self.kg_PAGERANK(damping=float(kw.get("damping", 0.85)),
-                                 max_iterations=int(kw.get("max_iterations", 20)))
+        # a value of the wrong type is named (4.6.5): float() and int() truncated 2.5 and said "invalid literal" for 'x'
+        damping = _number_argument(name, "dampingFactor", kw["damping"]) if "damping" in kw else 0.85
+        max_iterations = _int_argument(name, "maxIterations", kw["max_iterations"]) if "max_iterations" in kw else 20
+        ranks = self.kg_PAGERANK(damping=damping, max_iterations=max_iterations)
         return IVGResult(columns=["nodeId", "score"], rows=[[n, float(s)] for n, s in ranks])
 
     def _proc_gds_betweenness_stream(self, proc, parameters=None, graph=None) -> IVGResult:
@@ -1004,7 +1009,14 @@ class IRISGraphEngine(
         default one (4.6.0 R184; it read ``^NKG``, every graph's edges together, before). Without ``USE GRAPH`` it
         raises once a named graph has edges, since it cannot answer each graph's own (4.6.0 R192); ``USE GRAPH ''``
         asks for the default graph's."""
+        from iris_vector_graph._validate import BetweennessInput, validate_procedure_options
+
         kw = self._gds_arguments(proc, parameters, graph)
+        # the configuration goes through the model ivg.betweenness and betweenness_centrality run (4.6.5): before,
+        # int() truncated sampleSize 2.7 to 2 and the rest reached the method, which named a field of its own
+        keys = self._GDS_CONFIG[proc.procedure_name.lower()]
+        validate_procedure_options(
+            proc.procedure_name, BetweennessInput, {k: kw[f] for k, f in keys.items() if f in kw}, keys)
         scores = self.betweenness_centrality(
             sample_size=int(kw.get("sample_size", 0)), direction=str(kw.get("direction", "out")),
             max_hops=int(kw.get("max_hops", 0)), top_k=int(kw.get("top_k", 0)),
@@ -1146,7 +1158,17 @@ class IRISGraphEngine(
         integer there (`[1, 1]`, `2` for weights of 1.0; Graph.KG.TraversalPaths.PathJson)."""
         args = proc.arguments
         from iris_vector_graph.cypher import ast as cypher_ast
-        from iris_vector_graph.cypher.translator import _procedure_direction, _weighted_path_weight_prop
+        from iris_vector_graph.cypher.translator import (
+            _int_argument, _number_argument, _procedure_direction, _weighted_path_weight_prop,
+        )
+
+        def _arg_raw(a, params=None):
+            """The value a literal or a supplied $parameter holds, as it is (``_arg_str`` makes text of it)."""
+            if isinstance(a, cypher_ast.Literal):
+                return a.value
+            if isinstance(a, cypher_ast.Variable) and params and a.name in params:
+                return params[a.name]
+            return _arg_str(a, params)
 
         def _arg_str(a, params=None):
             if isinstance(a, cypher_ast.Literal):
@@ -1162,8 +1184,10 @@ class IRISGraphEngine(
         source_id = _arg_str(args[0], parameters) if len(args) > 0 else None
         target_id = _arg_str(args[1], parameters) if len(args) > 1 else None
         weight_prop = _weighted_path_weight_prop(_arg_str(args[2], parameters) if len(args) > 2 else "weight")
-        max_cost = float(_arg_str(args[3], parameters)) if len(args) > 3 else 9999.0
-        max_hops = int(float(_arg_str(args[4], parameters))) if len(args) > 4 else 10
+        # a value of the wrong type is named (4.6.5): float() said "could not convert string" and int() truncated 2.5
+        name = "ivg.shortestPath.weighted"
+        max_cost = _number_argument(name, "maxCost", _arg_raw(args[3], parameters)) if len(args) > 3 else 9999.0
+        max_hops = _int_argument(name, "maxHops", _arg_raw(args[4], parameters), 0) if len(args) > 4 else 10
         direction = _procedure_direction(
             "ivg.shortestPath.weighted", _arg_str(args[5], parameters) if len(args) > 5 else "out")
 

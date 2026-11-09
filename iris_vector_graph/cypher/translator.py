@@ -131,6 +131,77 @@ def _validate_centrality_proc_map(proc_name: str, map_keys) -> None:
         )
 
 
+#: The option each centrality and community procedure reads, as the call spells it, and the field of the model its
+#: engine method runs (iris_vector_graph/_validate.py) that takes it (4.6.5)
+_PROCEDURE_OPTION_FIELDS: Dict[str, Tuple[str, Dict[str, str]]] = {
+    "ivg.degreeCentrality": ("DegreeCentralityInput", {"direction": "direction", "predicate": "predicate", "topK": "top_k"}),
+    "ivg.betweenness": ("BetweennessInput", {
+        "sampleSize": "sample_size", "direction": "direction", "maxHops": "max_hops", "topK": "top_k",
+        "memBudgetMB": "mem_budget_mb",
+    }),
+    "ivg.closeness": ("ClosenessInput", {
+        "formula": "formula", "direction": "direction", "maxHops": "max_hops", "topK": "top_k",
+    }),
+    "ivg.eigenvector": ("EigenvectorInput", {"maxIter": "max_iter", "tol": "tol", "topK": "top_k"}),
+    "ivg.leiden": ("LeidenInput", {
+        "maxLevels": "max_levels", "gamma": "gamma", "tol": "tol", "topK": "top_k", "memBudgetMB": "mem_budget_mb",
+        "randomSeed": "random_seed",
+    }),
+    "ivg.triangleCount": ("TriangleCountInput", {"topK": "top_k"}),
+    "ivg.scc": ("SCCInput", {"topK": "top_k"}),
+    "ivg.kcore": ("KCoreInput", {"topK": "top_k"}),
+}
+
+
+def _procedure_options(proc, context):
+    """The options of a centrality or community procedure call, run through the model its engine method runs (4.6.5).
+
+    ``CALL ivg.closeness({formula: 'classic'})`` read its map with ``str()``/``int()`` and answered the harmonic scores,
+    ``{maxHops: -1}`` answered 0.0 for every node, and ``closeness_centrality(formula="classic")`` raised: the model
+    (``ClosenessInput``) was never asked. Now each option goes through the method's own model, a ``$parameter`` is
+    read as it is in an argument, and a value the method refuses is a ``ValueError`` naming the procedure and the
+    option. A positional argument is refused too: these procedures read one options map, and ``CALL ivg.closeness('x')``
+    read no argument at all.
+    """
+    from iris_vector_graph import _validate
+
+    name = proc.procedure_name
+    if proc.arguments:
+        raise ValueError(f"{name} takes one options map ({{key: value, ...}}), not positional arguments")
+    model_name, fields = _PROCEDURE_OPTION_FIELDS[name]
+    opts = proc.options or {}
+    values = {key: _resolve_arg(value, context, f"{name}: option {key}") for key, value in opts.items()}
+    if "direction" in values:
+        values["direction"] = _procedure_direction(name, values["direction"])
+    return _validate.validate_procedure_options(name, getattr(_validate, model_name), values, fields)
+
+
+def _int_argument(name: str, label: str, value, minimum: Optional[int] = None) -> int:
+    """A procedure argument that must be a whole number (4.6.5: ``int()`` truncated ``2.5`` and said "invalid literal"
+    for ``'x'``, naming neither the procedure nor the argument)."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError(f"{name}: {label} must be an integer, got {value!r}")
+    try:
+        result = int(value)
+    except ValueError:
+        raise ValueError(f"{name}: {label} must be an integer, got {value!r}") from None
+    if minimum is not None and result < minimum:
+        raise ValueError(f"{name}: {label} must be at least {minimum}, got {result}")
+    return result
+
+
+def _number_argument(name: str, label: str, value) -> float:
+    """A procedure argument that must be a number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValueError(f"{name}: {label} must be a number, got {value!r}")
+    try:
+        return float(value)
+    except ValueError:
+        raise ValueError(f"{name}: {label} must be a number, got {value!r}") from None
+
+
 def _refuse_use_graph(proc_name: str, context) -> None:
     """Raise when a procedure that reads `^NKG` runs under `USE GRAPH` (4.6.0 R163).
 
@@ -2851,6 +2922,8 @@ def _translate_neighbors(proc: ast.CypherProcedureCall, context: TranslationCont
         )
 
     predicate = _resolve_arg(args[1], context, "ivg.neighbors") if len(args) > 1 else None
+    if predicate is not None and not isinstance(predicate, str):
+        raise ValueError(f"ivg.neighbors: predicate must be a string, got {predicate!r}")
     direction = _resolve_arg(args[2], context, "ivg.neighbors") if len(args) > 2 else "out"
     if direction not in ("out", "in", "both"):
         raise ValueError(
@@ -2922,8 +2995,8 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     if not isinstance(seeds, list):
         raise ValueError(f"ivg.ppr: seeds must be a string or list, got {type(seeds).__name__}")
 
-    alpha = float(_resolve_arg(args[1], context, "ivg.ppr")) if len(args) > 1 else 0.85
-    max_iter = int(_resolve_arg(args[2], context, "ivg.ppr")) if len(args) > 2 else 20
+    alpha = _number_argument("ivg.ppr", "alpha", _resolve_arg(args[1], context, "ivg.ppr")) if len(args) > 1 else 0.85
+    max_iter = _int_argument("ivg.ppr", "max_iter", _resolve_arg(args[2], context, "ivg.ppr")) if len(args) > 2 else 20
 
     seed_json = json.dumps(seeds)
     ppr_fn = _fn("kg_PPR")
@@ -2989,6 +3062,13 @@ def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationCo
         k_int = int(k_val)
     except (TypeError, ValueError):
         raise ValueError(f"ivg.bm25.search: third argument (k) must be an integer, got {k_val!r}")
+    # the model bm25_search runs: a name and a query that are not blank, and k of 1 or more (4.6.5)
+    from iris_vector_graph import _validate
+
+    _validate.validate_procedure_options(
+        "ivg.bm25.search", _validate.BM25SearchInput, {"name": idx_name, "query": query, "k": k_int},
+        {"name": "name", "query": "query", "k": "k"}, noun="argument",
+    )
 
     bm25_fn = _fn("kg_BM25")
     # Inline as escaped literals, not `?`: IRIS does not recognise a parameter marker
@@ -3069,10 +3149,10 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
         )
 
     query = _resolve_arg(args[0], context, "ivg.retrieve")
-    limit = int(_resolve_arg(args[1], context, "ivg.retrieve")) if len(args) > 1 else 10
+    limit = _int_argument("ivg.retrieve", "limit", _resolve_arg(args[1], context, "ivg.retrieve"), 1) if len(args) > 1 else 10
     bm25_name = str(_resolve_arg(args[2], context, "ivg.retrieve")) if len(args) > 2 else "default"
     vec_label = str(_resolve_arg(args[3], context, "ivg.retrieve")) if len(args) > 3 else "*"
-    rrf_k = int(_resolve_arg(args[4], context, "ivg.retrieve")) if len(args) > 4 else 60
+    rrf_k = _int_argument("ivg.retrieve", "rrf_k", _resolve_arg(args[4], context, "ivg.retrieve"), 0) if len(args) > 4 else 60
     embedding_config = str(_resolve_arg(args[5], context, "ivg.retrieve")) if len(args) > 5 else ""
 
     if not query:
@@ -3226,6 +3306,15 @@ def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationCon
         raise ValueError(
             f"ivg.ivf.search: fourth argument (nprobe) must be an integer, got {nprobe_val!r}"
         )
+    # the model ivf_search runs: a name that is not blank, a query vector of finite numbers, k and nprobe of 1 or more
+    # (4.6.5)
+    from iris_vector_graph import _validate
+
+    _validate.validate_procedure_options(
+        "ivg.ivf.search", _validate.VectorSearchInput,
+        {"name": idx_name, "query": floats, "k": k_int, "nprobe": nprobe_int},
+        {"name": "name", "query": "query", "k": "k", "nprobe": "nprobe"}, noun="argument",
+    )
 
     ivf_fn = _fn("kg_IVF")
     # IRIS does not support ? parameters inside JSON_TABLE(stored_proc(...)) —
@@ -30105,17 +30194,8 @@ def _translate_degree_centrality(proc, context) -> None:
     without one, each graph's, a row per graph and node (4.6.0 R192, `_procedure_graphs`)."""
     opts = proc.options or {}
     _validate_centrality_proc_map("ivg.degreeCentrality", opts.keys())
-
-    def _val(key, default):
-        v = opts.get(key, default)
-        if hasattr(v, "value"):
-            return v.value
-        return v
-
-    direction = _procedure_direction("ivg.degreeCentrality", str(_val("direction", "out")))
-    pred_v = _val("predicate", "")
-    predicate = str(pred_v) if pred_v is not None else ""
-    top_k = int(_val("topK", 10000))
+    options = _procedure_options(proc, context)
+    direction, predicate, top_k = options.direction, options.predicate or "", options.top_k
 
     fn = _fn("kg_DegreeCentrality")
     # one branch per graph, each that graph's own degrees and topK, its rows tagged with the graph (4.6.0 R192)
@@ -30146,21 +30226,10 @@ def _translate_betweenness(proc, context) -> None:
     opts = proc.options or {}
     _validate_centrality_proc_map("ivg.betweenness", opts.keys())
     _refuse_use_graph("ivg.betweenness", context)
-
-    def _val(key, default):
-        v = opts.get(key, default)
-        if hasattr(v, "value"):
-            return v.value
-        return v
-
-    sample_size = int(_val("sampleSize", 0))
-    direction = _procedure_direction("ivg.betweenness", str(_val("direction", "out")))
-    max_hops = int(_val("maxHops", 0))
-    top_k = int(_val("topK", 10000))
-    mem_budget_mb = int(_val("memBudgetMB", 256))
-    # the server honours both (4.6.0 R232: it ignored both); a value it cannot honour is refused here
-    if max_hops < 0:
-        raise ValueError(f"ivg.betweenness: maxHops must be 0 (no limit) or more, not {max_hops}")
+    # the server honours maxHops and direction (4.6.0 R232: it ignored both); a value it cannot honour is refused here
+    options = _procedure_options(proc, context)
+    sample_size, direction, max_hops = options.sample_size, options.direction, options.max_hops
+    top_k, mem_budget_mb = options.top_k, options.mem_budget_mb
 
     fn = _fn("kg_Betweenness")
     cte_sql = (
@@ -30185,17 +30254,8 @@ def _translate_closeness(proc, context) -> None:
     opts = proc.options or {}
     _validate_centrality_proc_map("ivg.closeness", opts.keys())
     _refuse_use_graph("ivg.closeness", context)
-
-    def _val(key, default):
-        v = opts.get(key, default)
-        if hasattr(v, "value"):
-            return v.value
-        return v
-
-    formula = str(_val("formula", "harmonic"))
-    direction = _procedure_direction("ivg.closeness", str(_val("direction", "out")))
-    max_hops = int(_val("maxHops", 0))
-    top_k = int(_val("topK", 10000))
+    options = _procedure_options(proc, context)
+    formula, direction, max_hops, top_k = options.formula, options.direction, options.max_hops, options.top_k
 
     fn = _fn("kg_Closeness")
     cte_sql = (
@@ -30220,16 +30280,8 @@ def _translate_eigenvector(proc, context) -> None:
     opts = proc.options or {}
     _validate_centrality_proc_map("ivg.eigenvector", opts.keys())
     _refuse_use_graph("ivg.eigenvector", context)
-
-    def _val(key, default):
-        v = opts.get(key, default)
-        if hasattr(v, "value"):
-            return v.value
-        return v
-
-    max_iter = int(_val("maxIter", 100))
-    tol = float(_val("tol", 1e-6))
-    top_k = int(_val("topK", 10000))
+    options = _procedure_options(proc, context)
+    max_iter, tol, top_k = options.max_iter, options.tol, options.top_k
 
     fn = _fn("kg_Eigenvector")
     cte_sql = (
@@ -30253,20 +30305,10 @@ def _translate_leiden(proc, context) -> None:
     opts = proc.options or {}
     _validate_community_proc_map("ivg.leiden", opts.keys())
     _refuse_use_graph("ivg.leiden", context)
-
-    def _val(key, default):
-        v = opts.get(key, default)
-        if hasattr(v, "value"):
-            return v.value
-        return v
-
-    max_levels = int(_val("maxLevels", 10))
-    gamma = float(_val("gamma", 1.0))
-    tol = float(_val("tol", 1e-4))
-    top_k = int(_val("topK", 10000))
-    mem_budget_mb = int(_val("memBudgetMB", 256))
-    seed_v = _val("randomSeed", None)
-    random_seed = -1 if seed_v is None else int(seed_v)
+    options = _procedure_options(proc, context)
+    max_levels, gamma, tol = options.max_levels, options.gamma, options.tol
+    top_k, mem_budget_mb = options.top_k, options.mem_budget_mb
+    random_seed = -1 if options.random_seed is None else options.random_seed
 
     fn = _fn("kg_Leiden")
     cte_sql = (
@@ -30293,14 +30335,7 @@ def _translate_triangle_count(proc, context) -> None:
     opts = proc.options or {}
     _validate_community_proc_map("ivg.triangleCount", opts.keys())
     _refuse_use_graph("ivg.triangleCount", context)
-
-    def _val(key, default):
-        v = opts.get(key, default)
-        if hasattr(v, "value"):
-            return v.value
-        return v
-
-    top_k = int(_val("topK", 10000))
+    top_k = _procedure_options(proc, context).top_k
 
     fn = _fn("kg_TriangleCount")
     cte_sql = (
@@ -30327,14 +30362,7 @@ def _translate_scc(proc, context) -> None:
     opts = proc.options or {}
     _validate_community_proc_map("ivg.scc", opts.keys())
     _refuse_use_graph("ivg.scc", context)
-
-    def _val(key, default):
-        v = opts.get(key, default)
-        if hasattr(v, "value"):
-            return v.value
-        return v
-
-    top_k = int(_val("topK", 10000))
+    top_k = _procedure_options(proc, context).top_k
 
     fn = _fn("kg_SCC")
     cte_sql = (
@@ -30361,14 +30389,7 @@ def _translate_kcore(proc, context) -> None:
     opts = proc.options or {}
     _validate_community_proc_map("ivg.kcore", opts.keys())
     _refuse_use_graph("ivg.kcore", context)
-
-    def _val(key, default):
-        v = opts.get(key, default)
-        if hasattr(v, "value"):
-            return v.value
-        return v
-
-    top_k = int(_val("topK", 10000))
+    top_k = _procedure_options(proc, context).top_k
 
     fn = _fn("kg_KCore")
     cte_sql = (

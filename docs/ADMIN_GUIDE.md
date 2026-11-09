@@ -502,9 +502,10 @@ writing add `GRANT INSERT, UPDATE, DELETE ON SCHEMA <IVG Schema> TO ivg_reader`.
   they call the `kg_*` algorithm functions, which are not on the read path, so the role needs EXECUTE on those, or
   `GRANT EXECUTE ON SCHEMA Graph_KG` as the reading row has. A read refused for a missing privilege does not raise: it
   answers no rows, with `result.error` holding IRIS's SQLCODE -99 message (`User … is not privileged for the
-operation`), and logs it only at DEBUG (logger `iris_vector_graph.stores.iris_sql_store`, `execute_sql error: …`), so an
-  alert on WARNING does not see it. Check `result.error`, or pass `execute_cypher(query, raise_on_error=True)` to get a
-  `RuntimeError`. Before that setup the same role gets real rows from the reads the native Cypher executor answers,
+operation`), and logs a WARNING (logger `iris_vector_graph.stores.iris_sql_store`, "execute_sql refused for a missing
+  privilege (SQLCODE -99); the result's error holds it: …", `<PROTECT>` in place of the SQLCODE for a refused global
+  read), so an alert on WARNING sees it; other failed reads are logged at DEBUG only. Check `result.error`, or pass
+  `execute_cypher(query, raise_on_error=True)` to get a `RuntimeError`. Before that setup the same role gets real rows from the reads the native Cypher executor answers,
   which read `^KG` under the database resource (the boundary, next), and no rows, with `result.error` set, from those
   on the SQL path; which reads the native executor answers depends on the query (on 2026.3.0AI an unlabelled one-hop
   match). Measured on 2026.3.0AI by `tests/e2e/test_460_r050_select_only_role_e2e.py`, and the same on Community

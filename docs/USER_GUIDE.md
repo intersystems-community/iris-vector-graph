@@ -744,7 +744,9 @@ answers.
 
 The procedures this section names, with what each takes. Options go in one map, as in
 `CALL ivg.closeness({formula: 'classical', topK: 10})`, and an option not listed raises `ValueError` naming the ones
-allowed. A `gds.*` procedure takes a graph name first, which IVG accepts and does not read (it has no graph
+allowed. The centrality and community procedures take each option as the engine method of the same name does (`formula`,
+`maxHops`, `topK` and the rest: the same values, the same range), and a value the method refuses raises `ValueError`
+naming the procedure and the option; they take no positional argument. A `gds.*` procedure takes a graph name first, which IVG accepts and does not read (it has no graph
 projections), then a configuration map: `CALL gds.shortestPath.dijkstra.stream('g', {sourceNode: 'alice',
 targetNode: 'erin'})`. The defaults are in parentheses. The four `ivg.*` centrality procedures answer highest score first,
 ties by node ID, and `topK` keeps the highest; before 4.6.0 `ivg.closeness` kept the first nodes by ID and

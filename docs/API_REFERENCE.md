@@ -3044,6 +3044,12 @@ Raised when `Graph.KG.FHIRGraph` answers `{"status": "error"}` (spec 231).
 
 A data-changing write failed in IRIS; everything it had written is rolled back.
 
+### `GraphWriteSchemaError`
+
+`from iris_vector_graph.errors import GraphWriteSchemaError`; subclass of `GraphWriteError`, `IVGSchemaError`.
+
+A `GraphWriteError` whose cause is an `IVGSchemaError`: the write was refused because the namespace's IVG Schema cannot be used as asked. On a namespace whose classes predate 4.6.4 a write inside the caller's open transaction raises it (`Graph_KG.Txn_Begin is not in this namespace`), before writing anything. Code that catches `IVGSchemaError`, as docs/USER_GUIDE.md says to, and code that catches `GraphWriteError` both catch it. `recorded` and `requested` are the cause's.
+
 ### `IVGClientError`
 
 `from iris_vector_graph import IVGClientError`; subclass of `IVGError`.

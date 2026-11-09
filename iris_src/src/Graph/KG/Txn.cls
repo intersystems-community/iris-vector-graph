@@ -18,6 +18,11 @@ Class Graph.KG.Txn Extends %RegisteredObject [ Final ]
 /// the driver's commit or rollback ends, so IVG's write is the caller's even when it is the first one.
 ClassMethod Begin(pHold As %Integer = 0) As %Integer
 {
+    // The process keeps $ZERROR from the last error thrown or caught in it (Graph.KG.Eraser's thrown status, an
+    // %Exception caught elsewhere), and the text of the next SQL error names it in an "[Error: ...]" line: a refused
+    // create_edge carried the failed delete_node's before this (4.6.5). Every write begins here, so its own errors
+    // are the only ones its message can name.
+    Set $ZERROR = ""
     If pHold, $TLevel = 0 {
         TSTART
     }

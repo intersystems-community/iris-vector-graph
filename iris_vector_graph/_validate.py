@@ -286,3 +286,27 @@ class SCCInput(BaseModel):
 
 class KCoreInput(BaseModel):
     top_k: int = Field(default=10000, ge=0, le=1_000_000)
+
+
+def validate_procedure_options(procedure: str, model, values: dict, names: dict, noun: str = "option"):
+    """A ``CALL`` procedure's options, run through the model its engine method runs (4.6.5).
+
+    ``values`` maps the option names the call spelled (``maxHops``) to the values it gave; ``names`` maps each spelling
+    to the model's field (``max_hops``). Answers the model built from them, so the Cypher form and the Python form take
+    the same values. Raises ``ValueError`` naming the procedure, the option (``noun`` says "argument" for a procedure
+    that takes them by position) and what was given. Before 4.6.5
+    ``CALL ivg.closeness({formula: 'classic'})`` read its options with ``str()`` and ``int()`` and answered the
+    harmonic scores, where ``closeness_centrality(formula="classic")`` raised.
+    """
+    from pydantic import ValidationError
+
+    spelled = {field: option for option, field in names.items()}
+    try:
+        return model(**{names[option]: value for option, value in values.items()})
+    except ValidationError as exc:
+        found = [
+            f"{procedure}: {noun} {spelled.get(str(e['loc'][0]), e['loc'][0]) if e['loc'] else '?'}: "
+            f"{e['msg']} (got {e['input']!r})"
+            for e in exc.errors()
+        ]
+        raise ValueError("; ".join(found)) from None

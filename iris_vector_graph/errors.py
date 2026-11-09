@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from .schema_name import IVGSchemaError
 from .sdk import IVGError
 
 
@@ -140,6 +141,13 @@ class GraphWriteError(IVGError, RuntimeError):
 
     _SQLCODE = re.compile(r"SQLCODE:?\s*<?\s*(-?\d+)")
 
+    def __new__(cls, operation: str, cause: BaseException, *args, **kwargs):
+        # A write refused for the IVG Schema (its classes predate 4.6.4: ``Txn_Begin`` is missing, so it cannot join
+        # the caller's transaction) is the ``IVGSchemaError`` the docs name too, whatever method wrapped it (4.6.5)
+        if cls is GraphWriteError and isinstance(cause, IVGSchemaError):
+            cls = GraphWriteSchemaError
+        return super().__new__(cls, operation, cause, *args, **kwargs)
+
     def __init__(self, operation: str, cause: BaseException, left: str = "", *, plain: bool = False):
         self.operation = operation
         self.message = str(cause)
@@ -149,6 +157,19 @@ class GraphWriteError(IVGError, RuntimeError):
         # `left` says what a failure could not take back; without it, nothing was written. `plain` keeps the cause's own
         # message (a Cypher refusal whose text callers read, R221)
         super().__init__(self.message if plain else f"{operation} failed{code}, {left or 'nothing written'}: {self.message}")
+
+
+class GraphWriteSchemaError(GraphWriteError, IVGSchemaError):
+    """A :class:`GraphWriteError` whose cause is an ``IVGSchemaError``: the write was refused because the namespace's
+    IVG Schema cannot be used as asked. On a namespace whose classes predate 4.6.4 a write inside the caller's open
+    transaction raises it (``Graph_KG.Txn_Begin is not in this namespace``), before writing anything. Code that catches
+    ``IVGSchemaError``, as docs/USER_GUIDE.md says to, and code that catches ``GraphWriteError`` both catch it.
+    ``recorded`` and ``requested`` are the cause's."""
+
+    def __init__(self, operation: str, cause: BaseException, left: str = "", *, plain: bool = False):
+        super().__init__(operation, cause, left, plain=plain)
+        self.recorded = getattr(cause, "recorded", None)
+        self.requested = getattr(cause, "requested", None)
 
 
 class PowerIterationFailedConvergence(IVGError, RuntimeError):
@@ -193,6 +214,7 @@ class PowerIterationFailedConvergence(IVGError, RuntimeError):
 __all__ = [
     "IVGError",
     "GraphWriteError",
+    "GraphWriteSchemaError",
     "PrerequisiteError",
     "IndexNotFoundError",
     "IndexNotBuiltError",
