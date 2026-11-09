@@ -192,3 +192,26 @@ def test_an_unreadable_answer_raises_rather_than_guess():
 
     with pytest.raises(RuntimeError, match="Txn_Begin"):
         write_txn(C(s), "Graph_KG")
+
+
+def test_without_the_functions_a_write_nested_in_ivgs_own_is_part_of_it():
+    """A Cypher write opens IVG's transaction and its statements open another: on a namespace without Txn_Begin the
+    inner one finds $TLEVEL 1, IVG's own and not a caller's, and joins it rather than refuse."""
+    s = Server(procs=False)
+    conn = Conn(s)
+    outer = write_txn(conn, "Graph_KG")
+    inner = write_txn(conn, "Graph_KG")
+    assert [sql for sql, _ in s.ran].count("START TRANSACTION") == 1
+    inner.commit()
+    assert s.level == 1, "the inner write committed the outer one"
+    outer.commit()
+    assert s.level == 0
+    # and a failed inner write takes the outer one back with it
+    outer = write_txn(conn, "Graph_KG")
+    write_txn(conn, "Graph_KG").rollback()
+    assert s.level == 0 and s.ran[-1][0] == "ROLLBACK"
+    outer.commit()  # nothing left to commit
+    assert s.ran[-1][0] == "ROLLBACK"
+    # the next write on the connection is its own again
+    write_txn(conn, "Graph_KG").commit()
+    assert s.ran[-1][0] == "COMMIT"

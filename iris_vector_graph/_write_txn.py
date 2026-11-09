@@ -38,6 +38,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SCHEMA = "Graph_KG"
 _warned_missing = False
+#: id(connection) -> the outermost plain WriteTxn open on it: on a namespace without Txn_Begin, a write nested in
+#: another of IVG's (a Cypher write's statements) finds $TLEVEL 1, which is IVG's own and not a caller's
+_PLAIN_OPEN: dict = {}
 
 
 def is_duplicate(exc: BaseException) -> bool:
@@ -76,6 +79,8 @@ class WriteTxn:
         self._begun = False
         #: 4.6.3's plain START TRANSACTION / COMMIT / ROLLBACK, on a namespace without Txn_Begin
         self._plain = False
+        #: the outer plain WriteTxn this one is part of (no level of its own)
+        self._outer: Optional["WriteTxn"] = None
 
     # ------------------------------------------------------------------ plumbing
 
@@ -133,8 +138,16 @@ class WriteTxn:
 
     def _begin_plain(self, hold: bool, exc: BaseException) -> None:
         global _warned_missing
-        from iris_vector_graph.schema_name import IVGSchemaError
+        from iris_vector_graph.schema_name import IVGSchemaError, unwrap_connection
 
+        key = id(unwrap_connection(self._conn))
+        outer = _PLAIN_OPEN.get(key)
+        if outer is not None and outer._open:
+            # inside IVG's own plain transaction: part of it, which commits or rolls back with it
+            self._outer, self._plain = outer, True
+            self.level, self.joined = outer.level, False
+            self._open = self._begun = True
+            return
         if hold or self._level_now() > 0:
             raise IVGSchemaError(
                 f"{self._schema}.Txn_Begin is not in this namespace (its IVG classes predate 4.6.4), so this write "
@@ -149,6 +162,7 @@ class WriteTxn:
                 self._schema,
             )
         self._start_plain()
+        _PLAIN_OPEN[key] = self
 
     def _start_plain(self) -> None:
         """4.6.3's own transaction: ``START TRANSACTION`` now, ``COMMIT`` / ``ROLLBACK`` at the end, at level 1."""
@@ -161,9 +175,13 @@ class WriteTxn:
         """Commit IVG's part: the write itself with no caller transaction, else only back to the caller's level."""
         if not self._open:
             return
+        if self._outer is not None:
+            self._open = False  # the outer one commits it
+            return
         if self._plain:
             self.cursor.execute("COMMIT")
             self._open = False
+            self._forget()
             return
         # still open until End answers: a commit that fails can be rolled back
         after = self._call("End", self.level)
@@ -182,6 +200,11 @@ class WriteTxn:
         if not self._open:
             return
         self._open = False
+        if self._outer is not None:
+            # no level of its own to take back: the outer transaction (IVG's, no caller's) goes with it
+            self._outer.rollback()
+            return
+        self._forget()
         try:
             if self._plain:
                 self.cursor.execute("ROLLBACK")
@@ -190,6 +213,11 @@ class WriteTxn:
         except Exception as exc:  # noqa: BLE001 - see the docstring
             what = "ROLLBACK" if self._plain else f"{self._schema}.Txn_Undo({self.level})"
             logger.error("%s after a failed write failed too: %s", what, exc)
+
+    def _forget(self) -> None:
+        for key, txn in list(_PLAIN_OPEN.items()):
+            if txn is self:
+                del _PLAIN_OPEN[key]
 
     # ------------------------------------------------------------------ with
 
