@@ -27,6 +27,30 @@ toString(1 / x)})` said `<LIST ERROR>` and now says `execute_cypher failed, noth
 integer division by zero`, as `RETURN 1 / 0` names it. An integer `% 0` says `modulo`, and `'a' * 2` says `TypeError:
 InvalidArgumentType: * needs two numbers and got a value that is not one`. The Python API still stores NaN as text.
 
+**Docs: corrected after the round 8 walkthroughs**
+
+- **Two links in this file went nowhere, and the link test did not look.** 4.6.4's entry linked a KNOWN_ISSUES heading
+  that had been renamed (`#a-date-or-time-read-by-position-from-a-list-compares-as-its-text`) and an old entry linked
+  `docs/performance/GRAPH_ALGORITHMS.md`, which moved to `docs/BENCHMARKS.md`. Both are fixed. The doc consistency test
+  (`tests/docs/test_docs_consistent.py`) now checks every relative link's file and `#anchor`, with GitHub's heading
+  rules, in CHANGELOG.md and in every document it already checks; it found one more (a KNOWN_ISSUES link in
+  `docs/architecture/embedded_python_architecture.md`).
+- **A rolled-back write is not wholly gone.** 4.6.4's entry said the caller's rollback removes the IVG write. It removes
+  the rows and the adjacency entries; it leaves `^KG("__version")` bumped and, for a rolled-back `create_edge`,
+  `^KG("gen", 0, <source>) = 1`, a counter nothing reads as data. USER_GUIDE says so, and that another connection sees
+  the transaction's uncommitted writes.
+- **What a Python write answers for a label over 128 characters, an ID that exists, and a NaN** is now written down:
+  KNOWN_ISSUES (each writer, one label or several), the docstrings of `create_node` and `bulk_create_nodes`, USER_GUIDE
+  (a node's ID is its identity: a Cypher `CREATE` or `bulk_create_nodes` on an ID that exists merges into the node and
+  keeps its old values) and KNOWN_ISSUES (a NaN `create_node` wrote reads as `'nan'`; `float(value)` gives it back).
+- **`topK` of Leiden keeps whole communities** on the first route, so `top_k=1` can answer a community's every row;
+  COMMUNITIES says when it cuts at exactly `top_k` rows instead. USER_GUIDE names BM25's score formula, tokenizer and
+  stopwords. ADMIN_GUIDE gives the `iris session` recipe for the reading role, and corrects the `messages.log` sentence
+  about compiled plans: a reading role never reaches the point that would write it. ADMIN_GUIDE's inventory describes
+  `^KG("__version")` as the write counter it is (it moves with every write, and setup leaves 2), not "its version", and
+  the README says that in a namespace never set up `IsLoaded()` raises `<CLASS DOES NOT EXIST>` where `%ExistsId`
+  prints `0`.
+
 ### v4.6.4 (2026-11-09)
 
 **Fixed: Python writes**
@@ -68,7 +92,9 @@ InvalidArgumentType: * needs two numbers and got a value that is not one`. The P
   loaders, `store_embedding(s)`, `materialize_inference` and every Cypher write, and a failed Cypher read rolled the
   caller's transaction back. Each write is now a nested level of its own (`Txn_Begin` / `Txn_End` / `Txn_Undo`, new
   in the IVG Schema, over `TSTART` / `TCOMMIT` / `TROLLBACK 1`): with no caller transaction it commits when the call
-  returns, as before; inside one, the caller's commit keeps both, the caller's rollback removes both, and a failed
+  returns, as before; inside one, the caller's commit keeps both, the caller's rollback removes both (the rows and the
+  adjacency entries; it leaves two counters, `^KG("__version")` and a rolled-back edge's `^KG("gen", 0, <source>)`,
+  [USER_GUIDE](docs/USER_GUIDE.md#writes-inside-your-transaction)), and a failed
   write takes back only itself. The driver's autocommit turned off counts as a caller transaction, so IVG no longer commits for you there: **what to do** with autocommit off is call `conn.commit()` after the IVG writes you want kept (before 4.6.4 IVG committed them, and the caller's own pending rows with them). A Cypher write in
   steps (a `MERGE` per row) is one transaction; its steps committed one by one. `Graph.KG.Eraser`, `TemporalIndex`,
   `TemporalPolicy`, `Ledger` and `LedgerStats` roll back to the level they found, not every level, and
@@ -78,7 +104,8 @@ InvalidArgumentType: * needs two numbers and got a value that is not one`. The P
   which inside a transaction costs a journaled statement rollback (200 duplicates: 121 ms, now 84 ms).
 - **Known, not fixed here:** the driver's `executemany` skips a row IRIS refuses (SQLCODE -104 for a label longer
   than 128 characters) without raising, so `create_node`, `bulk_create_nodes` and the other batch writers answer
-  success without that row.
+  success without that row. What each writer does, one label or several, is in
+  [Known issues](docs/KNOWN_ISSUES.md#a-label-longer-than-128-characters-is-refused-and-the-python-writers-answer-it-differently).
 
 ### v4.6.3 (2026-11-08)
 
@@ -1307,7 +1334,7 @@ integer division by zero>]`; on a row, `GRAPH_KG.CY_ARITH`), and `raise_on_error
   and seconds (`duration('PT1H') = duration('PT60M')` is true, `duration('P1D') = duration('PT24H')` false). A date,
   time, datetime or local datetime against another temporal type or any other value is not equal and orders with
   nothing. Read by position from a list, a date or time still orders as its text
-  ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md#a-date-or-time-read-by-position-from-a-list-compares-as-its-text)). <!-- fixes81 -->
+  ([KNOWN_ISSUES](docs/KNOWN_ISSUES.md#a-date-or-time-read-by-position-from-a-collected-list-compares-as-its-text)). <!-- fixes81 -->
 - **Values of two types compare as openCypher compares them.** `WITH 1 AS x, 'b' AS y RETURN x < y` answered true,
   `WITH 1 AS x, true AS y RETURN x = y` true, `WITH [1, null] AS l RETURN l[0] < l[1]` false, `[1] < [1, 2]` false
   and `1 < {k: 2}` true. An element of a `WITH`-held list read by a row's index compared as text
@@ -5892,7 +5919,7 @@ All notable changes to `iris-vector-graph`.
 
 - Rust function reads adjacency cache once (version-keyed), stores in process-static memory, runs rayon parallel Brandes — zero IRIS I/O on cache hits.
 - Benchmark: karate **6×**, ER(500) **68×**, ER(2000) **5×** faster than networkx on sampled=200.
-- Exact Brandes: karate **4×**, ER(500) **5×** faster than networkx; see [performance doc](docs/performance/GRAPH_ALGORITHMS.md) for full numbers.
+- Exact Brandes: karate **4×**, ER(500) **5×** faster than networkx; see [the benchmarks](docs/BENCHMARKS.md#graph-algorithms) for the current numbers.
 
 **Neighborhood betweenness for biomedical KGs (spec 173):**
 

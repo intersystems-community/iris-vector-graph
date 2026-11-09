@@ -1743,10 +1743,14 @@ class VectorMixin:
         graph: Optional[str] = None,
     ) -> dict:
         """Build a BM25 index over one graph's nodes (FR-009).
-        Each node's document is the text of its ``text_props`` properties, lower-cased and split into words, with
-        77 English stopwords ("a", "and", "at", "for", "the" ...; ``Graph.KG.BM25Index.InitStopwords``) left out of
-        documents and queries alike, so they count in neither ``avgdl`` nor a score (4.6.0 R225); ``k1`` and ``b``
-        are the BM25 parameters. Writes the index (replacing one of the same name), records
+        Each node's document is the text of its ``text_props`` properties, lower-cased and split into terms by
+        IRIS's English analyzer (``%iFind.Utils.Analyze``: it breaks at punctuation, so ``don't`` is ``don`` and
+        ``t``, and keeps accents), with 77 English stopwords ("a", "and", "at", "for", "the" ...;
+        ``Graph.KG.BM25Index.InitStopwords``) left out of documents and queries alike, so they count in neither
+        ``avgdl`` nor a score (4.6.0 R225). A document scores, for each query term (counted each time the query
+        repeats it), ``idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len / avgdl))`` with
+        ``idf = ln(1 + (N - n + 0.5) / (n + 0.5))`` (``N`` documents, ``n`` holding the term); ``k1`` (1.5) and
+        ``b`` (0.75) are the BM25 parameters. Writes the index (replacing one of the same name), records
         it in this engine as type ``bm25`` for ``graph``, and returns ``{"indexed",
         "avgdl", "vocab_size", "graph"}``.
 

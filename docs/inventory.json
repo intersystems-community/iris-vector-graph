@@ -468,7 +468,7 @@
         "^KG"
       ],
       "present": "setup",
-      "purpose": "setup writes its version (`\"__version\"`) and nothing else; every row written then keeps the adjacency index (`\"out\"`, `\"in\"`, `\"label\"`) and each source's generation (`\"gen\"`), degree reads cache degrees (`\"degc\"`, and the whole-graph stamp `\"degw\"` when setup or `sync()` warms them), and the temporal index (`\"tout\"`, `\"tin\"`, `\"bucket\"`, `\"tagg\"`, `\"tlast\"`, `\"edgeprop\"`) has no SQL copy",
+      "purpose": "setup writes `\"__version\"` and nothing else, a counter and not a version number: the Graph-Version Token, which every write that can change an answer bumps by one (setup leaves 2), so it only goes up, and a rolled-back write leaves it bumped; a cached store (the Arno snapshot, `^NKG`, the two-hop statistics, cached algorithm answers) records the value it was built at and is stale once it has moved; every row written then keeps the adjacency index (`\"out\"`, `\"in\"`, `\"label\"`) and each source's generation (`\"gen\"`), degree reads cache degrees (`\"degc\"`, and the whole-graph stamp `\"degw\"` when setup or `sync()` warms them), and the temporal index (`\"tout\"`, `\"tin\"`, `\"bucket\"`, `\"tagg\"`, `\"tlast\"`, `\"edgeprop\"`) has no SQL copy",
       "optional": "no",
       "backup": "yes: the temporal part exists nowhere else"
     },

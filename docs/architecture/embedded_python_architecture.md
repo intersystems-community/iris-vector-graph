@@ -57,8 +57,8 @@ What differs inside IRIS:
 
 - **No network round trip** per statement, so per-statement paths (the SQL BFS fallback, row-at-a-time loads) are
   much faster than from a client.
-- **A `SELECT` of a raw `VECTOR` column answers no rows** through `EmbeddedConnection`
-  ([known issue](../KNOWN_ISSUES.md#inside-iris-a-select-of-a-raw-vector-column-answers-no-rows)); select
+- **A `SELECT` of a raw `VECTOR` column raises** through `EmbeddedConnection`
+  ([known issue](../KNOWN_ISSUES.md#inside-iris-a-select-of-a-raw-vector-column-raises)); select
   `VECTOR_COSINE(...)` or a `CAST` of the column.
 - **The `iris` module can be shadowed.** `pip install iris-vector-graph` into IRIS's Python also installs the client
   driver's `iris` package, which lacks `iris.cls`, `iris.gref` and `iris.sql`. `iris_vector_graph.embedded` puts

@@ -945,17 +945,24 @@ class NodesEdgesMixin:
 
         ``graph`` None is the default graph. The ``id`` property is set to ``node_id`` unless
         given, and None-valued properties are skipped. Returns False, writing nothing, when
-        the node already exists in that graph.
+        the node already exists in that graph, or when its only label is one IRIS refuses (over 128 characters); the
+        return value does not tell the two apart.
 
         Args:
             node_id: Unique string identifier for the node.
-            labels: Optional list of label strings (e.g., ["Person", "Employee"]).
+            labels: Optional list of label strings (e.g., ["Person", "Employee"]). A label holds
+                128 characters at most.
             properties: Optional dict of property key-value pairs.
             graph: Optional named graph identifier.
 
         Returns:
-            True if the node was created; False if it already existed in that graph
-            (nothing is added to it).
+            True if the node was created; False if it already existed in that graph (nothing is
+            added to it: not its labels, not its properties), or if the node was not created because
+            IRIS refused its label with SQLCODE -104, which a label over 128 characters gets when
+            it is the only label (``labels=["L" * 200]``). The return value does not tell the two
+            apart; ``get_node`` does. With a second label beside the long one, the call answers
+            True, creates the node, and keeps only the labels IRIS accepted (docs/KNOWN_ISSUES.md,
+            "A label longer than 128 characters").
 
         Raises:
             GraphWriteError: IRIS refused the write (for example SQLCODE -99 for a user
@@ -1545,8 +1552,9 @@ class NodesEdgesMixin:
     ) -> List[str]:
         """
         Insert many nodes, each a dict with ``id`` and optionally ``labels``, ``properties`` and
-        ``graph``; returns the IDs written. Another shape raises ``ValueError`` before anything is
-        written.
+        ``graph``; returns the IDs of the nodes, including any that already existed: such a node is merged into, gaining
+        the labels and properties it lacks and keeping the values it has. Another shape raises ``ValueError`` before
+        anything is written.
 
         Each node goes to its own ``graph`` key, else to ``graph`` (None is the default graph), as
         ``bulk_create_edges`` does (4.6.0 R050: ``graph=`` raised ``TypeError``), with an ``id`` property
@@ -1569,7 +1577,14 @@ class NodesEdgesMixin:
             graph: The graph of every node without a ``graph`` key (None: the default graph)
 
         Returns:
-            The IDs of the nodes with an ``id``, including any that already existed
+            The IDs of the nodes with an ``id``, in the order given, including any that already
+            existed. A node whose ``id`` already exists in its graph is merged, not replaced: it
+            gains the labels it lacked and the properties it lacked, keeps the value of every
+            property it has, and its ID is returned all the same. A label over 128 characters is
+            refused by IRIS and skipped without an error: the node's ID is returned and the node
+            exists without that label. Only when it is the call's one label row (one node with one
+            label) does the call raise ``DataError``, writing nothing (docs/KNOWN_ISSUES.md,
+            "A label longer than 128 characters").
         """
         _ledger_check(self, "bulk_create_nodes")
         if not nodes:

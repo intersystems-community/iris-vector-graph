@@ -114,7 +114,8 @@ USER>write ##class(Graph.KG.NKGAccel).IsLoaded()
 0
 ```
 
-The same check in `%SYS`, or in a namespace you have not initialized, prints `0`, which is expected.
+In `%SYS`, or in a namespace you have not initialized, only the first line prints `0`. The second raises
+`<CLASS DOES NOT EXIST> *Graph.KG.NKGAccel`, because the class is not there to ask. Both are the answer "no IVG here".
 
 `Graph.KG.NKGAccel` is ordinary ObjectScript and is always deployed. The optional part is the Arno library
 (`libarno_callout.so`), a native library that speeds up some graph algorithms. It is not distributed with IVG, and

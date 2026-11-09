@@ -137,7 +137,16 @@ r.rows
 
 `node_id` is the ID you gave the node. In a pattern, `{id: 'x'}` names the node x too, as `CREATE ({id: 'x'})` makes
 it, whether or not the node has an `id` property (a node `bulk_create_edges` created has none); `n.id` in an
-expression reads the property. Pass values as parameters (`$id`) rather than pasting them into the text:
+expression reads the property.
+
+The ID is the node's identity, so writing a node whose ID exists adds to that node and does not make a second one. A
+Cypher `CREATE (n:T {id: 'p1', name: 'Dup'})` on an existing `p1` (labelled `P`, with `name: 'Orig'`) answers without
+error and merges into it: `p1` gains the label `T` and any property it lacked, and the new `name` is dropped, so
+`n.name` still reads `'Orig'`. `bulk_create_nodes` does the same for an ID that exists (new labels and new properties
+added, old values kept) and returns the ID like any other; `create_node` returns `False` and adds nothing, not even a
+label; `store_node` replaces the node's properties. To overwrite a value, `SET` it.
+
+Pass values as parameters (`$id`) rather than pasting them into the text:
 
 ```python
 engine.execute_cypher(
@@ -239,6 +248,18 @@ cur.execute("ROLLBACK")
 engine.get_node("zoe") is None
 # → True
 ```
+
+Your rollback removes the rows the write made and its adjacency entries (`^KG("out")`, `^KG("in")`, `^KG("label")`
+and `^NKG`). It leaves two counters, because IRIS does not undo a `$Increment`. `^KG("__version")` goes up, so a cached
+store built from it (`^NKG`, a cached algorithm answer) is rebuilt once more than it had to be. A rolled-back
+`create_edge` also leaves `^KG("gen", 0, "<source>") = 1` (the graph name in place of `0`; a rolled-back `create_node`
+leaves only the `__version` bump). `gen` counts the writes to a source so that a stored degree count can tell it is
+out of date. It is a counter, not a row: no query, listing or check of the adjacency index sees a node or an edge in it,
+the next write to that source counts on from it, and `erase_graph` clears it. It is harmless.
+
+Another connection sees what your open transaction has written, uncommitted: IRIS reads uncommitted by default, so a
+second connection's `MATCH` or `SELECT` finds the node `create_node` wrote until you roll back (a count of its rows
+there reads 1 before the `ROLLBACK` and 0 after).
 
 A transaction is open after SQL `START TRANSACTION`, and also when you turn the driver's autocommit off
 (`conn.setAutoCommit(False)`); then `conn.commit()` and `conn.rollback()` end it. A write that fails inside your
@@ -801,10 +822,32 @@ engine.execute_cypher(
 ```
 
 Five people have a bio (Acme has none). Both Bob's and Alice's bios contain "vector" once; Bob's is shorter, so it
-scores higher. Text is lower-cased and split into words, and 77 common English words ("a", "and", "at", "for",
-"the" and so on) are left out of documents and queries, so they count in neither a document's length nor a score. `max_df_fraction=` skips query terms that occur in more than that fraction of the documents, and
-`bm25_insert` / `bm25_delete` keep an index current. An index built before 4.2.0 needs `bm25_upgrade(name)` once
-before it accepts writes.
+scores higher.
+
+A document's score for a query is the sum, over the query's terms, of
+
+```text
+idf × tf × (k1 + 1) / (tf + k1 × (1 − b + b × len / avgdl))      idf = ln(1 + (N − n + 0.5) / (n + 0.5))
+```
+
+where `tf` is the term's count in the document, `len` the document's length in terms, `avgdl` the average length,
+`N` the number of documents in the index and `n` the number holding the term. `k1` (1.5) and `b` (0.75) are the
+`bm25_build` arguments of those names. A term the query repeats counts each time, and a term no document holds adds
+nothing. Worked by hand, the query `beta` scores `1.347` against `alpha beta beta` in an index of that and two other
+documents of 4 and 1 terms (N = 3, n = 1, avgdl = 8/3, tf = 2, len = 3).
+
+Text is lower-cased and split into terms by IRIS's English text analyzer (`%iFind.Utils.Analyze`), which breaks at
+punctuation: `state-of-the-art` is `state`, `of`, `the`, `art`; `don't` is `don` and `t`; `3.14` is `3` and `14`. It
+keeps accents (`über` is not `uber`), and it does no stemming. Then 77 common English words are left out of documents
+and queries, so they count in neither a document's length nor a score; `Graph.KG.BM25Index.InitStopwords` is the list:
+a, an, the, and, or, but, in, on, at, to, for, of, with, by, from, is, are, was, were, be, been, being, have, has, had,
+do, does, did, will, would, could, should, may, might, shall, this, that, these, those, it, its, i, we, you, he, she,
+they, them, their, our, your, his, her, not, no, nor, so, yet, both, either, neither, each, all, any, such, as, if,
+than, then, there, here, when, where, which, who, what, how.
+
+`max_df_fraction=` skips query terms that occur in more than that fraction of the documents, and `bm25_insert` /
+`bm25_delete` keep an index current. An index built before 4.2.0 needs `bm25_upgrade(name)` once before it accepts
+writes.
 
 ### Vector search
 

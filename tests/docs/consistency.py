@@ -29,8 +29,10 @@ No IRIS needed: everything is read from the checkout.
 
 from __future__ import annotations
 
+import html
 import re
 import subprocess
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote
@@ -632,3 +634,80 @@ def load_baseline(path: Path = BASELINE) -> set:
 
 def format_baseline(findings) -> str:
     return "".join(f"{f.doc} | {f.kind} | {f.item}\n" for f in sorted(findings, key=lambda f: f.key()))
+
+
+# ── relative links and their anchors (4.6.5) ───────────────────────────────────
+#
+# check_doc checks that a link's file exists, in the documents it checks. CHANGELOG.md is not one of them (its
+# history names classes and paths that are gone), but its links into the current docs are what a reader follows, and
+# a renamed heading breaks one without a sound. `check_links` checks a link's file and, for a markdown target, its
+# `#anchor` against GitHub's heading slugs.
+
+_ATX = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$")
+_ID_ATTR = re.compile(r"""<a\s[^>]*?(?:id|name)=["']([^"']+)["']""", re.I)
+
+
+def github_slug(heading: str) -> str:
+    """The id GitHub gives a heading: its rendered text lower-cased, anything but a letter, mark, number, `_` or
+    `-` dropped, a space becoming `-` (hyphens are not collapsed)."""
+    s = re.sub(r"!?\[((?:[^\]\\]|\\.)*)\]\([^)]*\)", r"\1", heading)  # a link or image keeps its text
+    s = re.sub(r"<[^>]+>", "", s)
+    s = _INLINE.sub(lambda m: m.group(2).strip(), s)
+    s = html.unescape(s)
+    s = re.sub(r"(\*{1,3})(?=\S)(.+?)(?<=\S)\1", r"\2", s)
+    s = re.sub(r"(?<!\w)(_{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)", r"\2", s)
+    out = []
+    for ch in s.strip().lower():
+        cat = unicodedata.category(ch)
+        if ch == " ":
+            out.append("-")
+        elif ch == "-" or cat[0] in "LMN" or cat == "Pc":
+            out.append(ch)
+    return "".join(out)
+
+
+def anchors_of(text: str) -> set:
+    """Every `#anchor` a markdown document answers to: its headings' slugs (a repeat gets `-1`, `-2` …) and the
+    `id` or `name` of an HTML anchor. A line inside a fenced block is not a heading."""
+    anchors, seen = set(), {}
+    for _n, line, in_code in _segments(text):
+        if in_code:
+            continue
+        for m in _ID_ATTR.finditer(line):
+            anchors.add(m.group(1).lower())
+        m = _ATX.match(line)
+        if not m:
+            continue
+        slug = github_slug(m.group(2))
+        count = seen.get(slug, 0)
+        seen[slug] = count + 1
+        anchors.add(slug if count == 0 else f"{slug}-{count}")
+    return anchors
+
+
+def check_links(doc: str, text: str, repo: Path = REPO) -> list:
+    """One Finding per relative link in `doc`'s prose whose file is missing (`link`) or, when the file is markdown
+    (or the link is `#anchor` alone, meaning the document itself), whose anchor names no heading there (`anchor`)."""
+    found: dict = {}
+    cache: dict = {}
+
+    def anchors_in(path: Path) -> set:
+        if path not in cache:
+            cache[path] = anchors_of(path.read_text())
+        return cache[path]
+
+    for n, line, in_code in _segments(text):
+        if in_code:
+            continue
+        prose = _INLINE.sub("", line)
+        for m in list(_LINK.finditer(prose)) + list(_HREF.finditer(prose)):
+            target = m.group(1)
+            if re.match(r"^[a-z][a-z0-9+.-]*:", target, re.I):
+                continue
+            path_part, _, anchor = unquote(target.split("?")[0]).partition("#")
+            resolved = _resolve(doc, path_part, repo) if path_part else repo / doc
+            if not resolved.exists():
+                found.setdefault((doc, "link", target), Finding(doc, "link", target, n))
+            elif anchor and resolved.suffix == ".md" and anchor.lower() not in anchors_in(resolved):
+                found.setdefault((doc, "anchor", target), Finding(doc, "anchor", target, n))
+    return list(found.values())
