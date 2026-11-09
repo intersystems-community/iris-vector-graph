@@ -284,6 +284,8 @@ Found during 4.6.4 and listed for 4.7.0: `bulk_create_nodes`'s batch path adds `
 dict (4.6.3 too); `bulk_load_session`, `embed_nodes` and setup still commit the caller's work; the ledger cannot join a
 caller's transaction; the 4.6.3 list above.
 
+§9: Tom: "Push and publish" (2026-11-09). GitHub CI and Quickstart green on `5489424e`; main fast-forwarded to `5489424e`; tag `v4.6.4`; built at the tag (68 classes in the wheel), `twine check` passed; PyPI (<https://pypi.org/project/iris-vector-graph/4.6.4/>); GitHub release with the CHANGELOG section; clean venv (Python 3.12) installs 4.6.4 and imports with `-I -W error`.
+
 ### 4.6.3 — wrong answers and silent failures from the deferred list (2026-11-08)
 
 Patch release (Tom 2026-11-08: "yes to all" for the deferred list; the lead's cutoff, wrong answers and silent failures
