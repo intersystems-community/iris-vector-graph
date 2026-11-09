@@ -1098,13 +1098,14 @@ ClassMethod PurgeBucketRange(graphId As %String = "", bucketStart As %Integer, b
 ClassMethod MigrateToGraphScoped() As %Integer
 {
 	Set tMigrated = 0
+	Set tTxnLevel = $TLevel
 	Try {
 		TSTART
 		Set tMigrated = ..MigrateRaw()
 		Do ..MigrateDerived()
 		TCOMMIT
 	} Catch tEx {
-		If $TLevel > 0 { TROLLBACK }
+		While $TLevel > tTxnLevel { TROLLBACK 1 }
 		Throw tEx
 	}
 	Quit tMigrated

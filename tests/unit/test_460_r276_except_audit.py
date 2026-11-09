@@ -70,10 +70,17 @@ def _engine(cursor=None):
     ],
     ids=["delete_nodes", "delete_nodes_by_prefix", "delete_edges", "erase_bare_nodes"],
 )
-def test_a_refused_commit_before_the_eraser_raises_and_erases_nothing(call):
-    """The Eraser runs on another connection and sees only committed rows; the commit was ``except: pass``."""
+def test_a_refused_transaction_before_the_eraser_raises_and_erases_nothing(call):
+    """The commit before the Eraser was ``except: pass`` (4.6.0 R276). Since 4.6.4 nothing is committed first: the
+    Eraser runs inside IVG's own transaction (_write_txn), and a refused start of it raises before anything is
+    erased."""
     st = _engine()._store
-    st.conn.commit.side_effect = RuntimeError(LOCK)
+
+    def execute(sql, *a, **k):
+        if sql == "START TRANSACTION":
+            raise RuntimeError(LOCK)
+
+    st.conn.cursor.return_value.execute.side_effect = execute
     with patch.object(st, "_has_eraser_method", return_value=True), patch.object(
         st, "_call_classmethod", side_effect=AssertionError("the Eraser ran")
     ), pytest.raises(GraphWriteError, match=r"SQLCODE -110"):
@@ -205,16 +212,16 @@ def test_import_rdf_raises_on_a_refused_batch_commit(tmp_path):
         eng.import_rdf(str(nt))
 
 
-def test_the_temporal_mirror_raises_on_a_refused_commit():
+def test_the_temporal_mirror_commits_nothing_of_a_callers():
+    """R276 raised on a refused commit here. 4.6.4: there is no commit: each mirror INSERT is atomic on its own, and
+    `conn.commit()` ended a caller's open transaction."""
     eng = _engine(_Cursor())
     eng._adjacency_indexed_cached = False
-    eng.conn.commit.side_effect = RuntimeError(LOCK)
     with patch.object(
         eng._store, "bulk_write_temporal_edges", return_value=IVGResult(columns=["n"], rows=[[1, 0, 0]])
-    ), patch("iris_vector_graph._engine.temporal._mirror_node"), pytest.raises(
-        GraphWriteError, match=r"bulk_create_edges_temporal.*SQLCODE -110.*temporal edges are written"
-    ):
+    ), patch("iris_vector_graph._engine.temporal._mirror_node"):
         eng.bulk_create_edges_temporal([{"s": "a", "p": "R", "o": "b", "ts": 1}], graph="g1")
+    eng.conn.commit.assert_not_called()
 
 
 # ------------------------------------------------------------------ embedded connection

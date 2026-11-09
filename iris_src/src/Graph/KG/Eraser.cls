@@ -51,6 +51,7 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 	Set tName = ##class(Graph.KG.GraphKey).ForName(pGraph)
 
 	Set tRemoved = 0
+	Set tTxnLevel = $TLevel
 	Try {
 		TSTART
 
@@ -256,7 +257,7 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 
 		TCOMMIT
 	} Catch tEx {
-		If $TLevel > 0 { TROLLBACK }
+		While $TLevel > tTxnLevel { TROLLBACK 1 }
 		Throw tEx
 	}
 
@@ -408,6 +409,7 @@ ClassMethod EraseEdges(pGraph As %String = "", pEdgesJson As %String = "[]") As 
 	// alone cannot say: an adjacency entry with no row behind it removes nothing from the
 	// table, yet its ^NKG sketch and edgeCount are exactly as stale as a row's.
 	Set tHadAdj = 0
+	Set tTxnLevel = $TLevel
 	Try {
 		TSTART
 		Set tIter = tArr.%GetIterator()
@@ -454,7 +456,7 @@ ClassMethod EraseEdges(pGraph As %String = "", pEdgesJson As %String = "[]") As 
 		}
 		TCOMMIT
 	} Catch tEx {
-		If $TLevel > 0 { TROLLBACK }
+		While $TLevel > tTxnLevel { TROLLBACK 1 }
 		Throw tEx
 	}
 	Quit tRemoved
@@ -477,6 +479,7 @@ ClassMethod EraseIdSet(pKey, pName As %String) As %Integer [ Private ]
 	// 1 once anything this erase removed could be in ^NKG (see NKGMayHoldAny). Starts
 	// at 0: the answer is "no" until a node or an edge proves otherwise.
 	Set tNkgAtRisk = 0
+	Set tTxnLevel = $TLevel
 	Try {
 		TSTART
 		Set tId = ""
@@ -624,7 +627,7 @@ ClassMethod EraseIdSet(pKey, pName As %String) As %Integer [ Private ]
 		}
 		TCOMMIT
 	} Catch tEx {
-		If $TLevel > 0 { TROLLBACK }
+		While $TLevel > tTxnLevel { TROLLBACK 1 }
 		Kill ^||IVG.EraseIds
 		Throw tEx
 	}
@@ -706,6 +709,7 @@ ClassMethod EraseFHIRNodeRows(pName As %String, pId As %String) [ Private ]
 ClassMethod EraseAll() As %Integer
 {
 	Set tRemoved = 0
+	Set tTxnLevel = $TLevel
 	Try {
 		TSTART
 
@@ -809,7 +813,7 @@ ClassMethod EraseAll() As %Integer
 
 		TCOMMIT
 	} Catch tEx {
-		If $TLevel > 0 { TROLLBACK }
+		While $TLevel > tTxnLevel { TROLLBACK 1 }
 		Throw tEx
 	}
 
@@ -1266,6 +1270,7 @@ ClassMethod DeleteBareSet(pKey, pName As %String, pRoot As %String, pBatch As %I
 	$$$ThrowOnError(tDel.%Prepare("DELETE FROM Graph_KG.nodes AS n WHERE n.node_id = ? AND COALESCE(n.graph_id, '') = COALESCE(?, '')" _ ..BareClauses(.tRoute)))
 	Set tErased = 0, tN = 0
 	Kill tDone
+	Set tTxnLevel = $TLevel
 	Try {
 		TSTART
 		While tId '= "" {
@@ -1300,7 +1305,7 @@ ClassMethod DeleteBareSet(pKey, pName As %String, pRoot As %String, pBatch As %I
 			}
 		}
 	} Catch tEx {
-		If $TLevel > 0 { TROLLBACK }
+		While $TLevel > tTxnLevel { TROLLBACK 1 }
 		Throw tEx
 	}
 	If tErased > 0 {

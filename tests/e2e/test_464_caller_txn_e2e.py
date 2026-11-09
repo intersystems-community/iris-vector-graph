@@ -8,7 +8,7 @@ Each write here runs four ways, its result read from a second connection once th
 
   (a) caller's transaction, then the caller rolls back: nothing of either remains
   (b) caller's transaction, then the caller commits: both remain
-  (c) caller's transaction, and IVG's write fails: IVG raises (or answers its documented "nothing written"), its own
+  (c) caller's transaction, and IVG's write fails: IVG raises (create_node answers its documented False), its own
       partial rows are gone, and the caller's earlier row is still in the open transaction and commits
   (d) no caller transaction: IVG's write is committed when the call returns (the connection is closed without a
       commit, and the second connection still reads it)
@@ -163,8 +163,12 @@ def _w_create_node():
         write=lambda e, u: e.create_node(f"{u}n", labels=["T464"], properties={"v": "1"}),
         done=lambda o, u: _node(o, f"{u}n") and _label(o, f"{u}n", "T464") and _prop(o, f"{u}n", "v") == "1",
         undone=lambda o, u: not _node(o, f"{u}n") and not _label(o, f"{u}n", "T464"),
-        fail=lambda e, u: e.create_node(f"{u}x", labels=["T464", TOO_LONG]),
-        left_nothing=lambda o, u: not _node(o, f"{u}x") and not _label(o, f"{u}x", "T464"),
+        # node_id is VARCHAR(256): IRIS refuses the row (-104), and create_node answers False, nothing written.
+        # (A too-long label is no failure to test with: the driver's executemany skips a row IRIS refuses without
+        # raising, so create_node answers True without the label; see the 4.6.4 changelog.)
+        fail=lambda e, u: e.create_node(f"{u}x" + "x" * 300, labels=["T464"]),
+        left_nothing=lambda o, u: _count(o, "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id %STARTSWITH ?",
+                                         [f"{u}x"]) == 0,
     )
 
 
@@ -226,8 +230,8 @@ def _w_bulk_create_nodes():
         write=lambda e, u: e.bulk_create_nodes([{"id": f"{u}n{i}", "labels": ["T464"]} for i in range(3)]),
         done=lambda o, u: all(_node(o, f"{u}n{i}") and _label(o, f"{u}n{i}", "T464") for i in range(3)),
         undone=lambda o, u: not any(_node(o, f"{u}n{i}") for i in range(3)),
-        fail=lambda e, u: e.bulk_create_nodes(
-            [{"id": f"{u}x0", "labels": ["T464"]}, {"id": f"{u}x1", "labels": [TOO_LONG]}]),
+        # bad input, refused before anything is written (executemany skips a row IRIS refuses without raising)
+        fail=lambda e, u: e.bulk_create_nodes([{"id": f"{u}x0", "labels": ["T464"]}, {"id": f"{u}x1", "bogus": 1}]),
         left_nothing=lambda o, u: not _node(o, f"{u}x0") and not _node(o, f"{u}x1"),
     )
 
@@ -359,8 +363,13 @@ def test_c_a_failed_write_keeps_the_callers_work(observer, caller, name, txn):
     w["setup"](eng, u)
     _open(caller, txn)
     _caller_row(caller, u)
-    with pytest.raises((GraphWriteError, RuntimeError)):
-        w["fail"](eng, u)
+    try:
+        answer = w["fail"](eng, u)
+    except (GraphWriteError, RuntimeError, ValueError):
+        pass
+    else:
+        # only create_node answers a refused row instead of raising: False, its "nothing written"
+        assert name == "create_node" and answer is False, f"{name}'s failing write answered {answer!r}"
     assert _level(caller) == 1, "the failed write ended the caller's transaction (or left a level of its own open)"
     _end(caller, txn, "commit")
     assert _has_caller_row(observer, u), "the failed write took the caller's earlier row with it"

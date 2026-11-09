@@ -330,8 +330,9 @@ def _fresh_setup(monkeypatch, grants_per_object=0):
 #: grants on each object; on dpgenai1 they made 23,191 in setup's first ten minutes. A release that ships more classes
 #: or routines moves this by 4 a class and about 1 a routine: measure again and say so here. 516 since be6cd07c (one
 #: more %Dictionary.CompiledClass %ExistsId, the MCPToolSet DependsOn change). 517 since 1a534f2e (R316: the UPDATE
-#: recording kg_EdgeEmbeddings' registry row as an edge route); 518 with R315's routine, CY_LIST_HAS.
-FRESH_SETUP_ROUND_TRIPS = 518
+#: recording kg_EdgeEmbeddings' registry row as an edge route); 518 with R315's routine, CY_LIST_HAS. 522 in 4.6.4:
+#: one more class, Graph.KG.Txn (its three Txn_* SqlProcs project from Graph.KG.SqlProcs, already loaded).
+FRESH_SETUP_ROUND_TRIPS = 522
 
 
 def test_a_fresh_setup_makes_a_fixed_number_of_round_trips(monkeypatch):

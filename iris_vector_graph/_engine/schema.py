@@ -2950,14 +2950,19 @@ class SchemaMixin:
         graph_key = graph_index_key(graph)
 
         def _insert_inferred(triples):
-            nonlocal inferred_count
             # One transaction: an INSERT IRIS refuses (a reader's SQLCODE -99, a lock timeout) rolls back the edges
             # this call wrote and raises. It was `except Exception: continue`, and a refused call answered
             # {"inferred": 0}, the answer for nothing to infer (4.6.0 R245). A duplicate (-119) is still skipped.
-            from iris_vector_graph._write_txn import is_duplicate, rollback
+            from iris_vector_graph._write_txn import write_txn
+
+            with write_txn(self.conn, self._ivg_schema, cursor):
+                _write_inferred(triples)
+
+        def _write_inferred(triples):
+            nonlocal inferred_count
+            from iris_vector_graph._write_txn import is_duplicate
             from iris_vector_graph.errors import GraphWriteError
 
-            cursor.execute("START TRANSACTION")
             adjacency_written = 0
             for s, p, o in sorted(triples):
                 if not _exists(s, p, o):
@@ -2977,7 +2982,6 @@ class SchemaMixin:
                     except Exception as e:
                         if is_duplicate(e):
                             continue
-                        rollback(cursor)
                         inferred_count = 0
                         left = (
                             f"the {adjacency_written} ^KG entries written for the rolled-back edges remain "
@@ -2995,7 +2999,6 @@ class SchemaMixin:
                         # 4.6.3: a WARNING, and the edge counted, committed and unseen by every ^KG reader
                         from iris_vector_graph._engine.nodes_edges import kg_adjacency_left
 
-                        rollback(cursor)
                         inferred_count = 0
                         left = (
                             f"the rows are rolled back; the {adjacency_written} ^KG entries written before it remain "
@@ -3005,7 +3008,6 @@ class SchemaMixin:
                         raise GraphWriteError(
                             "materialize_inference", e, kg_adjacency_left("WriteAdjacency", e, left)
                         ) from e
-            cursor.execute("COMMIT")
 
         def _transitive_closure(direct_edges):
             closure = set(direct_edges)

@@ -92,6 +92,12 @@ def test_the_docs_state_counts_this_test_reads():
     assert {w for _, w, _, _ in _stated()} >= {"routines", "tables", "catalog", "projected", "extent"}
 
 
+#: Routines a release after 4.6.0 added, by count: the CHANGELOG's 4.6.0 section states 4.6.0's counts, and the
+#: current docs the current ones. 4.6.4: Txn_Begin, Txn_End and Txn_Undo (Graph.KG.SqlProcs).
+ADDED_SINCE_460 = {"projected": 3, "catalog": 3}
+
+
 @pytest.mark.parametrize("doc, what, number, context", _stated(), ids=lambda v: v if isinstance(v, str) else None)
 def test_a_stated_count_is_the_count(doc, what, number, context):
-    assert number == _counts()[what], f"{doc} says {number} for {what}, setup has {_counts()[what]}: …{context}…"
+    expected = _counts()[what] - (ADDED_SINCE_460.get(what, 0) if doc == "CHANGELOG.md (v4.6.0)" else 0)
+    assert number == expected, f"{doc} says {number} for {what}, setup has {expected}: …{context}…"

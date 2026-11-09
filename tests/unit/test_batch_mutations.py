@@ -76,4 +76,6 @@ def test_bulk_create_nodes_batching(engine, mock_conn):
     # Check executemany for nodes, labels, and props
     # bulk_create_nodes uses 3 executemany calls
     assert cursor.executemany.call_count == 3
-    mock_conn.commit.assert_called()
+    # 4.6.4: one transaction of IVG's own, committed on its cursor (_write_txn), not the driver's commit()
+    cursor.execute.assert_any_call("COMMIT")
+    mock_conn.commit.assert_not_called()

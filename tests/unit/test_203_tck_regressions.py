@@ -2957,7 +2957,8 @@ class TestValuesProjectedBeforeSetStayPreSet:
         snap_i = sqls.index("WITH Stage2 AS (SELECT 1) SELECT * FROM Stage2")
         assert snap_i < sqls.index("UPDATE rdf_props SET val = ?")
         assert calls[snap_i][1] == ["p"]
-        final = sqls[-1]
+        assert sqls[-1] == "COMMIT"  # 4.6.4: IVG's own transaction (_write_txn)
+        final = sqls[-2]
         assert "__SNAPSHOT__" not in final and "JSON_TABLE(" in final, final
         assert "original" in final
 

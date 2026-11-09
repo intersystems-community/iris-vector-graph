@@ -5,6 +5,7 @@ import logging
 import threading
 import time
 
+from iris_vector_graph._write_txn import write_txn
 from iris_vector_graph.constants import DEFAULT_GRAPH, VECTOR_TABLE_NAMES
 from iris_vector_graph.embedding_identity import (
     EmbeddingIdentity,
@@ -991,21 +992,28 @@ class EmbeddingsMixin:
         # for `patient:1` erases graph A's, which is exactly the collision
         # UNIQUE (graph_id, node_id) exists to permit. A refused DELETE raises
         # (4.6.0 R276): passed over, the INSERT ran after it.
-        cursor.execute(
-            f"DELETE FROM {self._t(table)}"
-            f" WHERE node_id = ? AND {graph_scope_predicate('graph_id')}",
-            [node_id, graph_id],
-        )
+        # 4.6.4: the DELETE and the INSERT are one transaction of IVG's (_write_txn), nested in the caller's when one
+        # is open: conn.commit() committed the caller's work, and a refused INSERT left the old vector deleted
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
         try:
             cursor.execute(
-                f"INSERT INTO {self._t(table)} (graph_id, node_id, emb, metadata)"
-                f" VALUES (?, ?, TO_VECTOR('{emb_str}', {_dtype}), ?)",
-                [graph_id, node_id, meta_json],
+                f"DELETE FROM {self._t(table)}"
+                f" WHERE node_id = ? AND {graph_scope_predicate('graph_id')}",
+                [node_id, graph_id],
             )
-        except Exception as e:
-            self._diagnose_vector_write(e, table, len(embedding))
+            try:
+                cursor.execute(
+                    f"INSERT INTO {self._t(table)} (graph_id, node_id, emb, metadata)"
+                    f" VALUES (?, ?, TO_VECTOR('{emb_str}', {_dtype}), ?)",
+                    [graph_id, node_id, meta_json],
+                )
+            except Exception as e:
+                self._diagnose_vector_write(e, table, len(embedding))
+                raise
+        except BaseException:
+            txn.rollback()
             raise
-        self.conn.commit()
+        txn.commit()
         return True
 
 
@@ -1068,7 +1076,8 @@ class EmbeddingsMixin:
             self._assert_node_exists(node_id, graph=graph_id)
 
         cursor = self.conn.cursor()
-        cursor.execute("START TRANSACTION")
+        # 4.6.4: IVG's own part, nested in the caller's transaction when there is one (_write_txn)
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
         try:
             for item in items:
                 node_id = item["node_id"]
@@ -1089,10 +1098,10 @@ class EmbeddingsMixin:
                     f" VALUES (?, ?, TO_VECTOR('{emb_str}', {_dtype}), ?)",
                     [graph_id, node_id, meta_json],
                 )
-            cursor.execute("COMMIT")
+            txn.commit()
             return True
         except Exception as e:
-            cursor.execute("ROLLBACK")
+            txn.rollback()
             self._diagnose_vector_write(e, table, widths[0])
             raise
 
@@ -1162,22 +1171,28 @@ class EmbeddingsMixin:
         # `(s, p, o_id)` would erase graph A's, which is the collision
         # UNIQUE (graph_id, s, p, o_id) exists to permit. A refused DELETE raises
         # (4.6.0 R276): passed over, the INSERT ran after it.
-        cursor.execute(
-            f"DELETE FROM {self._t(table)}"
-            " WHERE s = ? AND p = ? AND o_id = ?"
-            f" AND {graph_scope_predicate('graph_id')}",
-            [s, p, o_id, graph_id],
-        )
+        # 4.6.4: one transaction of IVG's, as store_embedding
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
         try:
             cursor.execute(
-                f"INSERT INTO {self._t(table)} (graph_id, s, p, o_id, emb, metadata)"
-                f" VALUES (?, ?, ?, ?, TO_VECTOR('{emb_str}', {_dtype}), ?)",
-                [graph_id, s, p, o_id, meta_json],
+                f"DELETE FROM {self._t(table)}"
+                " WHERE s = ? AND p = ? AND o_id = ?"
+                f" AND {graph_scope_predicate('graph_id')}",
+                [s, p, o_id, graph_id],
             )
-        except Exception as e:
-            self._diagnose_vector_write(e, table, len(embedding))
+            try:
+                cursor.execute(
+                    f"INSERT INTO {self._t(table)} (graph_id, s, p, o_id, emb, metadata)"
+                    f" VALUES (?, ?, ?, ?, TO_VECTOR('{emb_str}', {_dtype}), ?)",
+                    [graph_id, s, p, o_id, meta_json],
+                )
+            except Exception as e:
+                self._diagnose_vector_write(e, table, len(embedding))
+                raise
+        except BaseException:
+            txn.rollback()
             raise
-        self.conn.commit()
+        txn.commit()
         return True
 
 
@@ -1236,7 +1251,8 @@ class EmbeddingsMixin:
                 )
 
         cursor = self.conn.cursor()
-        cursor.execute("START TRANSACTION")
+        # 4.6.4: IVG's own part, nested in the caller's transaction when there is one (_write_txn)
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
         try:
             for item in items:
                 s, p, o_id = item["s"], item["p"], item["o_id"]
@@ -1256,10 +1272,10 @@ class EmbeddingsMixin:
                     f" VALUES (?, ?, ?, ?, TO_VECTOR('{emb_str}', {_dtype}), ?)",
                     [graph_id, s, p, o_id, meta_json],
                 )
-            cursor.execute("COMMIT")
+            txn.commit()
             return True
         except Exception as e:
-            cursor.execute("ROLLBACK")
+            txn.rollback()
             self._diagnose_vector_write(e, table, widths[0])
             raise
 

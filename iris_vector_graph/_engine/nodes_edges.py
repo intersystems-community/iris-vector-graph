@@ -15,7 +15,7 @@ from iris_vector_graph.constants import BULK_CHUNK_SIZE as _BULK_CHUNK_SIZE
 from iris_vector_graph.constants import DEFAULT_GRAPH
 from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED_ROW
 from iris_vector_graph._write_txn import is_duplicate as _is_duplicate
-from iris_vector_graph._write_txn import rollback as _rollback
+from iris_vector_graph._write_txn import WriteTxn, write_txn
 from iris_vector_graph.errors import GraphWriteError, IVGError
 from iris_vector_graph.prop_values import decode_typed_text, prop_value, read_node_value
 from iris_vector_graph.routing import graph_scope_predicate
@@ -969,23 +969,23 @@ class NodesEdgesMixin:
         _ledger_check(self, "create_node")
         NodeIdInput(node_id=node_id)
         cursor = self.conn.cursor()
+        # 4.6.4: IVG's own part, nested in the caller's transaction when there is one (_write_txn)
+        txn = WriteTxn(self.conn, self._ivg_schema, cursor)
         try:
-            cursor.execute("START TRANSACTION")
-
+            txn.begin()
             graph_id = graph if graph is not None else ""
-            # Use a schema-compatible INSERT: include graph_id only when the column
-            # exists (post-214 schema).  Pre-214 clusters that haven't run the migration
-            # yet still work; they just can't use named graphs until migrated.
-            if getattr(self, "_nodes_has_graph_id", True):
-                cursor.execute(
-                    f"INSERT INTO {self._t('nodes')} (node_id, graph_id) VALUES (?, ?)",
-                    [node_id, graph_id],
-                )
-            else:
-                cursor.execute(
-                    f"INSERT INTO {self._t('nodes')} (node_id) VALUES (?)",
-                    [node_id],
-                )
+            # Guarded, not refused: inside a transaction a duplicate the key refuses (-119) costs a journaled
+            # statement rollback, 32-160 ms, against the probe's microseconds; the row count says which happened.
+            # graph_id is named only when the column exists (post-214 schema).
+            scoped = getattr(self, "_nodes_has_graph_id", True)
+            cursor.execute(
+                self._bulk_sql("nodes_with_graph" if scoped else "nodes"),
+                [node_id, graph_id, node_id, graph_id] if scoped else [node_id, node_id],
+            )
+            if not cursor.rowcount:
+                txn.rollback()
+                logger.debug(f"create_node skipped: {node_id}: already in graph {graph_id!r}")
+                return False
 
             # Spec 227 (FR-034): the children carry the graph too. Without this the
             # node lands in `graph` and its labels and properties land in the default
@@ -1035,10 +1035,10 @@ class NodesEdgesMixin:
                 prop_sql = f'INSERT INTO {self._t("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?)'
             cursor.executemany(prop_sql, prop_data)
 
-            cursor.execute("COMMIT")
+            txn.commit()
             return True
         except Exception as e:
-            _rollback(cursor)
+            txn.rollback()
             err_lower = str(e).lower()
             if "unique" in err_lower or "-119" in str(e) or "validation failed" in err_lower:
                 logger.debug(f"create_node skipped: {node_id}: {str(e)[:80]}")
@@ -1147,8 +1147,9 @@ class NodesEdgesMixin:
         qual_json = _qualifiers_json(quals, "create_edge")
         cursor = self.conn.cursor()
         kg_failed = kg_written = False
+        txn = WriteTxn(self.conn, self._ivg_schema, cursor)
         try:
-            cursor.execute("START TRANSACTION")
+            txn.begin()
             self._ensure_edge_endpoints(cursor, ((graph, source_id), (graph, target_id)))
             # Guarded, not refused: a duplicate the unique key u_spo_graph refuses (-119) is rolled back through the
             # journal, ~30 ms against a probe's microseconds (KNOWN_ISSUES). The row count says which happened.
@@ -1175,9 +1176,9 @@ class NodesEdgesMixin:
                     graph_key,
                 )
                 kg_failed, kg_written = False, True
-            cursor.execute("COMMIT")
+            txn.commit()
         except Exception as e:
-            _rollback(cursor)
+            txn.rollback()
             if kg_failed:
                 raise GraphWriteError(
                     "create_edge", e, kg_adjacency_left("WriteAdjacency", e, "the rows are rolled back, nothing written")
@@ -1238,11 +1239,11 @@ class NodesEdgesMixin:
                 return False
             if not (isinstance(parsed, dict) and parsed.get("temporal") is True):
                 return False
+            # One statement, atomic on its own; inside the caller's transaction it is the caller's (4.6.4: a
+            # conn.commit() here committed the caller's work, and conn.rollback() took it back)
             cursor.execute(f"UPDATE {self._t('rdf_edges')} SET qualifiers = ? WHERE %ID = ?", [qual_json, row_id])
-            self.conn.commit()
             return True
         except Exception as e:
-            self.conn.rollback()
             raise GraphWriteError("create_edge", e) from e
 
     def set_edge_weight(self, source: str, predicate: str, target: str, weight: float) -> bool:
@@ -1272,10 +1273,11 @@ class NodesEdgesMixin:
         # and on an edge with no row it created adjacency nothing stood behind.
         cursor = self.conn.cursor()
         kg_failed = False
+        txn = WriteTxn(self.conn, self._ivg_schema, cursor)
         try:
+            txn.begin()
             # one transaction: outside it each UPDATE committed on its own, and a failure on a multigraph
             # triple's second row left the first at the new weight
-            cursor.execute("START TRANSACTION")
             cursor.execute(
                 f"SELECT %ID, qualifiers FROM {self._t('rdf_edges')} "
                 "WHERE s = ? AND p = ? AND o_id = ? AND COALESCE(graph_id, '') = ''",
@@ -1283,7 +1285,7 @@ class NodesEdgesMixin:
             )
             rows = [tuple(r) for r in cursor.fetchall()]
             if not rows:
-                _rollback(cursor)
+                txn.rollback()
                 return False
             new_weight = _cypher_json_number(float(weight))
             for row_id, qual_json in rows:
@@ -1308,9 +1310,9 @@ class NodesEdgesMixin:
                     "Graph.KG.EdgeScan", "WriteAdjacency", source, predicate, target, str(new_weight)
                 )
                 kg_failed = False
-            cursor.execute("COMMIT")
+            txn.commit()
         except Exception as e:
-            _rollback(cursor)
+            txn.rollback()
             if kg_failed:
                 raise GraphWriteError(
                     "set_edge_weight", e,
@@ -1352,9 +1354,10 @@ class NodesEdgesMixin:
         graph_key = graph_index_key(graph)
         cursor = self.conn.cursor()
         kg_method = None  # set while the ^KG delete runs, so a failure there is named
+        txn = WriteTxn(self.conn, self._ivg_schema, cursor)
         try:
+            txn.begin()
             # A transaction of its own: the driver's connection autocommits, so conn.rollback() took nothing back
-            cursor.execute("START TRANSACTION")
             if all_graphs:
                 cursor.execute(
                     f"DELETE FROM {self._t('rdf_edges')} WHERE s = ? AND p = ? AND o_id = ?",
@@ -1384,9 +1387,9 @@ class NodesEdgesMixin:
                     kg_args.append(graph_key)
                 self._iris_obj().classMethodVoid("Graph.KG.EdgeScan", kg_method, *kg_args)
                 kg_method = None
-            cursor.execute("COMMIT")
+            txn.commit()
         except Exception as e:
-            _rollback(cursor)
+            txn.rollback()
             if kg_method:
                 raise GraphWriteError(
                     "delete_edge", e, kg_adjacency_left(kg_method, e, "the rows are rolled back, nothing deleted")
@@ -1593,12 +1596,15 @@ class NodesEdgesMixin:
         if self._known_capabilities.objectscript_deployed and not any(
             n.get("graph") for n in nodes
         ):
+            txn = write_txn(self.conn, self._ivg_schema)
             try:
                 import json as _json
 
                 from iris_vector_graph.schema import _call_classmethod_large
 
-                iris_obj = self._iris_obj()
+                # Inside a caller's transaction the loader runs on the cursor's own server process, where that
+                # transaction is (the engine's Native API connection may be another one)
+                iris_obj = txn.native() if txn.joined else self._iris_obj()
                 # Serialised here, as the SQL path below does: the class method used
                 # to JSON-quote strings itself, so `name` read back as '"Olaparib"'.
                 # The `id` property is stored, as the SQL path and create_node store it (R089).
@@ -1623,17 +1629,26 @@ class NodesEdgesMixin:
                             f"BulkIngestNodesSQL wrote {count} of {len(chunk)} nodes"
                         )
                     created.extend(c["id"] for c in chunk)
+                txn.commit()
                 return created
             except Exception as e:
+                txn.rollback()
                 logger.warning("BulkIngestNodesSQL failed (%s), falling back to SQL path", e)
 
         cursor = self.conn.cursor()
         created_ids = []
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
+        if disable_indexes and txn.joined:
+            # DROP INDEX is DDL: not inside the caller's transaction (4.6.4)
+            disable_indexes = False
 
         try:
             # 1. Pre-load setup
             if disable_indexes:
+                # DDL outside IVG's own transaction, which opens again after it
+                txn.commit()
                 GraphSchema.disable_indexes(cursor, schema=self._ivg_schema)
+                txn = write_txn(self.conn, self._ivg_schema, cursor)
 
             # 2. SQL templates (using %NOINDEX for speed)
             # Use graph-aware template only when the schema has the graph_id column.
@@ -1704,7 +1719,6 @@ class NodesEdgesMixin:
             # 4. Batch Execution (Transactional phases for FK safety)
             # Phase 1: Nodes
             cursor.executemany(node_sql, valid_nodes)
-            self.conn.commit()
 
             # Phase 2: Labels
             if all_labels:
@@ -1714,11 +1728,12 @@ class NodesEdgesMixin:
             if all_props:
                 cursor.executemany(prop_sql, all_props)
 
-            self.conn.commit()
+            # One transaction (4.6.4): the nodes were committed before their labels, so a failed label left them
+            txn.commit()
             return created_ids
 
         except Exception as e:
-            self.conn.rollback()
+            txn.rollback()
             logger.error(f"Bulk load failed: {e}")
             raise
         finally:
@@ -1781,9 +1796,16 @@ class NodesEdgesMixin:
             disable_indexes = False
 
         cursor = self.conn.cursor()
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
+        if disable_indexes and txn.joined:
+            # DROP INDEX is DDL: not inside the caller's transaction (4.6.4)
+            disable_indexes = False
         try:
             if disable_indexes:
+                # DDL outside IVG's own transaction, which opens again after it
+                txn.commit()
                 GraphSchema.disable_indexes(cursor, schema=self._ivg_schema)
+                txn = write_txn(self.conn, self._ivg_schema, cursor)
 
             edge_sql = self._bulk_sql("rdf_edges")
             edge_params = []
@@ -1839,10 +1861,10 @@ class NodesEdgesMixin:
             if adopt:
                 cursor.executemany(rewrite_schema_text(_ADOPT_TEMPORAL_ROW_SQL, self._ivg_schema), adopt)
 
-            self.conn.commit()
+            txn.commit()
             return len(edge_params)
         except Exception as e:
-            self.conn.rollback()
+            txn.rollback()
             logger.error(f"Bulk edge load failed: {e}")
             raise
         finally:
@@ -1884,10 +1906,13 @@ class NodesEdgesMixin:
         normalized = [_ingest_edge_triple(i, e, predicate) for i, e in enumerate(edges)]
 
         if self.capabilities.objectscript_deployed:
+            txn = write_txn(self.conn, self._ivg_schema)
             try:
                 from iris_vector_graph.schema import _call_classmethod_large
 
-                iris_obj = self._iris_obj()
+                # Inside a caller's transaction the loader runs on the cursor's own server process (see
+                # bulk_create_nodes)
+                iris_obj = txn.native() if txn.joined else self._iris_obj()
                 n = 0
                 for i in range(0, len(normalized), _BULK_CHUNK_SIZE):
                     chunk = normalized[i : i + _BULK_CHUNK_SIZE]
@@ -1901,7 +1926,9 @@ class NodesEdgesMixin:
                         )
                     )
                 self._nkg_dirty = True
+                txn.commit()
             except Exception as e:
+                txn.rollback()
                 logger.warning("BulkIngestEdgesSQL failed (%s), falling back to SQL path", e)
             else:
                 # Outside the try: a failed sync() raises (R135) rather than sending the edges down the SQL path again.
@@ -1914,14 +1941,14 @@ class NodesEdgesMixin:
         err_lower = lambda ex: ("unique" in str(ex).lower() or "-119" in str(ex))
         # One transaction, so a failure takes the endpoint and edge rows back: the driver's connection autocommits,
         # and the conn.rollback() this path made before raising took nothing back (4.6.3).
-        cursor.execute("START TRANSACTION")
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
         try:
             # This path writes the default graph only, so that is where the endpoints go.
             self._ensure_edge_endpoints(
                 cursor, ((None, e[k]) for e in normalized for k in ("s", "o"))
             )
         except Exception as ex:
-            _rollback(cursor)
+            txn.rollback()
             raise GraphWriteError("bulk_ingest_edges", ex) from ex
         for edge in normalized:
             s, p, o = edge["s"], edge["p"], edge["o"]
@@ -1940,7 +1967,7 @@ class NodesEdgesMixin:
                     continue  # duplicate edge (a concurrent writer) — skip silently
                 # 4.6.0 R276: any other refusal fell through, wrote ^KG for the row that was not there, and
                 # counted it.
-                _rollback(cursor)
+                txn.rollback()
                 raise GraphWriteError("bulk_ingest_edges", ex, left=_ingest_left(self, n)) from ex
             if not self._adjacency_indexed:  # with the index the row wrote ^KG (spec 252)
                 try:
@@ -1951,14 +1978,14 @@ class NodesEdgesMixin:
                     # A failure left ^KG without the edge, and was passed over (4.6.0 R276). 4.6.3: so was a class
                     # that is not there, read as "no ^KG to keep"; that is a half-finished setup, whose ^KG reads
                     # then missed the edges.
-                    _rollback(cursor)
+                    txn.rollback()
                     left = kg_adjacency_left("WriteAdjacency", ex, _ingest_left(self, n))
                     raise GraphWriteError("bulk_ingest_edges", ex, left=left) from ex
             n += 1
         try:
-            cursor.execute("COMMIT")
+            txn.commit()
         except Exception as ex:
-            _rollback(cursor)
+            txn.rollback()
             raise GraphWriteError("bulk_ingest_edges", ex, left=_ingest_left(self, n)) from ex
         self._nkg_dirty = True
         if auto_sync:
@@ -2256,8 +2283,9 @@ class NodesEdgesMixin:
         _scoped = getattr(self, "_nodes_has_graph_id", True)
         _children_scoped = getattr(self, "_children_have_graph_id", True)
         cursor = self.conn.cursor()
+        txn = WriteTxn(self.conn, self._ivg_schema, cursor)
         try:
-            cursor.execute("START TRANSACTION")
+            txn.begin()
             try:
                 if _scoped:
                     cursor.execute(
@@ -2354,9 +2382,9 @@ class NodesEdgesMixin:
                             f"SELECT 1 FROM {self._t('rdf_labels')} WHERE s = ? AND label = ?",
                             [node_id, lbl],
                         )
-            cursor.execute("COMMIT")
+            txn.commit()
         except Exception as e:
-            _rollback(cursor)
+            txn.rollback()
             raise GraphWriteError("store_node", e) from e
         finally:
             cursor.close()
@@ -2393,8 +2421,9 @@ class NodesEdgesMixin:
         graph_id = graph if graph is not None else ""
         qual_json = _qualifiers_json(qualifiers, "store_edge")
         cursor = self.conn.cursor()
+        txn = WriteTxn(self.conn, self._ivg_schema, cursor)
         try:
-            cursor.execute("START TRANSACTION")
+            txn.begin()
             self._ensure_edge_endpoints(cursor, ((graph_id, source_id), (graph_id, target_id)))
             try:
                 cursor.execute(
@@ -2411,9 +2440,9 @@ class NodesEdgesMixin:
                     "AND s = ? AND p = ? AND o_id = ?",
                     [graph_id, source_id, predicate, target_id],
                 )
-            cursor.execute("COMMIT")
+            txn.commit()
         except Exception as e:
-            _rollback(cursor)
+            txn.rollback()
             raise GraphWriteError("store_edge", e) from e
         finally:
             cursor.close()

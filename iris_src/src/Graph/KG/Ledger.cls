@@ -192,6 +192,7 @@ ClassMethod Count(pKind As %String) As %Status
 ClassMethod RecordVerify(pResult As %String) As %Status
 {
     Set tSC = $$$OK
+    Set tTxnLevel = $TLevel
     Try {
         TSTART
         Set tStats = ##class(Graph.KG.LedgerStats).Ensure()
@@ -200,9 +201,9 @@ ClassMethod RecordVerify(pResult As %String) As %Status
             Set tStats.LastVerifyResult = pResult
             Set tSC = tStats.%Save()
         }
-        If $$$ISERR(tSC) { TROLLBACK } Else { TCOMMIT }
+        If $$$ISERR(tSC) { TROLLBACK 1 } Else { TCOMMIT }
     } Catch ex {
-        If $TLevel > 0 { TROLLBACK }
+        While $TLevel > tTxnLevel { TROLLBACK 1 }
         Set tSC = ex.AsStatus()
     }
     Quit tSC
@@ -259,11 +260,12 @@ ClassMethod Enable(pStrict As %Boolean = 0, pMaxOps As %Integer = 50000, pReconB
     }
     If $TLevel > 0 Return ..Err("transaction_open", "a transaction is already open ($TLEVEL=" _ $TLevel _ ")")
     Set tResult = ""
+    Set tTxnLevel = $TLevel
     Try {
         TSTART
         Lock +^IVG.Ledger("head"):..#LOCKTIMEOUT
         If '$Test {
-            TROLLBACK
+            TROLLBACK 1
             Return ..Err("lock_timeout", "could not acquire ledger head lock")
         }
         If tState = "disabled" {
@@ -274,7 +276,7 @@ ClassMethod Enable(pStrict As %Boolean = 0, pMaxOps As %Integer = 50000, pReconB
             Set tSC = tStats.%Save()
             If $$$ISERR(tSC) {
                 Lock -^IVG.Ledger("head")
-                TROLLBACK
+                TROLLBACK 1
                 Return ..Err("inconsistent", $System.Status.GetErrorText(tSC))
             }
             Lock -^IVG.Ledger("head")
@@ -296,13 +298,13 @@ ClassMethod Enable(pStrict As %Boolean = 0, pMaxOps As %Integer = 50000, pReconB
         Set tErr = ##class(Graph.KG.LedgerGenesis).Capture(tSeq, pSchema, .tRecords, .tFirst, .tLast)
         If tErr '= "" {
             Lock -^IVG.Ledger("head")
-            TROLLBACK
+            TROLLBACK 1
             Return tErr
         }
         Set tErr = ..WriteRevision(tSeq, "genesis", "system:ledger", "system", "genesis", "", "", "", "", .tRecords, tFirst, tLast)
         If tErr '= "" {
             Lock -^IVG.Ledger("head")
-            TROLLBACK
+            TROLLBACK 1
             Return tErr
         }
         Set tStats = ##class(Graph.KG.LedgerStats).Ensure()
@@ -310,7 +312,7 @@ ClassMethod Enable(pStrict As %Boolean = 0, pMaxOps As %Integer = 50000, pReconB
         Set tSC = tStats.%Save()
         If $$$ISERR(tSC) {
             Lock -^IVG.Ledger("head")
-            TROLLBACK
+            TROLLBACK 1
             Return ..Err("inconsistent", $System.Status.GetErrorText(tSC))
         }
         Lock -^IVG.Ledger("head")
@@ -319,7 +321,7 @@ ClassMethod Enable(pStrict As %Boolean = 0, pMaxOps As %Integer = 50000, pReconB
         Do tObj.%Set("adoption_needed", 0, "boolean")
         Set tResult = tObj.%ToJSON()
     } Catch ex {
-        If $TLevel > 0 { TROLLBACK }
+        While $TLevel > tTxnLevel { TROLLBACK 1 }
         Lock -^IVG.Ledger("head")
         Set tResult = ..Err("inconsistent", ex.DisplayString())
     }
@@ -335,6 +337,7 @@ ClassMethod Disable() As %String
         Do tObj.%Set("state", tState)
         Return tObj.%ToJSON()
     }
+    Set tTxnLevel = $TLevel
     Try {
         TSTART
         Set ^IVG.Ledger("meta", "state") = "disabled"
@@ -342,12 +345,12 @@ ClassMethod Disable() As %String
         Set tStats.State = "disabled", tStats.DisabledMs = ..NowMs()
         Set tSC = tStats.%Save()
         If $$$ISERR(tSC) {
-            TROLLBACK
+            TROLLBACK 1
             Return ..Err("inconsistent", $System.Status.GetErrorText(tSC))
         }
         TCOMMIT
     } Catch ex {
-        If $TLevel > 0 { TROLLBACK }
+        While $TLevel > tTxnLevel { TROLLBACK 1 }
         Return ..Err("inconsistent", ex.DisplayString())
     }
     Do tObj.%Set("state", "disabled")
@@ -357,6 +360,7 @@ ClassMethod Disable() As %String
 ClassMethod SetStrict(pFlag As %Boolean) As %String
 {
     If ..State() = "never-enabled" Return ..Err("not_enabled", "ledger has not been enabled")
+    Set tTxnLevel = $TLevel
     Try {
         TSTART
         Set ^IVG.Ledger("meta", "strict") = +pFlag
@@ -364,12 +368,12 @@ ClassMethod SetStrict(pFlag As %Boolean) As %String
         Set tStats.Strict = +pFlag
         Set tSC = tStats.%Save()
         If $$$ISERR(tSC) {
-            TROLLBACK
+            TROLLBACK 1
             Return ..Err("inconsistent", $System.Status.GetErrorText(tSC))
         }
         TCOMMIT
     } Catch ex {
-        If $TLevel > 0 { TROLLBACK }
+        While $TLevel > tTxnLevel { TROLLBACK 1 }
         Return ..Err("inconsistent", ex.DisplayString())
     }
     Set tObj = {}
@@ -389,13 +393,14 @@ ClassMethod Commit(pPayload As %String, pMetaJson As %String) As %String
         Set tResult = ..Err("transaction_open", "a transaction is already open ($TLEVEL=" _ $TLevel _ ")")
         Return ..LargeOut(tResult)
     }
+    Set tTxnLevel = $TLevel
     Try {
         TSTART
         Set tResult = ..CommitInTxn(pPayload, pMetaJson, .tBump, .tOk, .tToken)
         Lock -^IVG.Ledger("head")
-        If tOk { TCOMMIT } Else { TROLLBACK }
+        If tOk { TCOMMIT } Else { TROLLBACK 1 }
     } Catch ex {
-        If $TLevel > 0 { TROLLBACK }
+        While $TLevel > tTxnLevel { TROLLBACK 1 }
         Lock -^IVG.Ledger("head")
         Set tResult = ..Err("inconsistent", ex.DisplayString())
         Set tBump = ""

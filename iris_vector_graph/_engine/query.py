@@ -1703,12 +1703,15 @@ class QueryMixin:
             ``IVGResult`` with ``columns``, ``rows``, ``metadata`` and ``error``.
         """
         CypherInput(cypher_query=cypher_query)
-        if read_only and writes_cypher(cypher_query):
+        writes = writes_cypher(cypher_query)
+        if read_only and writes:
             # Before every shortcut below, on the whole text: the rule the servers' IVG_READ_ONLY applies (R113).
             raise PermissionError(
                 f"Read-only mode: mutation queries (CREATE/DELETE/SET/MERGE/REMOVE/FOREACH), and queries that do not "
                 f"parse, are not allowed. Query: {cypher_query[:100]}"
             )
+        if writes and not getattr(self, "_cypher_write_txn", None):
+            return self._execute_cypher_write(cypher_query, parameters, procedures, raise_on_error)
         import re as _re_ec
         _APPROX_RE = _re_ec.compile(
             r'\bapprox_count_distinct\s*\(',
@@ -1858,6 +1861,29 @@ class QueryMixin:
         _fill_empty_columns(result, parsed)
         return result
 
+
+    def _execute_cypher_write(self, cypher_query, parameters, procedures, raise_on_error):
+        """A query that writes, as one transaction of IVG's (4.6.4, _write_txn): nested in the caller's when one is
+        open, so the caller's commit or rollback decides, and a failure takes back IVG's part alone. A write that runs
+        in steps (a per-row MERGE or CREATE) is one transaction too; its steps used to commit one by one."""
+        from iris_vector_graph._write_txn import write_txn
+
+        txn = write_txn(self.conn, self._ivg_schema)
+        self._cypher_write_txn = txn
+        try:
+            result = self.execute_cypher(
+                cypher_query, parameters=parameters, procedures=procedures, raise_on_error=raise_on_error
+            )
+        except BaseException:
+            txn.rollback()
+            raise
+        finally:
+            self._cypher_write_txn = None
+        if getattr(result, "error", None):
+            txn.rollback()  # a write that answers its error has written nothing of its own
+        else:
+            txn.commit()
+        return result
 
     def _execute_count_create(self, steps, parameters, procedures=None):
         """Run a MATCH/CREATE pipeline whose rows carry no values (see

@@ -271,37 +271,44 @@ ClassMethod BulkIngestEdgesSQL(edgesJson As %String, predicate As %String = "KNO
 	Kill tSeen
 	// With the adjacency functional index (spec 252) the INSERT writes ^KG itself; without it, this does.
 	Set tIndexed = ##class(Graph.KG.Adjacency).Indexed()
-	TSTART
-	Set iter = data.%GetIterator()
-	While iter.%GetNext(.idx, .edge) {
-		Set s = edge.s
-		Set p = $Select(edge.p'="":edge.p, 1:predicate)
-		Set o = edge.o
-		// a self-loop is an edge (create_edge stores one): skipping it dropped DRKG's 3,499 gene self-interactions
-		If (s = "") || (o = "") { Continue }
-		// The endpoints first, through RegisterDefaultNode: an edge needs both of them
-		// registered in its own graph — always the default one on this path — or the
-		// INSERT below is SQLCODE -121 and the Continue that follows skips the row
-		// without counting it, so the caller is told how many edges landed and it is
-		// wrong.
-		If ..RegisterDefaultNode(s, .tSeen) '= 0 { Continue }
-		If ..RegisterDefaultNode(o, .tSeen) '= 0 { Continue }
-		// The edge itself is asked for before it is written, for the same reason: on a
-		// re-ingest every one of these INSERTs is the duplicate u_spo_graph refuses,
-		// and a refused statement inside this transaction costs ~40ms. -119 is still
-		// tolerated, for the row a concurrent writer lands in between.
-		Set tEdge = 0
-		&sql(SELECT 1 INTO :tEdge FROM Graph_KG.rdf_edges WHERE graph_id = '' AND s = :s AND p = :p AND o_id = :o)
-		If SQLCODE '= 0 {
-			&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (:s, :p, :o, ''))
-			If (SQLCODE '= 0) && (SQLCODE '= -119) { Continue }
+	// 4.6.4: a failure takes back this call's level alone, never a caller's transaction under it
+	Set tTxnLevel = $TLevel
+	Try {
+		TSTART
+		Set iter = data.%GetIterator()
+		While iter.%GetNext(.idx, .edge) {
+			Set s = edge.s
+			Set p = $Select(edge.p'="":edge.p, 1:predicate)
+			Set o = edge.o
+			// a self-loop is an edge (create_edge stores one): skipping it dropped DRKG's 3,499 gene self-interactions
+			If (s = "") || (o = "") { Continue }
+			// The endpoints first, through RegisterDefaultNode: an edge needs both of them
+			// registered in its own graph — always the default one on this path — or the
+			// INSERT below is SQLCODE -121 and the Continue that follows skips the row
+			// without counting it, so the caller is told how many edges landed and it is
+			// wrong.
+			If ..RegisterDefaultNode(s, .tSeen) '= 0 { Continue }
+			If ..RegisterDefaultNode(o, .tSeen) '= 0 { Continue }
+			// The edge itself is asked for before it is written, for the same reason: on a
+			// re-ingest every one of these INSERTs is the duplicate u_spo_graph refuses,
+			// and a refused statement inside this transaction costs ~40ms. -119 is still
+			// tolerated, for the row a concurrent writer lands in between.
+			Set tEdge = 0
+			&sql(SELECT 1 INTO :tEdge FROM Graph_KG.rdf_edges WHERE graph_id = '' AND s = :s AND p = :p AND o_id = :o)
+			If SQLCODE '= 0 {
+				&sql(INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (:s, :p, :o, ''))
+				If (SQLCODE '= 0) && (SQLCODE '= -119) { Continue }
+			}
+			If 'tIndexed {
+				Do ..WriteAdjacency(s, p, o, "1.0", 0)
+			}
+			Set n = n + 1
 		}
-		If 'tIndexed {
-			Do ..WriteAdjacency(s, p, o, "1.0", 0)
-		}
-		Set n = n + 1
+		TCOMMIT
+	} Catch ex {
+		While $TLevel > tTxnLevel { TROLLBACK 1 }
+		Throw ex
 	}
-	TCOMMIT
 	Quit n
 }
 

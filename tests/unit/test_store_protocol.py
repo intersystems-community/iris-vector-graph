@@ -423,14 +423,17 @@ class TestIRISGraphStoreUnit:
         store, conn, cursor = self._make_store()
         cursor.description = None
         store.execute_transaction(["INSERT INTO t VALUES (?)"], [["v1"]])
-        conn.commit.assert_called()
+        # 4.6.4: IVG's own transaction, ended on its cursor (_write_txn); never the driver's commit()
+        cursor.execute.assert_any_call("COMMIT")
+        conn.commit.assert_not_called()
 
     def test_execute_transaction_rollback_on_error(self):
         store, conn, cursor = self._make_store()
-        cursor.execute.side_effect = [None, Exception("tx error")]
+        cursor.execute.side_effect = [None, None, Exception("tx error"), None]
         with pytest.raises(Exception):
             store.execute_transaction(["INSERT 1", "INSERT 2"], [[], []])
-        conn.rollback.assert_called()
+        cursor.execute.assert_any_call("ROLLBACK")
+        conn.rollback.assert_not_called()
 
     def test_write_nodes_commits(self):
         store, conn, cursor = self._make_store()
@@ -607,13 +610,15 @@ class TestIRISGraphStoreExtraCoverage:
         store, conn, cursor = self._make_store()
         result = store.delete_nodes(["n1", "n2"])
         assert result.columns == ["deleted"]
-        conn.commit.assert_called()
+        cursor.execute.assert_any_call("COMMIT")
+        conn.commit.assert_not_called()
 
     def test_delete_edges_with_tuples(self):
         store, conn, cursor = self._make_store()
         result = store.delete_edges([("n1", "INTERACTS", "n2")])
         assert result.columns == ["deleted"]
-        conn.commit.assert_called()
+        cursor.execute.assert_any_call("COMMIT")
+        conn.commit.assert_not_called()
 
     def test_execute_ppr_with_arno_disabled(self):
         store, conn, cursor = self._make_store()

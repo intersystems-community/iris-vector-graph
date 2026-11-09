@@ -294,6 +294,18 @@
       "backup": "no: setup re-creates them"
     },
     {
+      "kind": "function",
+      "names": [
+        "Txn_Begin",
+        "Txn_End",
+        "Txn_Undo"
+      ],
+      "present": "setup",
+      "purpose": "IVG's own part of a write, nested in a transaction the caller opened (4.6.4)",
+      "optional": "no",
+      "backup": "no: setup re-creates them"
+    },
+    {
       "kind": "procedure",
       "names": [
         "kg_KNN_VEC",

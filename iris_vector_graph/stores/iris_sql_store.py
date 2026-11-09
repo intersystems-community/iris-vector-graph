@@ -3,6 +3,7 @@ import logging
 import math
 import os
 import warnings
+from contextlib import contextmanager
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from iris_vector_graph._engine.algorithms import DEFAULT_PPR_TOLERANCE
@@ -11,7 +12,7 @@ from iris_vector_graph import algo_cache, arno_readers
 # Where an id falls among IRIS subscripts; the ObjectScript tiers break a tie in ``^||rank(-score, id)`` this way.
 from iris_vector_graph._collation import rank_key as _rank_key
 from iris_vector_graph._collation import collation_key
-from iris_vector_graph._write_txn import is_duplicate, rollback
+from iris_vector_graph._write_txn import is_duplicate, write_txn
 from iris_vector_graph.errors import GraphWriteError, PowerIterationFailedConvergence
 from iris_vector_graph.prop_values import prop_value, read_node_value
 from iris_vector_graph._validate import validate_graph_name
@@ -1217,7 +1218,7 @@ class IRISGraphStore:
             _guard.check_structural_write("store.write_nodes")
         cursor = self.conn.cursor()
         written = 0
-        cursor.execute("START TRANSACTION")
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
         try:
             for node in nodes:
                 nid = node.get("id") or node.get("node_id")
@@ -1237,9 +1238,9 @@ class IRISGraphStore:
                         [nid, key, prop_value(val)],
                     )
                 written += 1
-            cursor.execute("COMMIT")
+            txn.commit()
         except Exception as e:
-            rollback(cursor)
+            txn.rollback()
             raise GraphWriteError("store.write_nodes", e) from e
         return IVGResult(columns=["written"], rows=[[written]])
 
@@ -1255,7 +1256,7 @@ class IRISGraphStore:
             _guard.check_structural_write("store.write_edges")
         cursor = self.conn.cursor()
         written = 0
-        cursor.execute("START TRANSACTION")
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
         try:
             for edge in edges:
                 s = edge.get("source") or edge.get("s")
@@ -1287,9 +1288,9 @@ class IRISGraphStore:
                 except Exception:
                     pass
                 written += 1
-            cursor.execute("COMMIT")
+            txn.commit()
         except Exception as e:
-            rollback(cursor)
+            txn.rollback()
             raise GraphWriteError("store.write_edges", e) from e
         return IVGResult(columns=["written"], rows=[[written]])
 
@@ -1340,17 +1341,15 @@ class IRISGraphStore:
         chunks = [ids[i : i + self._DELETE_CHUNK] for i in range(0, len(ids), self._DELETE_CHUNK)]
 
         if self._has_eraser_method("EraseNodeIds"):
-            # The Eraser runs on the Native API; rows this connection wrote but has
-            # not committed are invisible to it on a separate connection.
-            self._commit_for_eraser("store.delete_nodes")
             deleted = 0
-            for chunk in chunks:
-                deleted += int(
-                    self._call_classmethod(
-                        "Graph.KG.Eraser", "EraseNodeIds", canonical, json.dumps(chunk)
+            with self._eraser_txn("store.delete_nodes"):
+                for chunk in chunks:
+                    deleted += int(
+                        self._call_classmethod(
+                            "Graph.KG.Eraser", "EraseNodeIds", canonical, json.dumps(chunk)
+                        )
+                        or 0
                     )
-                    or 0
-                )
             return IVGResult(columns=["deleted"], rows=[[deleted]])
 
         return self._delete_nodes_sql(chunks, canonical)
@@ -1371,6 +1370,7 @@ class IRISGraphStore:
             return rc if isinstance(rc, int) and rc > 0 else 0
 
         deleted = 0
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
         try:
             for chunk in chunks:
                 ph = ",".join("?" * len(chunk))
@@ -1405,12 +1405,9 @@ class IRISGraphStore:
                     f"DELETE FROM {self._ivg_schema}.nodes WHERE node_id IN ({ph}) AND {scope}",
                     chunk + [canonical],
                 )
-            self.conn.commit()
+            txn.commit()
         except Exception:
-            try:
-                self.conn.rollback()
-            except Exception:
-                pass
+            txn.rollback()
             raise
         return IVGResult(columns=["deleted"], rows=[[deleted]])
 
@@ -1441,21 +1438,32 @@ class IRISGraphStore:
                 "Graph.KG.Eraser.EraseNodes is not deployed in this namespace; "
                 "load the iris_src classes first"
             )
-        self._commit_for_eraser("store.delete_nodes_by_prefix")
-        return int(self._call_classmethod("Graph.KG.Eraser", "EraseNodes", canonical, str(prefix)) or 0)
+        with self._eraser_txn("store.delete_nodes_by_prefix"):
+            return int(self._call_classmethod("Graph.KG.Eraser", "EraseNodes", canonical, str(prefix)) or 0)
 
-    def _commit_for_eraser(self, operation: str) -> None:
-        """Commit this connection's pending writes, so ``Graph.KG.Eraser`` (on the Native API's connection) sees them.
+    @contextmanager
+    def _eraser_txn(self, operation: str):
+        """Where ``Graph.KG.Eraser`` runs (4.6.4). Inside a caller's transaction its calls are one level of IVG's,
+        nested in the caller's (the Eraser's own TSTART nests under it), and a failure takes back that level alone.
+        With none, each Eraser call owns its transaction, as before.
 
-        A refused commit raises ``GraphWriteError`` naming ``operation``, before anything is erased. It was
-        ``except Exception: pass``, and the Eraser then ran against a database without those writes (4.6.0 R276).
+        It used to commit the connection first (``conn.commit()``, so the Eraser on another connection saw this
+        one's writes), which committed a caller's open transaction. The Eraser runs on this connection's process
+        (``_iris_obj`` is ``createIRIS`` on it).
         """
+        from iris_vector_graph.schema_name import IVGSchemaError
+
         try:
-            self.conn.commit()
+            txn = write_txn(self.conn, self._ivg_schema)
+            if not txn.joined:
+                txn.commit()
+        except IVGSchemaError:
+            raise
         except Exception as e:
-            raise GraphWriteError(
-                operation, e, left="nothing erased, and this connection's earlier writes are not committed"
-            ) from e
+            # R276: a refusal here raises naming the call, before anything is erased
+            raise GraphWriteError(operation, e, left="nothing erased") from e
+        with txn:
+            yield
 
     def delete_edges(self, edges: list, *, graph: Optional[str] = None) -> IVGResult:
         """Delete ``(s, p, o)`` edges from ONE graph; returns the rows actually removed.
@@ -1474,20 +1482,21 @@ class IRISGraphStore:
             return IVGResult(columns=["deleted"], rows=[[0]])
 
         if self._has_eraser_method("EraseEdges"):
-            self._commit_for_eraser("store.delete_edges")
             deleted = 0
-            for i in range(0, len(triples), self._DELETE_CHUNK):
-                payload = json.dumps(
-                    [{"s": s, "p": p, "o": o} for s, p, o in triples[i : i + self._DELETE_CHUNK]]
-                )
-                deleted += int(
-                    self._call_classmethod("Graph.KG.Eraser", "EraseEdges", canonical, payload) or 0
-                )
+            with self._eraser_txn("store.delete_edges"):
+                for i in range(0, len(triples), self._DELETE_CHUNK):
+                    payload = json.dumps(
+                        [{"s": s, "p": p, "o": o} for s, p, o in triples[i : i + self._DELETE_CHUNK]]
+                    )
+                    deleted += int(
+                        self._call_classmethod("Graph.KG.Eraser", "EraseEdges", canonical, payload) or 0
+                    )
             return IVGResult(columns=["deleted"], rows=[[deleted]])
 
         scope = graph_scope_predicate()
         cursor = self.conn.cursor()
         deleted = 0
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
         try:
             for s, p, o in triples:
                 cursor.execute(
@@ -1496,12 +1505,9 @@ class IRISGraphStore:
                 )
                 rc = getattr(cursor, "rowcount", 0)
                 deleted += rc if isinstance(rc, int) and rc > 0 else 0
-            self.conn.commit()
+            txn.commit()
         except Exception:
-            try:
-                self.conn.rollback()
-            except Exception:
-                pass
+            txn.rollback()
             raise
         return IVGResult(columns=["deleted"], rows=[[deleted]])
 
@@ -1537,10 +1543,8 @@ class IRISGraphStore:
                 # DEBUG: the caller gets it in `error` (USER_GUIDE §3); at WARNING logging's last-resort handler
                 # printed it to the stderr of a caller who had configured no logging (round 3, python W6)
                 logger.debug("execute_sql error: %s", err[:500])
-            try:
-                self.conn.rollback()
-            except Exception:
-                pass
+            # 4.6.4: no conn.rollback() here. A failed statement takes back only itself in IRIS, and the rollback
+            # took back a caller's open transaction on any failed read.
             return IVGResult(columns=[], rows=[], sql=sql, params=params, error=err)
 
     @staticmethod
@@ -1569,7 +1573,7 @@ class IRISGraphStore:
 
     def execute_transaction(self, stmts: list, params_list: list) -> IVGResult:
         cursor = self.conn.cursor()
-        cursor.execute("START TRANSACTION")
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
         try:
             rows = []
             pre_captured_rows = None
@@ -1775,7 +1779,7 @@ class IRISGraphStore:
                     continue
                 for chunk_sql in _expand_captured(stmt, captured_ids, captured_graphs):
                     cursor.execute(chunk_sql, p)
-            self.conn.commit()
+            txn.commit()
 
             if pre_captured_rows is not None:
                 # Use the pre-delete snapshot as the result.
@@ -1799,7 +1803,7 @@ class IRISGraphStore:
                 rows = []
             return IVGResult(columns=cols, rows=[list(r) for r in rows])
         except Exception as e:
-            self.conn.rollback()
+            txn.rollback()
             # R221: a refused write is one documented type, GraphWriteError (a RuntimeError), raised after the
             # rollback with the cause kept; it was a bare Exception, or the driver's own type. A dropped connection
             # keeps its type, which the reconnect logic reads.
@@ -2824,11 +2828,11 @@ class IRISGraphStore:
                 "Graph.KG.Eraser.EraseBareNodes is not deployed in this namespace; "
                 "load the iris_src classes first"
             )
-        self._commit_for_eraser("store.erase_bare_nodes")
-        raw = self._call_classmethod(
-            "Graph.KG.Eraser", "EraseBareNodes", canonical,
-            max(1, int(batch_size)), 1 if dry_run else 0, max(0, int(min_age_seconds)),
-        )
+        with self._eraser_txn("store.erase_bare_nodes"):
+            raw = self._call_classmethod(
+                "Graph.KG.Eraser", "EraseBareNodes", canonical,
+                max(1, int(batch_size)), 1 if dry_run else 0, max(0, int(min_age_seconds)),
+            )
         d = json.loads(str(raw))
         return BareNodesResult(
             int(d["bare"]), int(d["erased"]), int(d["kept"]), int(d["batches"]), bool(d["dry_run"])

@@ -38,7 +38,10 @@ def test_a_delete_of_a_connected_node_raises_graph_write_error():
     # its own words, first: the TCK harness reads the kind from a leading "ConstraintVerificationFailed:"
     assert str(exc.value).startswith("ConstraintVerificationFailed: Cannot delete node with existing relationships")
     assert "DETACH DELETE" in str(exc.value)
-    conn.rollback.assert_called()
+    # 4.6.4: IVG's own part is taken back on its cursor (_write_txn); the driver's rollback() would take a caller's
+    # open transaction with it
+    assert "ROLLBACK" in [c.args[0] for c in conn.cursor.return_value.execute.call_args_list]
+    conn.rollback.assert_not_called()
 
 
 def test_a_statement_iris_refuses_raises_graph_write_error_with_its_sqlcode():
@@ -54,7 +57,10 @@ def test_a_statement_iris_refuses_raises_graph_write_error_with_its_sqlcode():
         store.execute_transaction(["INSERT INTO nodes (node_id) VALUES (?)"], [["a"]])
     assert exc.value.sqlcode == -119
     assert isinstance(exc.value.__cause__, DriverError)
-    conn.rollback.assert_called()
+    # 4.6.4: IVG's own part is taken back on its cursor (_write_txn); the driver's rollback() would take a caller's
+    # open transaction with it
+    assert "ROLLBACK" in [c.args[0] for c in conn.cursor.return_value.execute.call_args_list]
+    conn.rollback.assert_not_called()
 
 
 def test_a_dropped_connection_keeps_its_type():

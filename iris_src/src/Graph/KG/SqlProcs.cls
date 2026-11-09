@@ -163,6 +163,23 @@ ClassMethod DijkstraPath(srcId As %String, dstId As %String, weightProp As %Stri
     Quit ##class(Graph.KG.Traversal).DijkstraProc(srcId, dstId, weightProp, maxCost, maxHops, direction, predsJson, pGraphId)
 }
 
+// ---------------------------------------------------------------- Graph.KG.Txn: IVG's own part of a write (4.6.4)
+
+ClassMethod TxnBegin(pHold As %Integer = 0) As %Integer [ SqlName = Txn_Begin, SqlProc ]
+{
+    Quit ##class(Graph.KG.Txn).Begin(pHold)
+}
+
+ClassMethod TxnEnd(pLevel As %Integer = 0) As %Integer [ SqlName = Txn_End, SqlProc ]
+{
+    Quit ##class(Graph.KG.Txn).End(pLevel)
+}
+
+ClassMethod TxnUndo(pLevel As %Integer = 0) As %Integer [ SqlName = Txn_Undo, SqlProc ]
+{
+    Quit ##class(Graph.KG.Txn).Undo(pLevel)
+}
+
 // ---------------------------------------------------------------- admin and the ledger
 
 ClassMethod backfilltemporalrows() As %Integer [ SqlName = backfill_temporal_rows, SqlProc ]

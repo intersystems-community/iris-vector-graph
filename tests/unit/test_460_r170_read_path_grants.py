@@ -47,7 +47,7 @@ def test_the_variable_length_readers_are_on_it_since_ends_checks_select():
     names = legacy.read_path_routines()
     assert {n for n in names if n.startswith("CY_VLP_")} == {
         "CY_VLP_PATHS", "CY_VLP_ENDS", "CY_VLP_CHAIN", "CY_VLP_HAS", "CY_VLP_DISJOINT", "CY_VLP_OPT"}
-    assert legacy.READ_PATH_EXCLUDED_PREFIXES == ()
+    assert legacy.READ_PATH_EXCLUDED_PREFIXES == ("Txn_",)  # 4.6.4: they bracket a write; readers never call them
     bodies = legacy._routine_bodies()
     unchecked = dict(bodies, CY_VLP_ENDS=bodies["CY_VLP_ENDS"].replace(
         "Do ##class(Graph.KG.SqlPrivilege).RequireSelect(tbl) ", ""))

@@ -271,7 +271,8 @@ def copy_grants(conn, items: List[Dict[str, Any]], schema: str, dry_run: bool) -
 #: Read-path routines setup never grants by itself, whatever their bodies read. R278 left out CY_VLP_* (Tom's words)
 #: while CY_VLP_ENDS walked ^KG around SQL privileges; since R280 it checks SELECT before the walk, and since R279
 #: CY_VLP_CHAIN and CY_VLP_OPT raise a refused read, so each reads only what the caller may SELECT, and none is left out.
-READ_PATH_EXCLUDED_PREFIXES: tuple = ()
+#: 4.6.4: Txn_Begin / Txn_End / Txn_Undo (Graph.KG.Txn) bracket a write; a reader never calls them.
+READ_PATH_EXCLUDED_PREFIXES: tuple = ("Txn_",)
 
 #: IVG classes that read a global, which a body may name once it has checked SELECT on the table the global stands
 #: for (Graph.KG.SqlPrivilege.RequireSelect, before the first call): Graph.KG.VarLength walks ^KG("out"/"in"), the

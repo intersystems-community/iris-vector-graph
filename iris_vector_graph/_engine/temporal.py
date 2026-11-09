@@ -319,7 +319,8 @@ class TemporalMixin:
                     f"AND COALESCE(graph_id, '') = COALESCE(?, ''))",
                     [source, predicate, target, graph, source, predicate, target, graph],
                 )
-                self.conn.commit()
+                # 4.6.4: no conn.commit(): the statement is atomic on its own, and the commit ended a caller's open
+                # transaction
             except Exception as e:
                 # Silence here is what made a missing endpoint look like success: the
                 # temporal globals held the edge, rdf_edges held nothing, and the
@@ -470,14 +471,8 @@ class TemporalMixin:
                         "temporal mirror: %s -[%s]-> %s not written to rdf_edges in graph %r: %s",
                         e["source"], e["predicate"], e["target"], graph, exc,
                     )
-            try:
-                self.conn.commit()
-            except Exception as e:
-                # It was passed over (4.6.0 R276), so the mirror rows were lost with no word.
-                raise GraphWriteError(
-                    "bulk_create_edges_temporal", e,
-                    left=f"the {count} temporal edges are written; their rdf_edges mirror rows are not",
-                ) from e
+            # 4.6.4: no conn.commit() (4.6.0 R276 checked it): each mirror INSERT is atomic on its own, and the
+            # commit ended a caller's open transaction
         return TemporalWriteCount(count, collisions=collisions, skipped=skipped)
 
     def get_edges_in_window(

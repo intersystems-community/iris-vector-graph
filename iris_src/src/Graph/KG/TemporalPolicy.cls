@@ -170,6 +170,7 @@ ClassMethod DropRows(pGraph As %String = "", pPredicate As %String = "", pBatch 
 				$$$ThrowOnError(tDel.%Prepare("DELETE FROM Graph_KG.rdf_edges WHERE edge_id = ? AND (qualifiers %STARTSWITH ? OR qualifiers %STARTSWITH ?)"))
 				Set tId = $Order(^||IVG.DropRows(""))
 				Set tN = 0
+				Set tTxnLevel = $TLevel
 				Try {
 					TSTART
 					While tId '= "" {
@@ -211,7 +212,7 @@ ClassMethod DropRows(pGraph As %String = "", pPredicate As %String = "", pBatch 
 						}
 					}
 				} Catch tTx {
-					If $TLevel > 0 { TROLLBACK }
+					While $TLevel > tTxnLevel { TROLLBACK 1 }
 					Throw tTx
 				}
 			}

@@ -67,6 +67,7 @@ ClassMethod Bump(pKind As %String) As %Status
     Set tSC = $$$OK
     Set tProp = ..PropertyFor(pKind)
     If tProp = "" Quit tSC
+    Set tTxnLevel = $TLevel
     Try {
         TSTART
         Set tObj = ..Ensure()
@@ -75,12 +76,12 @@ ClassMethod Bump(pKind As %String) As %Status
             Set tSC = tObj.%Save()
         }
         If $$$ISERR(tSC) {
-            TROLLBACK
+            TROLLBACK 1
         } Else {
             TCOMMIT
         }
     } Catch ex {
-        If $TLevel > 0 { TROLLBACK }
+        While $TLevel > tTxnLevel { TROLLBACK 1 }
         Set tSC = ex.AsStatus()
     }
     Quit tSC

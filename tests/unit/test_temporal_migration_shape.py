@@ -91,7 +91,8 @@ def test_the_migration_does_not_guess_from_subscript_values():
 def test_the_migration_is_one_transaction_it_rolls_back():
     body = _entry_point_body()
 
-    assert re.search(r"If \$TLevel > 0 \{ TROLLBACK \}", body, re.IGNORECASE), (
+    # 4.6.4: back to the level it found, never a caller's transaction under it
+    assert re.search(r"While \$TLevel > tTxnLevel \{ TROLLBACK 1 \}", body, re.IGNORECASE), (
         "a failed migration leaves half the temporal index at each layout with "
         "no rollback"
     )

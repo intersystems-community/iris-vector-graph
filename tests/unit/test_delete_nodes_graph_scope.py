@@ -89,6 +89,14 @@ def test_sql_path_never_uses_or_across_both_endpoints():
         assert " OR o_id IN" not in sql
 
 
+#: 4.6.4: IVG's own transaction around the deletes (_write_txn), on the same cursor
+_TXN_STATEMENTS = ("START TRANSACTION", "COMMIT", "ROLLBACK")
+
+
+def _data_statements(cursor):
+    return [(sql, params) for sql, params in cursor.statements if sql not in _TXN_STATEMENTS]
+
+
 @pytest.mark.parametrize("graph, bound", [("A", "A"), (None, ""), ("", "")])
 def test_sql_path_scopes_every_statement_to_the_graph(graph, bound):
     store, _, cursor = _sql_store()
@@ -97,7 +105,7 @@ def test_sql_path_scopes_every_statement_to_the_graph(graph, bound):
     store.delete_nodes(ids, graph=graph)
 
     assert cursor.statements
-    for sql, params in cursor.statements:
+    for sql, params in _data_statements(cursor):
         assert "COALESCE(graph_id, '') = COALESCE(?, '')" in sql, (
             f"unscoped statement: {sql}"
         )
@@ -188,7 +196,7 @@ def test_objectscript_path_chunks_and_scopes_every_call():
 
     result = store.delete_nodes(ids, graph="A")
 
-    assert cursor.statements == [], "the Eraser path must not also run SQL deletes"
+    assert _data_statements(cursor) == [], "the Eraser path must not also run SQL deletes"
     assert all(c[:2] == ("Graph.KG.Eraser", "EraseNodeIds") for c in calls)
     assert len(calls) == 5
     for _, _, (graph, payload) in calls:
@@ -218,7 +226,7 @@ def test_objectscript_failure_propagates_rather_than_falling_back():
     store._call_classmethod = boom
     with pytest.raises(RuntimeError):
         store.delete_nodes(["a"], graph="A")
-    assert cursor.statements == []
+    assert _data_statements(cursor) == []
 
 
 def test_the_ledger_guard_runs_first():

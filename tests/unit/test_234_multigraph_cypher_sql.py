@@ -372,9 +372,10 @@ def test_after_result_statements_run_after_the_result_is_read():
         "INSERT INTO rdf_edges (s) SELECT 1",
         "SELECT t2_name FROM x",
         "DELETE FROM rdf_edges WHERE edge_id IN (SELECT 1) AND edge_id <= ?",
+        "COMMIT",  # 4.6.4: IVG's own transaction ends on its cursor (_write_txn), never the driver's conn.commit()
     ]
-    assert cur.execute.call_args_list[-1].args[1] == [7]
+    assert cur.execute.call_args_list[-2].args[1] == [7]
     # the deferred DELETE is not a reason to read the result before the writes
     assert result.columns == ["t2_name"]
     assert result.rows == [["rel3"], ["rel3"]]
-    conn.commit.assert_called_once()
+    conn.commit.assert_not_called()
