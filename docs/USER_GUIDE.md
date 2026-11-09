@@ -224,6 +224,38 @@ refused
 # → True
 ```
 
+### Writes inside your transaction
+
+An IVG write never commits or rolls back a transaction you opened on its connection. With none open, each write
+(`create_node`, `create_edge`, `store_node`, `delete_node`, the bulk loaders, a Cypher `CREATE` or `MERGE`) is a
+transaction of its own and is committed when the call returns, as before 4.6.4. With one open, the write joins it:
+your commit keeps your work and the write, your rollback removes both.
+
+```python
+cur = conn.cursor()
+cur.execute("START TRANSACTION")
+engine.create_node("zoe", labels=["Person"])
+cur.execute("ROLLBACK")
+engine.get_node("zoe") is None
+# → True
+```
+
+A transaction is open after SQL `START TRANSACTION`, and also when you turn the driver's autocommit off
+(`conn.setAutoCommit(False)`); then `conn.commit()` and `conn.rollback()` end it. A write that fails inside your
+transaction raises (`GraphWriteError`) and takes back only its own part: your earlier statements are still in the
+open transaction, to commit or roll back. A Cypher query that writes in several steps (a `MERGE` per row) is one
+transaction too.
+
+The write runs in IRIS as a nested ObjectScript transaction level (`TSTART` under yours, then `TCOMMIT` or
+`TROLLBACK 1`), through the IVG Schema's functions `Txn_Begin`, `Txn_End` and `Txn_Undo`. A namespace whose classes
+predate 4.6.4 has none: run `initialize_schema()`. Until then a write inside your transaction raises `IVGSchemaError`
+before writing anything, rather than commit your work.
+
+Not part of your transaction: `bulk_load_session` (it drops and rebuilds indexes), `embed_nodes` and `embed_edges`
+(they commit each batch), the ledger's `commit` (it refuses to run inside one), and schema setup and upgrades. A
+write that IVG sends over a Native API connection of its own (an engine made with `from_connect`: the temporal edge
+stores, `^KG` on a namespace without the adjacency index) runs in another IRIS process, outside your transaction.
+
 ### Errors
 
 A query that does not parse raises `CypherParseError`. One that parses but is not valid Cypher (an undefined

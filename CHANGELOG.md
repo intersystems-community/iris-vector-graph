@@ -31,6 +31,27 @@
   before and 0.265 s after, with an int, a float and a string 0.393 s and 0.418 s; 2,000 `create_node` calls 1.70 s
   and 1.86 s (run to run 1.5 to 2.5 s).
 
+**Fixed: writes**
+
+- **An IVG write never commits or rolls back a transaction its caller opened.** After `START TRANSACTION` and a row
+  of the caller's own, `create_node` ran `COMMIT`, which in IRIS ends every level, so the caller's `ROLLBACK` took
+  back neither the row nor the node; a failed write ran `ROLLBACK` and took the caller's earlier work with it. The
+  same held for `create_edge`, `delete_node`, `delete_edge`, `store_node`, `store_edge`, `set_edge_weight`, the bulk
+  loaders, `store_embedding(s)`, `materialize_inference` and every Cypher write, and a failed Cypher read rolled the
+  caller's transaction back. Each write is now a nested level of its own (`Txn_Begin` / `Txn_End` / `Txn_Undo`, new
+  in the IVG Schema, over `TSTART` / `TCOMMIT` / `TROLLBACK 1`): with no caller transaction it commits when the call
+  returns, as before; inside one, the caller's commit keeps both, the caller's rollback removes both, and a failed
+  write takes back only itself. The driver's autocommit turned off counts as a caller transaction, so IVG no longer commits for you there: **what to do** with autocommit off is call `conn.commit()` after the IVG writes you want kept (before 4.6.4 IVG committed them, and the caller's own pending rows with them). A Cypher write in
+  steps (a `MERGE` per row) is one transaction; its steps committed one by one. `Graph.KG.Eraser`, `TemporalIndex`,
+  `TemporalPolicy`, `Ledger` and `LedgerStats` roll back to the level they found, not every level, and
+  `BulkIngestEdgesSQL` no longer leaves a transaction open when it fails. Run `initialize_schema()`: on a namespace
+  without the new functions a write inside a caller's transaction raises `IVGSchemaError` before writing.
+- **`create_node` asks whether the node is there before inserting it**, rather than catching the refused duplicate,
+  which inside a transaction costs a journaled statement rollback (200 duplicates: 121 ms, now 84 ms).
+- **Known, not fixed here:** the driver's `executemany` skips a row IRIS refuses (SQLCODE -104 for a label longer
+  than 128 characters) without raising, so `create_node`, `bulk_create_nodes` and the other batch writers answer
+  success without that row.
+
 ### v4.6.3 (2026-11-08)
 
 **Fixed: Cypher**
