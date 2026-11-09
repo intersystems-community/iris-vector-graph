@@ -277,7 +277,7 @@ is not granted; the driver's `executemany` skipping a refused row; `RETURN exist
 -12); `VecIndex` cosine `score` is cos − 1; `properties(n)` reading the string `'30'` as 30; `SET n.p = toInteger(n.p)`
 (SQLCODE -23); DETACH DELETE leaving an `rdf_reifications` row; the 36 `collect()`ed temporal cases.
 
-§9: GitHub CI and Quickstart green on `cecc3778`; main fast-forwarded to `cecc3778`; tag `v4.6.3`; built at the tag, `twine check` passed; PyPI (https://pypi.org/project/iris-vector-graph/4.6.3/); GitHub release with the CHANGELOG section; clean venv (Python 3.12) installs 4.6.3 and imports with `-I -W error`.
+§9: GitHub CI and Quickstart green on `cecc3778`; main fast-forwarded to `cecc3778`; tag `v4.6.3`; built at the tag, `twine check` passed; PyPI (<https://pypi.org/project/iris-vector-graph/4.6.3/>); GitHub release with the CHANGELOG section; clean venv (Python 3.12) installs 4.6.3 and imports with `-I -W error`.
 
 ### 4.6.2 — shortestPath walks the graph it reads (2026-11-08)
 
