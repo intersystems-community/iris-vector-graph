@@ -259,7 +259,10 @@ the next write to that source counts on from it, and `erase_graph` clears it. It
 
 Another connection sees what your open transaction has written, uncommitted: IRIS reads uncommitted by default, so a
 second connection's `MATCH` or `SELECT` finds the node `create_node` wrote until you roll back (a count of its rows
-there reads 1 before the `ROLLBACK` and 0 after).
+there reads 1 before the `ROLLBACK` and 0 after). A ledger `commit` in your transaction is seen the same way: while
+your transaction is open, a second connection reads the revision's `ledger_revisions` row, its node rows and the
+moved head (`^IVG.Ledger("head")` 12 where it was 11), and after your `ROLLBACK` none of them (0 rows, head 11). They
+appear and go together, so at no moment does a reader see a revision without its writes or the writes without it.
 
 A transaction is open after SQL `START TRANSACTION`, and also when you turn the driver's autocommit off
 (`conn.setAutoCommit(False)`); then `conn.commit()` and `conn.rollback()` end it. A write that fails inside your
@@ -280,8 +283,16 @@ that route's table, which cannot wait for your commit: inside your transaction t
 before anything is written, so store the first one outside it. `initialize_schema()` raises `CallerTransactionOpenError`
 inside your transaction, before doing anything: setup commits as it goes and compiles classes.
 
-Not part of your transaction: `embed_edges` (it commits each batch), the ledger's `commit` (it refuses to run inside
-one), and upgrades. A
+The ledger's `commit` joins your transaction too (4.7.0): your rollback leaves no revision and none of its writes (its
+`post_commit_properties` included), your commit keeps them. It used to run on the engine's Native API connection,
+outside your transaction, or refuse (`LedgerTransactionOpenError`) on yours. The ledger's head stays locked until your
+transaction ends, so another connection's `commit` waits for it and then raises `LedgerLockTimeoutError` (the lock
+timeout is 30 s; the refusal came 40 s after the call on the test container): keep a transaction that commits to the
+ledger short. `enable()` and `redact()` are not part
+of it: where they run on your connection's process they refuse (`LedgerTransactionOpenError`), and on the engine's own
+Native API connection (`from_connect`) they run outside your transaction.
+
+Not part of your transaction: `embed_edges` (it commits each batch) and upgrades. A
 write that IVG sends over a Native API connection of its own (an engine made with `from_connect`: the temporal edge
 stores, `^KG` on a namespace without the adjacency index) runs in another IRIS process, outside your transaction.
 
@@ -1049,6 +1060,11 @@ is not governed by the ledger: neither the genesis nor `verify()` counts it (bef
 engine.ledger.verify().result
 # → 'equal'
 ```
+
+Inside a transaction you opened on the engine's connection, `commit` is part of it (4.7.0; "Writes inside your
+transaction" in section 3 has the details). Your rollback takes the revision back, with its writes, and leaves no gap in
+the chain: the next revision gets the next `seq` and the last kept revision as its parent. Until your transaction ends,
+the ledger head stays locked, so another connection's `commit` waits and then raises `LedgerLockTimeoutError`.
 
 - **Concurrency.** `Changeset(expected_head=engine.ledger.head().revision_id, ...)` makes `commit` raise
   `StaleHeadError`, writing nothing, if another writer committed first.

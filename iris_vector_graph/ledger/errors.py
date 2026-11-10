@@ -80,7 +80,8 @@ class LedgerLockTimeoutError(LedgerError):
 
 
 class LedgerTransactionOpenError(LedgerError):
-    """A transaction was already open in the server process; commit refused (FR-047)."""
+    """A transaction was already open in the server process; ``enable`` or a redaction refused (FR-047). ``commit``
+    no longer raises it: since 4.7.0 it joins the open transaction."""
 
 
 class LedgerInconsistencyError(LedgerError):

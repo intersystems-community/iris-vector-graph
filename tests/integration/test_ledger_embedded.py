@@ -2,7 +2,8 @@
 
 Two layers:
 * `TestTransactionOpenGuard` — always runs: opens a transaction on the same server process
-  through the Native API (`tStart`), then asserts `commit()` is refused before any apply.
+  through the Native API (`tStart`), then asserts `commit()` joins it (4.7.0; it was refused before any apply) and
+  `enable()` is still refused.
 * `TestEmbeddedMode` — runs only inside an IRIS embedded-Python runtime (the same skip
   pattern as tests/unit/test_embedded.py::TestEmbeddedLive); outside IRIS it skips.
 """
@@ -26,7 +27,11 @@ def engine(iris_connection, ledger_reset):
 
 
 class TestTransactionOpenGuard:
-    def test_commit_refused_when_transaction_open_and_nothing_applied(self, engine):
+    def test_commit_inside_an_open_transaction_joins_it_and_its_rollback_takes_it_back(self, engine):
+        """4.7.0 (row 4): the commit nests in the transaction open on its server process, so that transaction's
+        rollback takes back the revision and its writes. It used to be refused (FR-047); the invariant FR-047 keeps,
+        a revision exists if and only if its mutations are visible, holds as both go together.
+        tests/e2e/test_470_ledger_caller_txn_e2e.py has the caller's-connection cases."""
         io = engine._iris_obj()
         before = canonical_tables(engine.conn)
         head = engine.ledger.head().revision_id
@@ -34,8 +39,9 @@ class TestTransactionOpenGuard:
         cs.create_node("txn-node")
         io.tStart()
         try:
-            with pytest.raises(LedgerTransactionOpenError):
-                engine.ledger.commit(cs)
+            result = engine.ledger.commit(cs)
+            assert result.revision.parent_id == head
+            assert "txn-node" in canonical_tables(engine.conn)["nodes"]  # read uncommitted, from the session conn
         finally:
             io.tRollback()
         assert canonical_tables(engine.conn) == before

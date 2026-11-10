@@ -206,6 +206,15 @@ _REJECTION_COLUMNS = (
 )
 
 
+def _class_value(iris_obj, cls: str, method: str, *args):
+    """``classMethodValue`` on a Native API object, or ``call`` on a host (iris_vector_graph.host)."""
+    from iris_vector_graph.host import Host
+
+    if isinstance(iris_obj, Host):
+        return iris_obj.call(cls, method, *args)
+    return iris_obj.classMethodValue(cls, method, *args)
+
+
 # --------------------------------------------------------------------------- #
 # client
 # --------------------------------------------------------------------------- #
@@ -226,15 +235,17 @@ class GraphLedger:
     def _schema(self) -> str:
         return getattr(self._engine, "_schema_prefix", "Graph_KG") or "Graph_KG"
 
-    def _call(self, method: str, *args, cls: str = LEDGER_CLASS) -> str:
-        iris_obj = self._iris()
-        raw = str(iris_obj.classMethodValue(cls, method, *args))
+    def _call(self, method: str, *args, cls: str = LEDGER_CLASS, via=None) -> str:
+        """``cls.method(*args)`` through the engine's Native API, or through ``via`` (a host on the caller's own
+        server process, inside the caller's transaction: :meth:`commit`)."""
+        iris_obj = self._iris() if via is None else via
+        raw = str(_class_value(iris_obj, cls, method, *args))
         # Large answers are staged by Graph.KG.Ledger.LargeOut whichever class answered.
         if raw.startswith("CHUNKED:"):
             _, tag, n_str = raw.split(":", 2)
             n = int(n_str)
             raw = "".join(
-                str(iris_obj.classMethodValue(LEDGER_CLASS, "ReadLargeOutChunk", tag, i))
+                str(_class_value(iris_obj, LEDGER_CLASS, "ReadLargeOutChunk", tag, i))
                 for i in range(1, n + 1)
             )
         return raw
@@ -293,11 +304,11 @@ class GraphLedger:
 
     # -- commit ----------------------------------------------------------------
 
-    def _send_changeset(self, changeset: Changeset, *, kind: str = "changeset") -> "_CommitWireResult":
+    def _send_changeset(self, changeset: Changeset, *, kind: str = "changeset", via=None) -> "_CommitWireResult":
         """Transport layer: chunk, call ObjectScript, parse JSON → _CommitWireResult.
 
         Never raises. All errors are encoded in the result's ``ok=False`` path.
-        Has no side effects on the engine or store — purely I/O.
+        Has no side effects on the engine or store — purely I/O. ``via``: as :meth:`_call`'s.
         """
         payload = changeset.canonical_json()
         meta = {
@@ -310,18 +321,19 @@ class GraphLedger:
         }
         try:
             if len(payload) <= CHUNK_CHARS:
-                raw = self._call("Commit", payload, json.dumps(meta))
+                raw = self._call("Commit", payload, json.dumps(meta), via=via)
             else:
                 token = uuid.uuid4().hex
-                iris_obj = self._iris()
+                # the stage is process-private (^||IVG.LedgerStage): on the process that commits
+                iris_obj = self._iris() if via is None else via
                 idx = 0
                 for start in range(0, len(payload), CHUNK_CHARS):
                     idx += 1
-                    iris_obj.classMethodValue(
-                        LEDGER_CLASS, "StageChunk", token, idx, payload[start : start + CHUNK_CHARS]
+                    _class_value(
+                        iris_obj, LEDGER_CLASS, "StageChunk", token, idx, payload[start : start + CHUNK_CHARS]
                     )
                 meta["staged"] = True
-                raw = self._call("Commit", token, json.dumps(meta))
+                raw = self._call("Commit", token, json.dumps(meta), via=via)
         except Exception as exc:
             return _CommitWireResult(
                 ok=False, revision_id=None, replayed=False, stmt_ids={},
@@ -352,9 +364,30 @@ class GraphLedger:
         )
 
     def commit(self, changeset: Changeset, *, kind: str = "changeset") -> CommitResult:
+        """Commit ``changeset`` as one revision (Graph.KG.Ledger.Commit).
+
+        4.7.0: inside a transaction the caller opened on the engine's connection (SQL ``START TRANSACTION``, or the
+        driver's autocommit off) the revision and its writes, ``post_commit_properties`` included, are part of it:
+        the caller's commit keeps them and the caller's rollback takes them back. The commit then runs on that
+        connection's own server process, where the caller's transaction is, nested in it; the engine's Native API
+        connection (``from_connect``) is another process, where it used to run, committed whatever the caller did. On
+        the caller's own connection Graph.KG.Ledger.Commit refused (``LedgerTransactionOpenError``). The ledger head
+        stays locked until the caller's transaction ends, so another commit waits for it (up to the lock timeout).
+        """
         changeset.validate()
+        from iris_vector_graph._write_txn import caller_transaction_level, write_txn
+
+        if caller_transaction_level(self._engine.conn) is None:
+            return self._commit(changeset, kind, None)
+        # IVG's own level: its commit goes back to the caller's level and its rollback takes back IVG's level alone,
+        # so the caller's commit or rollback decides
+        with write_txn(self._engine.conn, self._schema()) as txn:
+            return self._commit(changeset, kind, txn)
+
+    def _commit(self, changeset: Changeset, kind: str, txn) -> CommitResult:
+        via = txn.native() if txn is not None else None
         t0 = time.perf_counter()
-        wire = self._send_changeset(changeset, kind=kind)
+        wire = self._send_changeset(changeset, kind=kind, via=via)
         duration_ms = (time.perf_counter() - t0) * 1000.0
 
         if not wire.ok:
@@ -408,10 +441,16 @@ class GraphLedger:
 
         from .changeset import REVISION_ID_SENTINEL
 
+        from iris_vector_graph._write_txn import WriteTxn
+
         schema = self._schema()
         graph = DEFAULT_GRAPH
         cur = self._engine.conn.cursor()
+        # 4.7.0: IVG's own level, nested in the caller's transaction (and in commit's) when there is one; it called
+        # conn.commit(), which committed the caller's work, and conn.rollback(), which took it back
+        ptxn = WriteTxn(self._engine.conn, schema, cur)
         try:
+            ptxn.begin()
             for nid, props in pcp.items():
                 for k, v in props.items():
                     actual_v = revision_id if v == REVISION_ID_SENTINEL else v
@@ -424,15 +463,12 @@ class GraphLedger:
                         f'INSERT INTO {schema}.rdf_props (graph_id, s, "key", val) VALUES (?, ?, ?, ?)',
                         [graph, nid, k, actual_v],
                     )
-            self._engine.conn.commit()
+            ptxn.commit()
             return True, None
         except Exception as pcp_err:
             post_error = str(pcp_err)[:500]
             logger.error("post_commit_properties write failed: %s", post_error)
-            try:
-                self._engine.conn.rollback()
-            except Exception:
-                pass
+            ptxn.rollback()  # logs its own failure
             return False, post_error
 
     def _mark_nkg_dirty_if_needed(self) -> None:

@@ -13,8 +13,8 @@
 ///   ^||IVG.LedgerStage(token, i) / ^||IVG.LedgerOut(tag, i)   (process-private transport buffers)
 /// Value encoding inside records: "N" = null, "S"_value = string (FR-014a exact representation).
 ///
-/// Commit() owns TSTART/TCOMMIT/TROLLBACK and the head lock (R3, R5). Check order (FR-019
-/// precedence): lock → state → idempotency → expected_head → size → apply.
+/// Commit() owns TSTART/TCOMMIT/TROLLBACK and the head lock (R3, R5), nested in a caller's transaction when one is open
+/// (4.7.0). Check order (FR-019 precedence): lock → state → idempotency → expected_head → size → apply.
 Class Graph.KG.Ledger Extends %RegisteredObject
 {
 
@@ -386,13 +386,17 @@ ClassMethod SetStrict(pFlag As %Boolean) As %String
 
 /// pPayload: canonical changeset JSON, or a stage token when meta.staged is true.
 /// pMetaJson: {"fingerprint","expected_head","idempotency_key","kind","schema","staged"}.
+///
+/// 4.7.0: inside a transaction the caller opened ($TLEVEL above 0) the commit is a level nested in it: TCOMMIT only
+/// lowers $TLEVEL back to the caller's, so the caller's commit keeps the revision and its writes and the caller's
+/// rollback takes back both, and a refused changeset takes back its own level alone (TROLLBACK 1). It used to refuse
+/// (transaction_open, spec 213 FR-047); FR-047's invariant, a revision exists if and only if its mutations are
+/// visible, holds either way, as both are in one transaction. The head lock is released by the Lock - below only when
+/// the outermost transaction ends (an unlock inside a transaction waits for its end), so no other commit builds on a
+/// head the caller may still roll back.
 ClassMethod Commit(pPayload As %String, pMetaJson As %String) As %String
 {
     Set tResult = "", tBump = "", tOk = 0, tToken = ""
-    If $TLevel > 0 {
-        Set tResult = ..Err("transaction_open", "a transaction is already open ($TLEVEL=" _ $TLevel _ ")")
-        Return ..LargeOut(tResult)
-    }
     Set tTxnLevel = $TLevel
     Try {
         TSTART
