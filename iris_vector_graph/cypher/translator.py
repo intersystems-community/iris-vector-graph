@@ -23665,15 +23665,17 @@ def _normalize_tz_str(tz):
     return _normalize_tz_offset(tz)
 
 
-def _iana_tz_offset(iana_name, ref_year=2015, ref_month=7, ref_day=21):
-    """Return '+HH:MM' or '+HH:MM:SS' offset for IANA timezone at reference date."""
+def _iana_tz_offset(iana_name, ref_year=2015, ref_month=7, ref_day=21, hour=0, minute=0, second=0):
+    """Return '+HH:MM' or '+HH:MM:SS' offset for IANA timezone at the reference date and wall time (midnight unless
+    given: 4.7.0 row 20b, on a day the zone changes its offset the value's own time decides, so 12:00 on the day
+    Berlin moves to summer time is +02:00, not midnight's +01:00)."""
     try:
         import datetime as _dt2
 
         from iris_vector_graph._tz import zone as _ZI
 
         _zi = _ZI(iana_name)
-        _aware = _dt2.datetime(ref_year, ref_month, ref_day, tzinfo=_zi)
+        _aware = _dt2.datetime(ref_year, ref_month, ref_day, hour % 24, minute % 60, second % 60, tzinfo=_zi)
         _off = _aware.utcoffset()
         _total_s = int(_off.total_seconds())
         _sign = "+" if _total_s >= 0 else "-"
@@ -23686,6 +23688,17 @@ def _iana_tz_offset(iana_name, ref_year=2015, ref_month=7, ref_day=21):
         return f"{_sign}{_hh:02d}:{_mm:02d}"
     except Exception:
         return ""
+
+
+def _wall_hms(time_part):
+    """(hour, minute, second) of a time text (`12:00`, `1200`, `12:00:30.5`, `12`), for the offset at that wall time
+    (4.7.0 row 20b); (0, 0, 0) when it reads no hour."""
+    import re as _re
+
+    m = _re.match(r"^(\d{2})(?::?(\d{2})(?::?(\d{2}))?)?", time_part or "")
+    if not m:
+        return 0, 0, 0
+    return int(m.group(1)), int(m.group(2) or 0), int(m.group(3) or 0)
 
 
 def _parse_time_string(s, ref_year=2015, ref_month=7, ref_day=21):
@@ -23714,11 +23727,11 @@ def _parse_time_string(s, ref_year=2015, ref_month=7, ref_day=21):
         tz = _normalize_tz_str(tz_raw)
         # If no explicit offset but IANA zone given, compute the offset
         if iana_name and not tz:
-            tz = _iana_tz_offset(iana_name, ref_year, ref_month, ref_day)
+            tz = _iana_tz_offset(iana_name, ref_year, ref_month, ref_day, *_wall_hms(time_part))
     else:
         time_part = s
         if iana_name:
-            tz = _iana_tz_offset(iana_name, ref_year, ref_month, ref_day)
+            tz = _iana_tz_offset(iana_name, ref_year, ref_month, ref_day, *_wall_hms(time_part))
 
     # Extended: HH:MM[:SS[.frac]]
     m = _re.match(r"^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?$", time_part)
@@ -24585,7 +24598,9 @@ def _build_date_from_map(m, with_time=False, with_tz=False):
                         _abs_s = abs(_total_s)
                         _hh = _abs_s // 3600
                         _mm = (_abs_s % 3600) // 60
-                        tz_str = f"{_sign}{_hh:02d}:{_mm:02d}[{tz_name}]"
+                        # with its seconds (4.7.0 row 20b: Stockholm 1818's +00:53:28 printed +00:53)
+                        _ss = f":{_abs_s % 60:02d}" if _abs_s % 60 else ""
+                        tz_str = f"{_sign}{_hh:02d}:{_mm:02d}{_ss}[{tz_name}]"
                     except Exception:
                         tz_str = tz_name
                 else:
@@ -27538,11 +27553,11 @@ def _eval_truncate(fn, args_exprs):
     # Resolve IANA timezone offset using POST-truncation date (y/mo/d may have changed)
     # e.g. millennium truncation of 2017-10-11 (summer, +02:00) → 2000-01-01 (winter, +01:00)
     if _pending_iana_tz is not None:
-        _offset = _iana_tz_offset(_pending_iana_tz, ref_year=y, ref_month=mo, ref_day=d)
+        _offset = _iana_tz_offset(_pending_iana_tz, ref_year=y, ref_month=mo, ref_day=d, hour=h, minute=mi, second=s)
         out_tz = f"{_offset}[{_pending_iana_tz}]" if _offset else _pending_iana_tz
     elif _input_iana_tz is not None:
         # Input temporal had IANA timezone; re-resolve offset for post-truncation date
-        _offset = _iana_tz_offset(_input_iana_tz, ref_year=y, ref_month=mo, ref_day=d)
+        _offset = _iana_tz_offset(_input_iana_tz, ref_year=y, ref_month=mo, ref_day=d, hour=h, minute=mi, second=s)
         out_tz = f"{_offset}[{_input_iana_tz}]" if _offset else _input_iana_tz
 
     # Apply numeric overrides from map (timezone already handled above)

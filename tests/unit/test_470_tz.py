@@ -64,14 +64,14 @@ def test_a_name_that_is_no_zone_key_is_not_read_as_a_path(name):
 
 
 def test_every_translation_site_reads_the_wheel(backzone_host):
-    """The string form, the map form and an offset at a reference date: each +00:53 (and :28 where printed)."""
+    """The string form, the map form and an offset at a reference date: each +00:53:28."""
     def sql(q):
         s = translate_to_sql(parse_query(q), {}).sql
         return s if isinstance(s, str) else "\n".join(s)
 
     assert "1818-07-21T21:40:32.142+00:53:28[Europe/Stockholm]" in sql(
         "RETURN datetime('1818-07-21T21:40:32.142[Europe/Stockholm]') AS d")
-    assert "+00:53[Europe/Stockholm]" in sql(
+    assert "+00:53:28[Europe/Stockholm]" in sql(  # with its seconds since row 20b (it printed +00:53)
         "RETURN datetime({year: 1818, month: 7, day: 21, hour: 21, minute: 40, timezone: 'Europe/Stockholm'}) AS d")
     from iris_vector_graph.cypher.translator import _iana_tz_offset
 
