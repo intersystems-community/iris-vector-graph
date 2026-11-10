@@ -100,3 +100,24 @@ def test_purge_before_retires_them_in_the_default_graph_by_default(eng):
     _build(eng, u, None)
     assert eng.purge_before(T0 + 100) >= 4  # every bare endpoint of the default graph's purged edges, ours included
     assert _nodes(eng, u, None) == KEPT
+
+
+@pytest.mark.parametrize("cls", ("Graph.KG.TemporalIndex", "Graph.KG.TemporalIndexMS"))
+def test_the_three_argument_objectscript_call_keeps_the_nodes(eng, cls):
+    """The class's own default stays off: opsreview calls ##class(Graph.KG.TemporalIndex).PurgeRawBefore(graph,
+    tsEnd, tsStart) from ObjectScript and relies on it keeping shared nodes (they sweep orphans themselves). The
+    Python API's default is on (row 6); the class's must not follow it by accident. Called through the Native API with
+    the same three arguments: every node stays, and the answer is "deleted:skipped"."""
+    import iris
+
+    u, graph = "t470p" + uuid.uuid4().hex[:8], "g470purge"
+    unit = 1000 if cls.endswith("MS") else 1
+    names = {k: f"{u}{k}" for k in ("sensor", "r0", "r1", "r2", "keeper", "linked", "other")}
+    assert eng.create_node(names["keeper"], properties={"site": "north"}, graph=graph)
+    assert eng.create_edge(names["linked"], "KNOWS", names["other"], graph=graph)
+    native = iris.createIRIS(eng.conn)
+    for i, target in enumerate(("r0", "r1", "r2", "keeper", "linked")):
+        native.classMethodVoid(cls, "InsertEdge", graph, names["sensor"], "EMITS", names[target], (T0 + i) * unit, 1.0)
+    answer = str(native.classMethodValue(cls, "PurgeRawBefore", graph, (T0 + 100) * unit, 0))
+    assert answer == "5:0", answer
+    assert _nodes(eng, u, graph) == ALL
