@@ -77,11 +77,13 @@ class TestKGAlgorithmHighLevel:
 
 class TestSCCErrorPath:
 
-    def test_scc_error_returns_empty(self, misc_eng):
+    def test_scc_error_raises(self, misc_eng):
+        """4.6.0 R105: a failed store path raises naming the method (it answered [], read as a graph with no
+        components)."""
         err = IVGResult(columns=["id", "component", "size"], rows=[], error="forced")
         with patch.object(misc_eng._store, "execute_scc", return_value=err):
-            # The method is `strongly_connected_components`; `scc` skipped.
-            assert misc_eng.strongly_connected_components(top_k=5) == []
+            with pytest.raises(RuntimeError, match="strongly_connected_components failed: forced"):
+                misc_eng.strongly_connected_components(top_k=5)
 
 
 # ---------------------------------------------------------------------------
@@ -90,14 +92,12 @@ class TestSCCErrorPath:
 
 class TestKCoreErrorPath:
 
-    def test_kcore_error_returns_empty(self, misc_eng):
+    def test_kcore_error_raises(self, misc_eng):
+        """4.6.0 R105, as for strongly_connected_components."""
         err = IVGResult(columns=["id", "coreness"], rows=[], error="forced")
         with patch.object(misc_eng._store, "execute_k_core", return_value=err):
-            try:
-                result = misc_eng.k_core(top_k=5)
-                assert result == []
-            except (AttributeError, NotImplementedError):
-                pytest.skip("k_core method not exposed or not supported")
+            with pytest.raises(RuntimeError, match="k_core failed: forced"):
+                misc_eng.k_core(top_k=5)
 
 
 # ---------------------------------------------------------------------------

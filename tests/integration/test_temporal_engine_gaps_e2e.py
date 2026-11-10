@@ -305,13 +305,16 @@ class TestPurgeBeforeBucketGuardE2E:
         ts_end_mid = bucket_n * bucket_size + 150
 
         _insert(engine, pfx, "METRIC_AT", f"{pfx}_t", ts_in_bucket)
+        # Whole buckets: a window that cuts a bucket whose raw edges are purged counts none of it (USER_GUIDE; the
+        # aggregate cannot be split), so only a window of whole buckets reads ^KG("tagg") after the purge
+        whole = (bucket_n * bucket_size, bucket_n * bucket_size + bucket_size - 1)
 
-        agg_before = _get_aggregate(engine, pfx, "METRIC_AT", "count", 0, ts_in_bucket + 1)
+        agg_before = _get_aggregate(engine, pfx, "METRIC_AT", "count", *whole)
         assert agg_before >= 1
 
         _purge_before(engine, ts_end_mid)
 
-        agg_after = _get_aggregate(engine, pfx, "METRIC_AT", "count", 0, ts_in_bucket + 1)
+        agg_after = _get_aggregate(engine, pfx, "METRIC_AT", "count", *whole)
         assert agg_after >= 1, "^KG('tagg') for bucket N must survive mid-bucket PurgeBefore"
 
     def test_fully_expired_bucket_tagg_killed(self, engine):
@@ -328,12 +331,12 @@ class TestPurgeBeforeBucketGuardE2E:
         _insert(engine, pfx, "METRIC_AT", f"{pfx}_t", 50)
         _insert(engine, pfx, "METRIC_AT", f"{pfx}_t", 60)
 
-        agg_before = _get_aggregate(engine, pfx, "METRIC_AT", "count", 0, 200)
+        agg_before = _get_aggregate(engine, pfx, "METRIC_AT", "count", 0, 299)  # bucket 0 whole (see above)
         assert agg_before >= 2
 
         _purge_raw(engine, 1000)
 
-        agg_after = _get_aggregate(engine, pfx, "METRIC_AT", "count", 0, 200)
+        agg_after = _get_aggregate(engine, pfx, "METRIC_AT", "count", 0, 299)
         assert agg_after == agg_before, "PurgeRawBefore must not touch aggregates"
 
 

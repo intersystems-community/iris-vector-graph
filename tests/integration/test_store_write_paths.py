@@ -461,16 +461,18 @@ class TestQueryRouting:
 
     def test_execute_cypher_with_nkg_dirty_raises(self, eng):
         """When _nkg_dirty=True, a var-length query the BFS route answers raises IndexNotSyncedError.
-        Must use a pattern that doesn't match _KHOP_VAR_RE (which intercepts before dirty check):
-        RETURN DISTINCT m.name (not m.node_id). Unaliased and DISTINCT: an aliased item (`m.name AS name`), or one
-        without DISTINCT (a row per path, 4.6.0 R058), expands in SQL over ^KG (CY_VLP_PATHS), which the adjacency
-        index keeps current, so a stale ^NKG cannot change its answer and nothing is refused."""
+        Must use a pattern that doesn't match _KHOP_VAR_RE (which intercepts before dirty check). Measured on 4.7.0:
+        of the var-length shapes, only `RETURN DISTINCT m` (the node) takes the BFS route; a property of it
+        (`RETURN DISTINCT m.name`, which this test used, and which answered on f1a442e7 too), `count(m)`, a path or a
+        relationship list
+        expands in SQL over ^KG (CY_VLP_PATHS), which the adjacency index keeps current, so a stale ^NKG cannot
+        change its answer and nothing is refused."""
         eng._nkg_dirty = True
         from iris_vector_graph.errors import IndexNotSyncedError
         try:
             with pytest.raises(IndexNotSyncedError):
                 eng.execute_cypher(
-                    "MATCH (n {node_id: $id})-[*1..3]->(m) RETURN DISTINCT m.name",
+                    "MATCH (n {node_id: $id})-[*1..3]->(m) RETURN DISTINCT m",
                     {"id": "sw_0"}
                 )
         finally:
