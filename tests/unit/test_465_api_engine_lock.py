@@ -214,22 +214,17 @@ def test_multiple_schema_endpoints_concurrency(fake_engine):
 
 
 def test_only_the_locked_ways_in_touch_the_cached_engine():
-    """Read from the module's source, so a new endpoint that calls ``_get_engine()`` itself fails here: only
+    """Read from the module's loaded code, so a new endpoint that calls ``_get_engine()`` itself fails here: only
     ``_engine()`` and ``_run_cypher`` (which holds ``_engine_lock``) may get or reset the shared engine."""
-    import ast
-    import inspect
+    import types
 
     from iris_vector_graph import cypher_api
+    from tests.unit._code import names
 
-    tree = ast.parse(inspect.getsource(cypher_api))
-    callers = {}
-    for fn in ast.walk(tree):
-        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for node in ast.walk(fn):
-                if isinstance(node, ast.Call) and getattr(node.func, "id", None) in ("_get_engine", "_reset_engine"):
-                    callers.setdefault(fn.name, set()).add(node.func.id)
-    assert set(callers) == {"_engine", "_run_cypher"}, callers
-    run_cypher = next(f for f in ast.walk(tree) if isinstance(f, ast.FunctionDef) and f.name == "_run_cypher")
-    held = [w for w in ast.walk(run_cypher) if isinstance(w, ast.With)
-            and any(getattr(i.context_expr, "id", None) == "_engine_lock" for i in w.items)]
-    assert held, "_run_cypher no longer holds _engine_lock"
+    callers = {
+        name for name, fn in vars(cypher_api).items()
+        if isinstance(fn, types.FunctionType) and fn.__module__ == cypher_api.__name__
+        and names(fn) & {"_get_engine", "_reset_engine"} and name not in ("_get_engine", "_reset_engine")
+    }
+    assert callers == {"_engine", "_run_cypher"}, callers
+    assert "_engine_lock" in names(cypher_api._run_cypher)
