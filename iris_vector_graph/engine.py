@@ -1156,7 +1156,15 @@ class IRISGraphEngine(
         running totals, which `gds.shortestPath.dijkstra.stream`'s `costs` are) and `totalCost` their sum, all floats:
         a -1.0-> b -2.5-> c answers `costs [1.0, 2.5]`, `totalCost 3.5`. Before 4.6.3 a whole-number weight read as an
         integer there (`[1, 1]`, `2` for weights of 1.0; Graph.KG.TraversalPaths.PathJson)."""
+        # Refuse an options map and fewer than 2 positional arguments (4.6.5 round 9 review)
+        name = "ivg.shortestPath.weighted"
+        if proc.options:
+            args_list = "from, to, weightProp, maxCost, maxHops, direction, types"
+            raise ValueError(f"{name} takes positional arguments ({args_list}), not an options map")
         args = proc.arguments
+        if len(args) < 2:
+            raise ValueError(f"{name} requires at least 2 arguments: from, to")
+
         from iris_vector_graph.cypher import ast as cypher_ast
         from iris_vector_graph.cypher.translator import (
             _int_argument, _number_argument, _procedure_direction, _weighted_path_weight_prop,
@@ -1181,18 +1189,18 @@ class IRISGraphEngine(
                 return a.name
             return str(a)
 
-        source_id = _arg_str(args[0], parameters) if len(args) > 0 else None
-        target_id = _arg_str(args[1], parameters) if len(args) > 1 else None
+        source_id = _arg_str(args[0], parameters)
+        target_id = _arg_str(args[1], parameters)
+        if not source_id:
+            raise ValueError(f"{name}: from parameter not supplied")
+        if not target_id:
+            raise ValueError(f"{name}: to parameter not supplied")
         weight_prop = _weighted_path_weight_prop(_arg_str(args[2], parameters) if len(args) > 2 else "weight")
         # a value of the wrong type is named (4.6.5): float() said "could not convert string" and int() truncated 2.5
-        name = "ivg.shortestPath.weighted"
         max_cost = _number_argument(name, "maxCost", _arg_raw(args[3], parameters)) if len(args) > 3 else 9999.0
         max_hops = _int_argument(name, "maxHops", _arg_raw(args[4], parameters), 0) if len(args) > 4 else 10
         direction = _procedure_direction(
             "ivg.shortestPath.weighted", _arg_str(args[5], parameters) if len(args) > 5 else "out")
-
-        if not source_id or not target_id:
-            return IVGResult(columns=["path", "totalCost"], rows=[])
 
         import json as _json
 

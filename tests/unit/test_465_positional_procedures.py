@@ -93,3 +93,23 @@ def test_the_procedure_still_translates_with_positional_arguments(proc, query, _
     elif proc == "ivg.neighbors":
         sql = _translate("CALL ivg.neighbors(['a']) YIELD neighbor RETURN neighbor")
         assert "rdf_edges" in sql
+
+
+def test_shortestPath_weighted_refuses_an_options_map_through_the_handler():
+    """The engine handler also refuses an options map, as the translator does."""
+    from unittest.mock import MagicMock
+    from iris_vector_graph import IRISGraphEngine
+    eng = IRISGraphEngine(MagicMock(), embedding_dimension=4)
+    with pytest.raises(ValueError, match=r"ivg\.shortestPath\.weighted.*takes positional arguments.*from.*to.*weightProp"):
+        eng.execute_cypher("CALL ivg.shortestPath.weighted({from: 'a', to: 'b'}) YIELD path RETURN path", raise_on_error=True)
+
+
+def test_shortestPath_weighted_refuses_fewer_than_two_positional_arguments():
+    """The handler refuses missing from/to with the translator's message."""
+    from unittest.mock import MagicMock
+    from iris_vector_graph import IRISGraphEngine
+    eng = IRISGraphEngine(MagicMock(), embedding_dimension=4)
+    with pytest.raises(ValueError, match=r"ivg\.shortestPath\.weighted requires at least 2 arguments: from, to"):
+        eng.execute_cypher("CALL ivg.shortestPath.weighted('a') YIELD path RETURN path", raise_on_error=True)
+    with pytest.raises(ValueError, match=r"ivg\.shortestPath\.weighted requires at least 2 arguments: from, to"):
+        eng.execute_cypher("CALL ivg.shortestPath.weighted() YIELD path RETURN path", raise_on_error=True)
