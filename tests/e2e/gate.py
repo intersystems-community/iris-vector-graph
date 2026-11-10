@@ -167,6 +167,12 @@ SESSION_NAMESPACES: Dict[str, str] = {
         "on (tests/e2e/test_470_issue13_count_distinct_limit_e2e.py), which the gate cannot make; or an IVG470* "
         "scratch namespace on the enterprise container; unset, the file skips"
     ),
+    "IVG_SETUP_NS": (
+        "a namespace holding no IVG classes yet (tests/e2e/test_470_setup_compiles_every_class_e2e.py, which asserts "
+        "what a first initialize_schema() compiles), on a throwaway container (IVG_SETUP_PORT) or made with "
+        "`make_scratch_namespace.py --no-install`; the gate's namespaces come with IVG installed; unset, the file "
+        "skips"
+    ),
 }
 #: The variables read only by the files they name, so a module that reads one needs that group.
 _BY_VAR = {g.var: name for name, g in GROUPS.items() if g.var != "IVG_NAMESPACE"}
