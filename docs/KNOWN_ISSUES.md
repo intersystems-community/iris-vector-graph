@@ -311,6 +311,7 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 - **Versions:** all 4.x.
 - **Workaround:** `CASE WHEN x = true THEN 'true' WHEN x = false THEN 'false' ELSE toString(x) END` answers
   `'true'` and `'false'` (measured 2026-11-10, both routes).
+- **Check:** the Symptom's query over a node whose `flag` is `true` answers `'1'`.
 
 ### `nodes(p)` of a variable-length path answers node ids
 
@@ -324,6 +325,7 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 - **Versions:** all 4.x (a fixed-length path's, before 4.7.0).
 - **Workaround:** read what you need through the path: `[x IN nodes(p) | x.name]`, `[x IN nodes(p) | labels(x)]`,
   or a fixed-length pattern and `RETURN a, b`.
+- **Check:** `RETURN nodes(p)` of a variable-length match answers strings, not maps.
 
 ### A list predicate over a list holding a stored NaN fails
 
@@ -496,7 +498,7 @@ tables`), as such a write fails anyway (the entry below).
   for `v` of 1 and 2.
 - **Cause:** the SQL route joins `rdf_props` once for each use of a property, not once per variable and key, and IRIS
   prepares the plan over all of those joins.
-- **Versions:** 4.6.0 and earlier; on the 4.6.1 list.
+- **Versions:** 4.6.0 and later, 4.7.0 included.
 - **Workaround:** bind each property once in a `WITH`, then compare the bound values:
   `MATCH (x), (y) WITH x.v AS xv, y.v AS yv RETURN xv < yv AS a, xv <= yv AS b, ...`. IRIS caches the prepared
   plan, so only the first run of a query text pays the price; a query you run often pays it once.
@@ -530,10 +532,11 @@ tables`), as such a write fails anyway (the entry below).
   yields.
 - **Cause:** two routes answer the call. The engine's handler sends the vector to each graph's own vector route and
   answers the IDs it finds; the translated SQL reads the node's labels and properties too.
-- **Versions:** 4.x. A fix is planned for 4.6.1.
+- **Versions:** all 4.x, 4.7.0 included.
 - **Workaround:** read the node from the ID (`engine.get_node(node_id)`), or add an `ORDER BY score DESC` after the
   `YIELD` for the three columns: `CALL ivg.vector.search('Doc', 'emb', $vec, 5) YIELD node, score RETURN node, score
 ORDER BY score DESC`.
+- **Check:** the number of columns the call answers for `node`: one (the ID) or three.
 
 ### The SQL vector procedures read only the default graph's vectors
 
@@ -659,17 +662,6 @@ WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes n WHERE n.node_id = u.s AND n.gra
 graph_id FROM Graph_KG.rdf_edges__ivg400unplaced`, and drop the table (migration/v4.0.0.md, "Your 3.2.0 edges").
 - **Check:** `SELECT graph_id, s, p, o_id FROM Graph_KG.rdf_edges__ivg400unplaced` lists the quarantined rows.
 
-### Two processes with different embedding widths re-declare the vector column
-
-- **Symptom:** two processes that call `initialize_schema()` on one namespace with different `embedding_dimension`
-  values each succeed with no warning; the last one re-declares an empty vector column to its width. The other process's
-  writes then fail with `EmbeddingIdentityConflict`.
-- **Versions:** 3.2.0 to 4.6.5. Fixed in 4.7.0: the second `initialize_schema()` raises `EmbeddingIdentityConflict`
-  naming both widths and changes no column.
-- **Workaround:** use one embedding width per namespace, or per `(graph, model_key)` route. On 4.7.0, to change the
-  width of an empty vector table on purpose, run `initialize_schema(rewidth=True)` from an engine at the new width.
-- **Check:** `SELECT table_name, graph_id, model_key, dimension, set_by FROM Graph_KG.embedding_registry`.
-
 ### Snapshots made through the REST API land in the temporary directory
 
 - **Symptom:** `POST /admin/snapshot` writes `ivg_snapshot_<time>.snapshot` to `IVG_SNAPSHOT_DIR`, and with the
@@ -711,7 +703,7 @@ idx_edges_s_p`, where tuned statistics give cost 200 and `Read index map Graph_K
 - **Versions:** 4.0.0 and later (setup tunes since spec 230), on any IVG Schema.
 - **Workaround:** once a graph has grown by row-at-a-time writes, run `TUNE TABLE <schema>.rdf_edges` and
   `TUNE TABLE <schema>.nodes` (and again after it has grown by an order of magnitude), or load it with the bulk
-  loaders. 4.6.1 is to make the plan independent of the table's size.
+  loaders.
 - **Check:** time 100 `create_edge` calls, or run the `EXPLAIN` above and look for `INTERSECT`.
 
 ### A temporal purge costs about 40 µs per purged edge
