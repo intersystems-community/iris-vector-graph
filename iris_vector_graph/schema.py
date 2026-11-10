@@ -2519,6 +2519,7 @@ LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
     set result = ##class(Graph.KG.PageRank).RunJson(seedEntities, dampingFactor, maxIterations, bidirectional, reverseEdgeWeight, graphId)
+    set result = ##class(Graph.KG.PageRank).WithUnscored(result, "{table_schema}", graphId, 1000)
     quit result
 }}
 """,

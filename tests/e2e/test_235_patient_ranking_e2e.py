@@ -218,7 +218,12 @@ def test_default_ppr_is_the_walk_without_the_excluded_edges(fhir_conn_required, 
         prov = got["provenance_seed"]
         want = _ppr_reference(fhir_conn_required, [prov], exclude=None, max_iterations=100)
         assert any(k.startswith("Patient/") for k in want), "the compartment edges reach the patient"
-        _assert_scores(got["ppr_provenance"], want, limit=1000)
+        # the walk's scores; from 4.7.0 (row 9) the 1000 rows are filled with the graph's other nodes at 0.0
+        prov_rows = got["ppr_provenance"]
+        scored = {k: v for k, v in prov_rows.items() if v > 0}
+        _assert_scores(scored, want, limit=1000)
+        assert len(prov_rows) == 1000 or set(scored) == set(want)
+        assert not {k for k, v in prov_rows.items() if v == 0} & set(want), "a node the walk scored answered 0.0"
 
         # compartment edges are counted nowhere in the graph's status, and the link report has no row for them
         plain = _rows(

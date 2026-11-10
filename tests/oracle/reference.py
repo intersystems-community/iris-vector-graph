@@ -143,8 +143,9 @@ def personalized_pagerank(
 ) -> Dict[str, float]:
     """``kg_PERSONALIZED_PAGERANK``: networkx's ``pagerank(G, alpha=damping, personalization={seed: 1},
     tol=tolerance)`` on the multigraph; a dangling node hands its score to the seeds; stops after
-    ``max_iterations`` or once the summed change is below N * tolerance. Only the nodes the seeds reach score (the
-    others' 1/N start decays towards 0 and is left out). A seed outside the graph scores nothing."""
+    ``max_iterations`` or once the summed change is below N * tolerance. Every node has an entry, as networkx's
+    answer does: a node the seeds do not reach is 0.0, networkx's fixed point (its 1/N start decays towards 0; before
+    4.7.0, row 9, such a node was left out, as IVG left it out). A seed outside the graph scores nothing."""
     nodes = g.named_nodes if named else node_set(g, include_isolated)
     edges = g.named_edges if named else g.edges
     seeds = [s for s in dict.fromkeys(seeds) if s in nodes]
@@ -175,7 +176,7 @@ def personalized_pagerank(
     reach = set()
     for s in seeds:
         reach |= set(bfs_distances({v: out[v] for v in nodes}, s))
-    return {v: x[v] for v in nodes if v in reach}
+    return {v: (x[v] if v in reach else 0.0) for v in nodes}
 
 
 # ── degree ────────────────────────────────────────────────────────────────────────────────────────────────────────

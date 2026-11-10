@@ -526,6 +526,8 @@ ClassMethod LeidenJson(maxLevels As %Integer = 10, gamma As %Double = 1.0, tol A
                 Set nid = $Get(^NKG("$ND", mem), mem)
                 Do ..Row(arr, nid, "community", newId, "size", sz)
                 Set emitted = emitted + 1
+                // topK counts rows: before 4.7.0 (row 28) the cut came after the community, so it was kept whole
+                Quit:(topK>0)&&(emitted>=topK)
             }
             Set newId = newId + 1
             If (topK > 0) && (emitted >= topK) Quit
@@ -683,6 +685,8 @@ ClassMethod LeidenJsonPy(gamma As %Double = 1.0, topK As %Integer = 10000, rando
     for _comm, members in sorted(groups.items(), key=lambda kv: -len(kv[1])):
         size = len(members)
         for ix in members:
+            if tk > 0 and emitted >= tk:
+                break
             out.append({"id": nd[ix], "community": new_id, "size": size})
             emitted += 1
         new_id += 1

@@ -79,5 +79,12 @@ def test_the_store_answer_is_used_for_a_list_of_seeds():
     store = MagicMock()
     store.execute_ppr.return_value = IVGResult(columns=["id", "score"], rows=[["a", 0.7], ["c", 0.3]])
     engine = _engine(store)
-    assert engine.ppr(["a", "c"])["scores"][0] == {"id": "a", "score": 0.7}
+    # 4.7.0 row 9: the engine reads the graph's nodes to give the ones the walk did not reach 0.0
+    engine._t = lambda name: f"Graph_KG.{name}"
+    engine.conn = MagicMock()
+    cur = engine.conn.cursor.return_value
+    cur.fetchall.return_value = [("a",), ("b",), ("c",)]
+    assert engine.ppr(["a", "c"])["scores"] == [{"id": "a", "score": 0.7}, {"id": "c", "score": 0.3},
+                                                {"id": "b", "score": 0.0}]
+    assert cur.execute.call_args.args == ("SELECT node_id FROM Graph_KG.nodes WHERE graph_id = ?", [""])
     assert store.execute_ppr.call_args.args[0] == ["a", "c"]

@@ -95,12 +95,15 @@ def test_personalized_pagerank_is_networkx(seed):
     mine = ref.personalized_pagerank(g, seeds, tolerance=1e-12, max_iterations=1000)
     pers = {v: (1.0 if v in seeds else 0.0) for v in g.nodes}
     theirs = nx.pagerank(ref.multidigraph(g), personalization=pers, weight=None, tol=1e-12, max_iter=1000)
-    assert mine == pytest.approx({v: s for v, s in theirs.items() if v in mine}, abs=1e-9)
-    assert all(s < 1e-6 for v, s in theirs.items() if v not in mine)
+    # every node, an unreached one at 0.0 where networkx's iterate is within 1e-6 of it (4.7.0 row 9)
+    assert set(mine) == set(theirs)
+    assert mine == pytest.approx(theirs, abs=1e-6)
 
 
 def test_personalized_pagerank_from_an_edgeless_seed_is_all_on_the_seed():
-    assert ref.personalized_pagerank(RING_SOLO, ["solo"], tolerance=1e-12) == pytest.approx({"solo": 1.0})
+    assert ref.personalized_pagerank(RING_SOLO, ["solo"], tolerance=1e-12) == pytest.approx(
+        {"solo": 1.0, "r1": 0.0, "r2": 0.0, "r3": 0.0}
+    )
 
 
 # ── degree, betweenness, closeness ────────────────────────────────────────────────────────────────────────────────

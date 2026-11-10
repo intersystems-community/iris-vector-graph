@@ -534,8 +534,8 @@ Every node of the graph is in every answer, a node with no edge too: it has a Pa
 row (0), a component and a community of its own, coreness 0 and no triangles, and the `n` of the degree and
 closeness formulas below is `node_count()`. So an answer is networkx's on the graph with every node, edgeless ones
 included. Before 4.6.0 a node with no edge was in no answer and `n` counted only the nodes with an edge. Personalized
-PageRank is the exception: `kg_PERSONALIZED_PAGERANK()`, `ppr()` and `CALL ivg.ppr` answer only the nodes reached from
-the seeds, and a node with no edge is not in the answer (networkx gives it 0.0). Read a missing node as 0.0. Ranked
+PageRank (`kg_PERSONALIZED_PAGERANK()`, `ppr()`, `CALL ivg.ppr`) answers 0.0 for a node the walk never reaches, one
+with no edge too, as networkx does; before 4.7.0 such a node had no row. Ranked
 answers go highest first and break a tie by node ID in IRIS collation (numbers first, by value, then text: `9`,
 `10`, `07`, `a`); two scores equal to 12 decimal places are a tie, so float noise between two nodes in the same
 position does not order them.
@@ -580,6 +580,10 @@ score back to the seeds, so the scores sum to 1 and are networkx's
 `pagerank(G, alpha=damping_factor, personalization=seeds, tol=tolerance)`, with G as a multigraph. The walk stops
 after `max_iterations`, or once the scores change by less than N × `tolerance` in total in one iteration (N: the
 nodes holding a score), networkx's rule. Every route gives this answer, whether or not the Arno library is loaded.
+Every node of the graph has a row, those the walk never reaches at 0.0 after the others, within the `top_k` (or
+`CALL ivg.ppr`'s 1000-row) cut. The damping factor (`alpha` in `ppr()` and `CALL ivg.ppr`) must be in the open
+interval (0, 1) and the iteration count at least 1, or the call raises `ValueError` naming the argument; before 4.7.0
+alpha 2.0 answered scores of 22.0 and -21.0.
 
 ### Shortest path
 

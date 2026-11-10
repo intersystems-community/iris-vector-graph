@@ -414,8 +414,9 @@ class FhirGraphMixin:
         and ``top_k`` caps the patients. ``params`` is as in
         ``fhir_resolve_concepts``, ``"clinical"`` included.
         """
-        from iris_vector_graph._engine.algorithms import _check_exclusions
+        from iris_vector_graph._engine.algorithms import _check_exclusions, check_ppr_args
 
+        check_ppr_args("fhir_concept_ppr", damping_factor, max_iterations, "damping_factor", "max_iterations")
         g = _fhir_graph(graph)
         _check_direction(direction)
         exclude = _check_exclusions(exclude_predicates)
@@ -460,7 +461,7 @@ class FhirGraphMixin:
                 top_k or 0,
             )
             return {"patients": out.get("patients", []), "unattributed": out.get("unattributed")}
-        return self.kg_PERSONALIZED_PAGERANK(
+        scores = self.kg_PERSONALIZED_PAGERANK(
             seeds,
             damping_factor=damping_factor,
             max_iterations=max_iterations,
@@ -469,6 +470,8 @@ class FhirGraphMixin:
             graph=g,
             exclude_predicates=exclude,
         )
+        # the resources the walk reached, as before 4.7.0, which answers every node (row 9), the others at 0.0
+        return {k: v for k, v in scores.items() if v > 0}
 
     # --------------------------------------------------------------- reports
 

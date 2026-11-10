@@ -265,6 +265,8 @@ ClassMethod PageRankNativeJson(damping As %Double = 0.85, maxIter As %Integer = 
 
 ClassMethod PPRNativeJson(seedJson As %String, damping As %Double = 0.85, maxIter As %Integer = 20) As %String
 {
+	// 4.7.0 row 8: the library walked with any damping and iteration count
+	Do ##class(Graph.KG.PageRank).CheckArgs(damping, maxIter)
 	Quit ..NativeResult("kg_ppr_global", "^KG", seedJson, damping, maxIter)
 }
 

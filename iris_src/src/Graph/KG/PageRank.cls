@@ -71,6 +71,61 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 	Return result.%ToJSON()
 }
 
+/// Throws unless alpha is a number in the open interval (0, 1) and maxIter a whole number of at least 1 (4.7.0
+/// row 8: alpha 2.0 walked, and answered scores of 22.0 and -21.0). Run, so RunJson and every caller of either,
+/// and ArnoAccel.PPRNativeJson check with it; the Python methods and CALL ivg.ppr check first, by the same rule.
+ClassMethod CheckArgs(alpha As %String, maxIter As %String)
+{
+	If ('$IsValidNum(alpha)) || ((+alpha) '> 0) || ((+alpha) '< 1) {
+		Throw ##class(%Exception.General).%New("IVG", 5001, , "personalized PageRank: alpha must be in the open interval (0, 1), got "_alpha)
+	}
+	If ('$IsValidNum(maxIter)) || ((+maxIter) '= ((+maxIter) \ 1)) || ((+maxIter) < 1) {
+		Throw ##class(%Exception.General).%New("IVG", 5001, , "personalized PageRank: maxIter must be a whole number of at least 1, got "_maxIter)
+	}
+}
+
+/// pJson, an answer of RunJson, with a row of score 0 for each node of graph pGraph it lacks, after the scored rows
+/// and in collation order, to pLimit rows in all (0: every node). networkx's pagerank(G, personalization=...) answers
+/// every node of G, 0.0 for one the walk never reaches (4.7.0 row 9: such a node, one with no edge too, had no row).
+/// pSchema is the IVG schema holding the nodes table. An answer with no row (no seeds) or of pLimit rows already is
+/// returned as it is, without reading the table. The kg_PPR SQL function behind CALL ivg.ppr calls it; the Python
+/// methods add the same rows themselves (AlgorithmsMixin._ppr_every_node).
+ClassMethod WithUnscored(pJson As %String, pSchema As %String = "Graph_KG", pGraph As %String = "", pLimit As %Integer = 1000) As %String
+{
+	Set tIn = ##class(%DynamicArray).%FromJSON(pJson)
+	Set pLimit = +pLimit
+	Return:(tIn.%Size()=0)||((pLimit>0)&&(tIn.%Size()>=pLimit)) pJson
+	Set tIter = tIn.%GetIterator()
+	While tIter.%GetNext(.tI, .tRow) {
+		Set tHave(tRow.id) = ""
+	}
+	If pGraph = $Char(0) Set pGraph = ""
+	// an empty host variable binds as NULL, hence the COALESCE on both sides
+	Set tSQL = "SELECT node_id FROM "_pSchema_".nodes WHERE COALESCE(graph_id, '') = COALESCE(?, '')"
+	Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL, pGraph)
+	If tRS.%SQLCODE < 0 {
+		Throw ##class(%Exception.SQL).CreateFromSQLCODE(tRS.%SQLCODE, tRS.%Message)
+	}
+	While tRS.%Next() {
+		Set tId = tRS.%Get("node_id")
+		Set:'$Data(tHave(tId)) tZero(tId) = ""
+	}
+	If tRS.%SQLCODE < 0 {
+		Throw ##class(%Exception.SQL).CreateFromSQLCODE(tRS.%SQLCODE, tRS.%Message)
+	}
+	Set tId = ""
+	For {
+		Set tId = $Order(tZero(tId))
+		Quit:tId=""
+		Quit:(pLimit>0)&&(tIn.%Size()>=pLimit)
+		Set tRow = ##class(%DynamicObject).%New()
+		Do tRow.%Set("id", tId, "string")
+		Do tRow.%Set("score", 0, "number")
+		Do tIn.%Push(tRow)
+	}
+	Return tIn.%ToJSON()
+}
+
 /// RunJson's walk, leaving ranks(node) = score for every scored node rather than a JSON
 /// string, so a caller in IRIS can use every score without the string size limit
 /// (spec 235, GroupByPatient). Returns 0, with ranks empty, when there are no seeds.
@@ -86,6 +141,7 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidir As %Integer, revWeight As %Double, pGraph As %String, pExclude As %String, Output ranks, pTol As %Double = 1E-6) As %Boolean
 {
 	Kill ranks
+	Do ..CheckArgs(alpha, maxIter)
 	// Until 4.0.1 pGraph was hardwired to 0: every PPR walked the default graph
 	// whatever graph its seeds lived in (spec 231, FR-016).
 	Set pGraph = ##class(Graph.KG.GraphKey).ForIndex(pGraph)

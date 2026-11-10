@@ -104,7 +104,8 @@ class TestFallbackIsNetworkx:
         """e has no out-edges: networkx sends all of its score back to it, so it holds every bit of the mass."""
         got = _fallback(["e"])
         _assert_networkx(got, _networkx(["e"]))
-        assert got == {"e": pytest.approx(1.0)}
+        # every node, as networkx answers (4.7.0 row 9: the zeros were left out)
+        assert got == {n: pytest.approx(1.0 if n == "e" else 0.0) for n in NODES}
 
     def test_two_seeds(self):
         _assert_networkx(_fallback(["a", "d"]), _networkx(["a", "d"]))
@@ -121,7 +122,8 @@ class TestFallbackIsNetworkx:
         kept = [e for e in EDGES if e[1] != "KNOWS"]
         got = _fallback(["a"], exclude_predicates=["KNOWS"])
         _assert_networkx(got, _networkx(["a"], edges=kept))
-        assert set(got) == {"a", "c"}
+        assert {n for n, v in got.items() if v > 0} == {"a", "c"}
+        assert set(got) == set(NODES)  # the others at 0.0 (4.7.0 row 9)
 
     def test_exclusion_making_a_node_dangling(self):
         edges = EDGES + [("c", "SEES", "d")]

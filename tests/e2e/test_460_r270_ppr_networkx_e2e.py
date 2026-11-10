@@ -64,7 +64,9 @@ def _networkx(seeds, edges=EDGES, damping=0.85, tol=TOL, reverse=False):
 def _check(got, want, prefix, abs_tol=1e-6):
     """``got`` is keyed by IVG node ID; compare on the unprefixed name."""
     plain = {k[len(prefix):]: float(v) for k, v in got.items() if str(k).startswith(prefix)}
-    assert set(got) == {prefix + k for k in plain}, f"scores outside the test graph: {got}"
+    # the namespace's other nodes are in the answer at 0.0, as networkx answers every node (4.7.0 row 9)
+    outside = {k: v for k, v in got.items() if not str(k).startswith(prefix)}
+    assert all(float(v) == 0.0 for v in outside.values()), f"scores outside the test graph: {outside}"
     assert sum(plain.values()) == pytest.approx(1.0, abs=abs_tol), plain
     for node, score in want.items():
         assert plain.get(node, 0.0) == pytest.approx(score, abs=abs_tol), (node, plain, want)
@@ -140,7 +142,8 @@ def test_objectscript_route_exclusion_makes_c_dangling(world, no_arno):
         _seeds(prefix, ["a"]), max_iterations=1000, tolerance=TOL, exclude_predicates=["KNOWS"]
     )
     plain = _check(got, _networkx(["a"], edges=[e for e in EDGES if e[1] != "KNOWS"]), prefix)
-    assert set(plain) == {"a", "c"}
+    assert {k for k, v in plain.items() if v > 0} == {"a", "c"}
+    assert set(plain) == set(NODES)  # the others at 0.0 (4.7.0 row 9)
 
 
 def test_runjson_reads_tolerance(world):
@@ -245,8 +248,11 @@ def test_sql_function_and_call(world):
     assert not r.error, r.error
     node = r.columns.index("node_id") if "node_id" in r.columns else r.columns.index("node")
     call = {row[node]: row[r.columns.index("score")] for row in r.rows}
-    assert sql == pytest.approx(runjson, abs=1e-12)
-    assert call == pytest.approx(runjson, abs=1e-12)
+    # RunJson answers the nodes the walk scored; kg_PPR (so the CALL) adds the graph's others at 0.0 (4.7.0 row 9)
+    zeros = {k: 0.0 for k in sql if k not in runjson}
+    assert set(zeros) >= {prefix + "g"}, "g, which the seeds never reach, has a row"
+    assert sql == pytest.approx({**runjson, **zeros}, abs=1e-12)
+    assert call == pytest.approx({**runjson, **zeros}, abs=1e-12)
     _check(sql, _networkx(["a"]), prefix, abs_tol=1e-4)
 
 

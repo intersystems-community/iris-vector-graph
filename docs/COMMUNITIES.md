@@ -87,15 +87,12 @@ is the first 10,000 rows). The first path that answers is used:
 `IVG_DISABLE_ARNO=1` skips step 2. On a graph of more than 100,000 nodes, `top_k=0` warns that the answer may be a
 large JSON string.
 
-**What `top_k` (Cypher `topK`) cuts.** It counts rows, not communities, but step 1 keeps a community whole: it adds
-communities from the largest down and stops after the one that brings the rows to `top_k`, so it can answer more rows
-than `top_k`. On a graph of three cliques of 4, 3 and 2 nodes, `top_k=1`, `2`, `3` and `4` answer the 4 rows of
-community 0, `top_k=5` and `7` answer 7 rows (communities 0 and 1), and `top_k=8` answers all 9. Two cases cut at
-exactly `top_k` rows instead, in the same order, and can end part-way through a community (each row's `size` still
-says the whole community's): a graph with a node that has no edge to another node (the same graph with one isolated
-node answers 1, 2, 3, 4, 5, 7, 8 rows for those values), and a call that step 1 does not answer (measured: the first
-call in a namespace whose `^NKG` is not built yet). For the whole partition pass `top_k=0`, and cut it yourself on
-`community`.
+**What `top_k` (Cypher `topK`) cuts.** It counts rows, on every path: the first `top_k` rows, community 0's first,
+which can end part-way through a community (each row's `size` still says the whole community's). On a graph of three
+cliques of 4, 3 and 2 nodes, `top_k=1` answers one row of community 0 and `top_k=5` its 4 rows and one of
+community 1. Before 4.7.0 step 1 kept a community whole: it added communities from the largest down and stopped after
+the one that brought the rows to `top_k`, so on that graph `top_k=1` answered 4 rows and `top_k=5` 7. For the whole
+partition pass `top_k=0`, and cut it yourself on `community`.
 
 With `gamma` other than 1.0, step 2 is skipped (Arno's answer to the CPM has not been checked against leidenalg's),
 and step 3 needs `leidenalg`: networkx's Louvain has no CPM, so without the extra the call raises and says so. The

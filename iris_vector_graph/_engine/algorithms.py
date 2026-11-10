@@ -1,10 +1,11 @@
 import json
 import os
 import logging
+import numbers
 import re
 from typing import Dict, Any, List, Optional, Sequence, Tuple, Callable, Union
 
-from iris_vector_graph._collation import rank_key
+from iris_vector_graph._collation import collation_key, rank_key
 from iris_vector_graph.errors import GraphWriteError, IVGError
 
 
@@ -60,6 +61,24 @@ def _check_seeds(seed_entities) -> List[str]:
     if not seeds:
         raise ValueError("seed_entities must contain at least one entity")
     return seeds
+
+
+def check_ppr_args(method: str, alpha, max_iter, alpha_name: str, iter_name: str) -> None:
+    """Raise ``ValueError`` naming the argument unless ``alpha`` is a number in the open interval (0, 1) and
+    ``max_iter`` a whole number of at least 1 (4.7.0 row 8: alpha 2.0 answered scores of 22.0 and -21.0, and every
+    route took it). ``alpha_name`` / ``iter_name``: the names the caller's own signature gives them."""
+    if isinstance(alpha, bool) or not isinstance(alpha, numbers.Real):
+        raise ValueError(f"{method}: {alpha_name} must be a number in the open interval (0, 1), got {alpha!r}")
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"{method}: {alpha_name} must be in the open interval (0, 1), got {alpha!r}")
+    whole = isinstance(max_iter, numbers.Integral) or (isinstance(max_iter, float) and max_iter.is_integer())
+    if isinstance(max_iter, bool) or not whole or max_iter < 1:
+        raise ValueError(f"{method}: {iter_name} must be a whole number of at least 1, got {max_iter!r}")
+
+
+#: RunJson's row cap when it is sent no limit, which the store and the engine's RunJson call leave to it when there is
+#: no exclusion (PageRank.cls, RunJson's pLimit).
+RUNJSON_DEFAULT_LIMIT = 1000
 
 
 def _raise_store_error(method: str, result) -> None:
@@ -241,9 +260,14 @@ class AlgorithmsMixin:
                 the 1000-row cap of the ObjectScript path (spec 235).
 
         Returns:
-            Dict mapping entity_id to PageRank score
+            Dict mapping entity_id to PageRank score, highest first (ties by id in IRIS collation): every node of
+            the graph, 0.0 for one the walk never reaches (a node with no edge too), as networkx answers; before
+            4.7.0 such a node had no entry. Cut to ``return_top_k``, or without it (and without
+            ``exclude_predicates``) to the 1000 rows of the ObjectScript route.
 
         Raises:
+            ValueError: If damping_factor is not in the open interval (0, 1), or max_iterations is below 1 (before
+                4.7.0 damping 2.0 answered scores of 22.0 and -21.0)
             ValueError: If reverse_edge_weight is negative
             ValueError: If seed_entities is empty
             TypeError: If seed_entities is a string, or a seed is not one (4.6.0 R050)
@@ -253,6 +277,7 @@ class AlgorithmsMixin:
             Falls back to pure Python if SQL function unavailable.
         """
         # Input validation
+        check_ppr_args("kg_PERSONALIZED_PAGERANK", damping_factor, max_iterations, "damping_factor", "max_iterations")
         if reverse_edge_weight < 0:
             raise ValueError(
                 f"reverse_edge_weight must be non-negative, got: {reverse_edge_weight}"
@@ -262,6 +287,8 @@ class AlgorithmsMixin:
 
         graph_name = validate_graph_name(graph)
         exclude = _check_exclusions(exclude_predicates)
+        # the rows RunJson answers without a limit, which it is sent only with an exclusion
+        runjson_cap = RUNJSON_DEFAULT_LIMIT if exclude is None else None
         # Sent only for a named graph, so a store predating `graph` keeps serving the
         # default graph; for a named graph its `TypeError` drops to the paths below.
         graph_kw = {"graph": graph_name} if graph_name else {}
@@ -306,11 +333,9 @@ class AlgorithmsMixin:
                 # raised (4.6.0 R127): running RunJson again below fails the same way, and the SQL fallback then
                 # answered in its place, or {} where it read no node, so the failure never showed.
                 _raise_store_error("kg_PERSONALIZED_PAGERANK", result)
-                top_k = return_top_k
-                rows = result.rows
-                if top_k:
-                    rows = rows[:top_k]
-                return {r[0]: float(r[1]) for r in rows if len(r) >= 2}
+                scores = {r[0]: float(r[1]) for r in result.rows if len(r) >= 2}
+                return self._ppr_every_node(scores, graph_name, return_top_k,
+                                            runjson_cap)
 
         # --- Fast path: Graph.KG.PageRank.RunJson() via .cls layer ---
         if self.capabilities.objectscript_deployed and self.capabilities.kg_built:
@@ -335,17 +360,12 @@ class AlgorithmsMixin:
                         for item in items
                         if item.get("score", 0) > 0
                     }
-                    if return_top_k is not None and return_top_k > 0:
-                        scores = dict(
-                            sorted(scores.items(), key=lambda x: rank_key(x[0], x[1]))[
-                                :return_top_k
-                            ]
-                        )
                     logger.debug(
                         "PageRank via Graph.KG.PageRank.RunJson(): %d results",
                         len(scores),
                     )
-                    return scores
+                    return self._ppr_every_node(scores, graph_name, return_top_k,
+                                                runjson_cap)
             except Exception as exc:
                 # Only RunJson not being there to call is a reason to compute in Python (4.6.0 R276). Every
                 # other error was logged and answered from the fallback, which hid a <PARAMETER> from a RunJson
@@ -367,6 +387,27 @@ class AlgorithmsMixin:
             graph=graph_name,
             exclude_predicates=exclude,
         )
+
+    def _ppr_every_node(self, scores: Dict[str, float], graph: str, top_k: Optional[int],
+                        cap: Optional[int]) -> Dict[str, float]:
+        """``scores``, a walk's scored nodes, highest first (ties by id in IRIS collation), with 0.0 for each node of
+        ``graph`` it did not score, as networkx's ``pagerank(G, personalization=...)`` answers every node of G (4.7.0
+        row 9: a node the walk never reached, one with no edge too, had no entry). Cut to ``top_k`` rows, or without
+        one to ``cap``, the route's own row cap (RunJson's 1000), whose answer already ran to it when it holds that
+        many: then there is no room for a zero, and the node table is not read."""
+        ranked = sorted(scores.items(), key=lambda x: rank_key(x[0], x[1]))
+        limit = top_k if top_k is not None and top_k > 0 else (cap or 0)
+        if limit and len(ranked) >= limit:
+            return dict(ranked[:limit])
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(f"SELECT node_id FROM {self._t('nodes')} WHERE graph_id = ?", [graph or ""])
+            unscored = sorted({str(r[0]) for r in cursor.fetchall()} - set(scores), key=collation_key)
+        finally:
+            cursor.close()
+        if limit:
+            unscored = unscored[: limit - len(ranked)]
+        return dict(ranked + [(v, 0.0) for v in unscored])
 
     def _kg_PERSONALIZED_PAGERANK_python_fallback(
         self,
@@ -510,14 +551,12 @@ class AlgorithmsMixin:
                     )
                     break
 
-            # Filter out zero scores and apply top_k limit
-            results = {node: score for node, score in ranks.items() if score > 0}
-
+            # Every node of the graph, 0.0 for one the walk never reached, as networkx answers (4.7.0 row 9: the
+            # zeros were filtered out), highest first, ties by id in IRIS collation, then the top_k cut.
+            ranked = sorted(ranks.items(), key=lambda x: rank_key(x[0], x[1]))
             if return_top_k is not None and return_top_k > 0:
-                sorted_items = sorted(results.items(), key=lambda x: rank_key(x[0], x[1]))
-                results = dict(sorted_items[:return_top_k])
-
-            return results
+                ranked = ranked[:return_top_k]
+            return dict(ranked)
 
         except Exception as e:
             logger.error(f"kg_PERSONALIZED_PAGERANK Python fallback failed: {e}")
@@ -578,7 +617,9 @@ class AlgorithmsMixin:
         self, seed: Union[str, Sequence[str]], alpha: float = 0.85, max_iter: int = 20, top_k: int = 20
     ) -> dict:
         """Personalized PageRank from ``seed``, one node ID or a list of them (the walk restarts at each evenly):
-        ``{"scores": [{"id", "score"}]}``, best first.
+        ``{"scores": [{"id", "score"}]}``, best first, a node the walk never reaches at 0.0 (4.7.0: it had no row).
+        ``alpha`` outside the open interval (0, 1) or ``max_iter`` below 1 raises ``ValueError`` (4.7.0: alpha 2.0
+        answered scores of 22.0 and -21.0).
 
         ``kg_PERSONALIZED_PAGERANK`` on the default graph, cut to ``top_k`` nodes; ``alpha`` is the damping factor.
         A seed that is not a node ID (a string), or a ``seed`` that is neither one nor a list or tuple of them (a dict,
@@ -589,6 +630,7 @@ class AlgorithmsMixin:
         node's score nowhere and rounded to 6 places, so it was not networkx's PPR, nor this method's answer
         without the library.
         """
+        check_ppr_args("ppr", alpha, max_iter, "alpha", "max_iter")
         if not isinstance(seed, (str, list, tuple)):
             raise TypeError(f"ppr() takes one node ID (a string) or a list of them, got {type(seed).__name__}: "
                             f"{seed!r}")
@@ -712,6 +754,7 @@ class AlgorithmsMixin:
             True
         """
         if seed_entities is not None:
+            check_ppr_args("kg_PAGERANK", damping, max_iterations, "damping", "max_iterations")
             return self.kg_PERSONALIZED_PAGERANK(
                 seed_entities, damping_factor=damping, max_iterations=max_iterations,
             )
@@ -903,12 +946,14 @@ class AlgorithmsMixin:
         before and after node counts are equal. Read-only.
         """
         from iris_vector_graph.models import PprGuidedSubgraphData
+        check_ppr_args("kg_PPR_GUIDED_SUBGRAPH", damping, max_iterations, "damping", "max_iterations")
         if not seed_ids:
             return PprGuidedSubgraphData(seed_ids=[], nodes=[], edges=[], ppr_scores=[])
         ppr_scores = self.kg_PERSONALIZED_PAGERANK(seed_ids, damping_factor=damping,
                                                      max_iterations=max_iterations)
         if isinstance(ppr_scores, dict):
-            sorted_scores = sorted(ppr_scores.items(), key=lambda x: -x[1])
+            # the nodes the walk reached: from 4.7.0 (row 9) the answer holds every node, the others at 0.0
+            sorted_scores = sorted(((k, v) for k, v in ppr_scores.items() if v > 0), key=lambda x: -x[1])
             top_ids = [k for k, _ in sorted_scores[:ppr_top_k]]
         else:
             sorted_scores = sorted(ppr_scores, key=lambda x: -x[1])
@@ -975,6 +1020,7 @@ class AlgorithmsMixin:
         Runs ``kg_PERSONALIZED_PAGERANK`` on the default graph and sorts its scores; ``[]`` for
         no seeds. Read-only.
         """
+        check_ppr_args("kg_PPR", damping, max_iterations, "damping", "max_iterations")
         if not seed_entities:
             return []
         result = self.kg_PERSONALIZED_PAGERANK(seed_entities, damping_factor=damping,
@@ -1565,6 +1611,18 @@ class AlgorithmsMixin:
             meta_rows = [r for r in rows if len(r) >= 1 and r[0] == "_meta"]
             groups = [r for r in rows if not (len(r) >= 1 and r[0] == "_meta")]
             rows = complete_groups(groups, list(loners), validated.top_k) + meta_rows
+        if validated.top_k > 0:
+            # top_k counts rows on every route (4.7.0 row 28: a route that kept communities whole answered a
+            # community's every row for top_k=1); the routes cut too, and this holds it for the Arno library's.
+            # A _meta row stays where the route put it.
+            kept, n = [], 0
+            for row in rows:
+                if len(row) >= 1 and row[0] == "_meta":
+                    kept.append(row)
+                elif n < validated.top_k:
+                    kept.append(row)
+                    n += 1
+            rows = kept
         out: List[Dict[str, Any]] = []
         for row in rows:
             if len(row) >= 1 and row[0] == "_meta":

@@ -1209,7 +1209,7 @@ Store one vector under `doc_id` in the VecIndex `index_name` (writes). It is sea
 def vec_search(index_name: str, query_embedding, k: int = 10, nprobe: int = 8) -> list
 ```
 
-Approximate nearest neighbours of one vector in the VecIndex `index_name`: a list of up to `k` dicts (`id`, `score`, `distance`), searching `nprobe` leaves per tree; an index with no trees is searched by brute force. Read-only. The index holds no graph: it answers from whatever was inserted.
+Approximate nearest neighbours of one vector in the VecIndex `index_name`: a list of up to `k` dicts (`id`, `score`, `distance`), nearest first, searching `nprobe` leaves per tree; an index with no trees is searched by brute force. For a cosine index `score` is the cosine (1.0 identical, 0.0 orthogonal, -1.0 opposite) and `distance` 1 - cosine; before 4.7.0 `score` was cosine - 1 (0.0 for identical vectors). For a dot index `score` is the dot product, and for the other metrics the distance. Read-only. The index holds no graph: it answers from whatever was inserted.
 
 #### `vec_search_multi`
 
@@ -1767,7 +1767,7 @@ def ppr(
 ) -> dict
 ```
 
-Personalized PageRank from `seed`, one node ID or a list of them (the walk restarts at each evenly): `{"scores": [{"id", "score"}]}`, best first.
+Personalized PageRank from `seed`, one node ID or a list of them (the walk restarts at each evenly): `{"scores": [{"id", "score"}]}`, best first, a node the walk never reaches at 0.0 (4.7.0: it had no row). `alpha` outside the open interval (0, 1) or `max_iter` below 1 raises `ValueError` (4.7.0: alpha 2.0 answered scores of 22.0 and -21.0).
 
 #### `random_walk`
 

@@ -3015,7 +3015,12 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
         raise ValueError(f"ivg.ppr: seeds must be a string or list, got {type(seeds).__name__}")
 
     alpha = _number_argument("ivg.ppr", "alpha", _resolve_arg(args[1], context, "ivg.ppr")) if len(args) > 1 else 0.85
-    max_iter = _int_argument("ivg.ppr", "maxIter", _resolve_arg(args[2], context, "ivg.ppr")) if len(args) > 2 else 20
+    max_iter = (_int_argument("ivg.ppr", "maxIter", _resolve_arg(args[2], context, "ivg.ppr"), minimum=1)
+                if len(args) > 2 else 20)
+    # 4.7.0 row 8: alpha 2.0 answered b 22.0 and a -21.0, and maxIter 0 the seeds' starting scores; networkx refuses
+    # neither, and neither is a walk
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"ivg.ppr: alpha must be in the open interval (0, 1), got {alpha}")
 
     seed_json = json.dumps(seeds)
     ppr_fn = _fn("kg_PPR")

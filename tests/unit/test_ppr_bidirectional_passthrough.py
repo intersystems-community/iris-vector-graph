@@ -98,10 +98,14 @@ class TestEngineForwardsReverseArgsToTheStore:
         store = MagicMock()
         store.execute_ppr.return_value = IVGResult(columns=["id", "score"], rows=[["a", 1.0]])
         engine = self._engine(store)
+        # 4.7.0 row 9: the store's rows, then the graph's other nodes at 0.0, read from the node table
+        engine._t = lambda name: f"Graph_KG.{name}"
+        engine.conn = MagicMock()
+        engine.conn.cursor.return_value.fetchall.return_value = [("a",), ("b",)]
 
-        engine.kg_PERSONALIZED_PAGERANK(
+        assert engine.kg_PERSONALIZED_PAGERANK(
             seed_entities=["b"], bidirectional=True, reverse_edge_weight=0.25
-        )
+        ) == {"a": 1.0, "b": 0.0}
 
         kwargs = store.execute_ppr.call_args.kwargs
         assert kwargs.get("bidirectional") is True
