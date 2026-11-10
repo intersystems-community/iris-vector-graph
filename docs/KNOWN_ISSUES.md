@@ -283,16 +283,17 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 
 ### `toString()` of an unwound boolean of a list built at run time answers `'1'` or `'0'`
 
-- **Symptom:** `MATCH (n:Flag) WITH collect(n.on) AS l UNWIND l AS x RETURN toString(x)` answers `'1'` and `'0'` for
-  `true` and `false`, where openCypher answers `'true'` and `'false'`. `RETURN x`, `collect(x)`, a `WITH` of `x`,
+- **Symptom:** `MATCH (n:Flag) WITH collect(n.flag) AS l UNWIND l AS x RETURN toString(x)` answers `'1'` and `'0'`
+  for `true` and `false`, where openCypher answers `'true'` and `'false'`; so does `UNWIND $p AS x RETURN toString(x)`
+  over a parameter list of booleans. `RETURN x`, `collect(x)`, a `WITH` of `x`,
   `x = true` and `x = ''` answer as openCypher does since 4.7.0 (before, `x` read as `'1'`, `'0'` or null for `true`,
   `false` and `''`, and `collect(exists(n.p))` listed `1` and `0`).
 - **Cause:** IRIS's `JSON_TABLE`, which the `UNWIND` reads such a list with, hands a JSON boolean on as `1` or `0`.
   Since 4.7.0 the list goes through `CY_LIST_KINDS`, which puts each element's kind beside it, and the reads above
   consult it; `toString()` does not yet.
 - **Versions:** all 4.x.
-- **Workaround:** `CASE WHEN x = true THEN 'true' WHEN x = false THEN 'false' ELSE toString(x) END`, or pass the
-  list as a parameter.
+- **Workaround:** `CASE WHEN x = true THEN 'true' WHEN x = false THEN 'false' ELSE toString(x) END` answers
+  `'true'` and `'false'` (measured 2026-11-10, both routes).
 
 ### `nodes(p)` of a variable-length path answers node ids
 
@@ -417,21 +418,30 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
   whole nodes.
 - **Check:** `"LoadTableFunction" in result.error`.
 
-### An UNWIND of a list built while the query runs can read a nested list or a boolean as a string
+<a id="an-unwind-of-a-list-built-while-the-query-runs-can-read-a-nested-list-or-a-boolean-as-a-string"></a>
 
-- **Symptom:** an `UNWIND` variable, returned or collected, reads a nested list or map as its JSON text in a string
-  (`collect(e)` answers `["[1]"]`), and a boolean as `'1'` or `'0'`, where the unwound list was built while the
-  query ran (a property, a `collect()`, a function's answer) and holds lists, maps or booleans beside other kinds.
-  For a literal or parameter list it does the same only where a string is the same text as another element: the
-  string `'[2]'` beside the list `[2]`, or `'1'` beside a boolean. Every other list known before the query runs
-  answers each element as its type, and a list of one kind of scalar always does.
+### An UNWIND of a parameter list can read a string that spells a list as the list, and a boolean as `'1'`
+
+- **Symptom:** over a parameter list that holds a list or map beside other kinds, an `UNWIND` variable reads a
+  string that is the same text as another element as that element: with `$p = ['[2]', [2], true, '1']`,
+  `UNWIND $p AS e RETURN e` answers `[2], [2], '1', '1'` and `RETURN collect(e)` answers
+  `['[2]', '[2]', '1', '1']` (openCypher: `'[2]', [2], true, '1'`). A list built while the query runs (a property,
+  a `collect()`, a function's answer) and a list literal answer each element as itself since 4.7.0, and so does a
+  parameter list of one kind of scalar, or one with no list or map in it.
+- **Also:** an ordering comparison (`<`, `<=`, `>`, `>=`) of an element of a list built while the query runs with
+  a date, time or duration reads the element as text, because such a list holds a temporal value as its ISO text:
+  over `collect()` of `[date('2020-01-01'), 'b']`, `x < 'c'` answers true for the date (openCypher: null). Against a
+  number, a string or a boolean, an element of another kind answers null, as openCypher does (4.7.0).
 - **Cause:** IRIS's `JSON_TABLE` reads each element into one text column: a nested list as its JSON text and a
-  boolean as `'1'` or `'0'`, the same text as the string `'[1]'` or `'1'`. For a list known before the query runs,
-  IVG knows which texts are which; for one built at run time it cannot tell.
-- **Versions:** 4.6.0 and earlier.
-- **Workaround:** return the list itself (`RETURN l`) rather than its unwound elements: a list in a result row
-  answers its elements as their types.
-- **Check:** the answer holds a string where you expected a list or a boolean.
+  boolean as `'1'` or `'0'`, the same text as the string `'[1]'` or `'1'`. A list literal or one built at run time
+  goes through `CY_LIST_KINDS`, which puts each element's kind and JSON text beside it; an `UNWIND` straight from a
+  parameter cannot, because a `?` inside `JSON_TABLE(fn(...))` fails the statement on IRIS, so its elements are read
+  by their text.
+- **Versions:** 4.6.0 and earlier for every list built at run time and every literal holding a list or map; 4.7.0
+  for a parameter list.
+- **Workaround:** bind the parameter in a `WITH` first: `WITH $p AS l UNWIND l AS e RETURN e` answers
+  `'[2]', [2], true, '1'` (measured 2026-11-10, both routes), or return the list itself (`RETURN $p`).
+- **Check:** the answer holds a list where you passed a string, or `'1'` where you passed `true`.
 
 ### A query that reads many properties prepares slowly
 

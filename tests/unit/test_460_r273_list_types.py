@@ -18,7 +18,9 @@ def _t(q: str, params=None):
 
 def test_an_unwind_list_mixing_a_boolean_carries_a_flag_column():
     t = _t("UNWIND [1, true, 'a'] AS v RETURN v")
-    assert "SELECT ? AS v, 0 AS v__b UNION ALL SELECT ? AS v, 1 AS v__b UNION ALL SELECT ? AS v, 0 AS v__b" in t.sql
+    # 4.7.0 row 22: rows of more than one kind also carry their kind (v__t), read by an ordering comparison
+    assert ("SELECT ? AS v, 0 AS v__b, 'n' AS v__t UNION ALL SELECT ? AS v, 1 AS v__b, 'b' AS v__t "
+            "UNION ALL SELECT ? AS v, 0 AS v__b, 's' AS v__t") in t.sql
     assert "CASE WHEN u0.v__b = 1 THEN CHAR(1) || 'J' || CASE WHEN u0.v = 1 THEN 'true' ELSE 'false' END" in t.sql
     assert "ELSE Graph_KG.CY_TYPED(u0.v) END AS v" in t.sql
     assert "v" in t.typed_value_columns

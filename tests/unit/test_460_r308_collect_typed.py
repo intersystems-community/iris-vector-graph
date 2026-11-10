@@ -41,8 +41,11 @@ def test_booleans_beside_a_list_are_listed_as_booleans():
     "UNWIND [[2], '[2]'] AS e RETURN collect(e) AS l",
     "UNWIND [true, '1', [1]] AS e RETURN collect(e) AS l",
 ])
-def test_a_string_that_reads_as_another_kind_leaves_the_column_as_it_was(q):
-    assert "JSON_ARRAYAGG" in sql_of(q)
+def test_a_string_that_reads_as_another_kind_is_told_apart_by_its_json(q):
+    """4.7.0 row 22: such a literal (one holding a list or map) goes through CY_LIST_KINDS, whose JSON text tells the
+    string '[2]' from the list [2] and '1' from true; before, the column read as it was (the string as the list)."""
+    sql = sql_of(q)
+    assert "Graph_KG.CY_LIST_KINDS(" in sql and "e__j" in sql, sql
 
 
 def test_one_kind_of_scalar_is_unchanged():

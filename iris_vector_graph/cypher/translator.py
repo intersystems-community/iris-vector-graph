@@ -7421,8 +7421,9 @@ def _rel_prop_text_columns(cypher_query, context) -> List[int]:
 
 #: The RETURN column of an UNWIND row of a known list (translate_return_clause, 4.6.0 R308), whose group 1 is the row
 _UNWOUND_KNOWN_ROW = re.compile(r"^CASE WHEN (\w+\.\w+) IS NULL THEN NULL WHEN \S*CY_JSON_NUM\(\1\) IS NOT NULL ")
-#: A RETURN column of a run-time list's UNWIND row, its boolean flagged (4.7.0 row 21): the row is group 1.
-_UNWOUND_RUN_TIME_ROW = re.compile(r"^CASE WHEN \(CASE WHEN (\w+)\.(\w+)__k = 'b' THEN 1 ELSE 0 END\) = 1 THEN ")
+#: A RETURN column of a run-time list's UNWIND row, its JSON text marked (4.7.0 rows 21, 22): the row's alias and
+#: column are groups 1 and 2.
+_UNWOUND_RUN_TIME_ROW = re.compile(r"^CHAR\(1\) \|\| 'J' \|\| (\w+)\.(\w+)__j$")
 
 
 def _unwrap_typed(sql_expr: str) -> str:
@@ -8403,6 +8404,12 @@ def translate_unwind_clause(unwind, context):
         if all(isinstance(v, (str, int, float, bool)) or v is None for v in _items):
             _use_union = True
             _union_rows = _items
+        elif _mixed_with_temporal(_items, context):
+            # 4.7.0 row 22: a temporal value beside other kinds (`[date('2020-01-01'), 'b']`) went to JSON_TABLE as its
+            # ISO text, a string to every comparison; as rows, each carries its kind (below)
+            _use_union = True
+            _union_rows = [_UnwoundTemporal(_temporal_static(v, context).kind, translate_expression(v, context))
+                           if isinstance(v, ast.FunctionCall) else v for v in _items]
     elif (_empty_rows := _empty_string_list(unwind.expression, context)) is not None and len(
         _empty_rows
     ) <= _KNOWN_ELEMS_MAX:
@@ -8440,22 +8447,34 @@ def translate_unwind_clause(unwind, context):
         _flagged = any(isinstance(v, bool) for v in _union_rows) and not all(
             isinstance(v, bool) or v is None for v in _union_rows
         )
+        # 4.7.0 row 22: rows of more than one kind carry their kind, which an ordering comparison reads: values of two
+        # kinds do not order (null), where SQL compared 1 < 'c' and the date's text < 'c' as strings (true)
+        _row_kinds = [_unwound_row_kind(v) for v in _union_rows]
+        _kinded = len({k for k in _row_kinds if k != "z"}) > 1
+        _rk = context.__dict__.setdefault("unwind_row_kinds", {})
+        _rk.pop(unwind.alias, None)
         if not _union_rows:
             # Empty list — produce zero rows via a no-match subquery
             union_sql = f"(SELECT ? AS {col} FROM (SELECT 1) _empty WHERE 1=0) {alias}"
             context.add_join_param(None)
         else:
             parts = []
-            for v in _union_rows:
+            for v, k in zip(_union_rows, _row_kinds):
                 flag = f", {int(isinstance(v, bool))} AS {col}__b" if _flagged else ""
+                if _kinded:
+                    flag += f", '{k}' AS {col}__t"
                 if v is None:
                     parts.append(f"SELECT NULL AS {col}{flag}")
+                elif isinstance(v, _UnwoundTemporal):
+                    parts.append(f"SELECT {v.sql} AS {col}{flag}")
                 else:
                     parts.append(f"SELECT ? AS {col}{flag}")
                     context.add_join_param(v)
             union_sql = f"({' UNION ALL '.join(parts)}) {alias}"
             if _flagged:
                 _bool_flags[unwind.alias] = (alias, f"{alias}.{col}__b")
+            if _kinded:
+                _rk[unwind.alias] = (alias, f"{alias}.{col}__t")
         if context.from_clauses:
             context.join_clauses.append(f"CROSS JOIN {union_sql}")
         else:
@@ -8523,15 +8542,14 @@ def translate_unwind_clause(unwind, context):
     if not (_is_range or _mixed_src or _unwind_kind) and unwind.alias not in context.collected_node_variables:
         # JSON_TABLE's VARCHAR column holds the element as IRIS's value: read as its JSON type (4.6.0 R310)
         _json_unwind_vars(context).add(unwind.alias)
-    _run_time = _known_list is None and _is_run_time_list(unwind.expression, context) and not (
+    _run_time = _known_list is None and (
+        _is_run_time_list(unwind.expression, context) or _literal_holding_a_nested_value(unwind.expression)) and not (
         _is_range or _mixed_src or _unwind_kind) and unwind.alias not in context.collected_node_variables
     by_position = _unwind_by_position(expr, alias, f"{_safe_alias(unwind.alias)} {col_type}", context, kinds=_run_time)
     if by_position is not None:
         context.join_clauses.append(f"CROSS JOIN {by_position}")
         if _run_time:
-            col = _safe_alias(unwind.alias)
-            _bool_flags[unwind.alias] = (alias, f"(CASE WHEN {alias}.{col}__k = 'b' THEN 1 ELSE 0 END)", "json",
-                                         f"{alias}.{col}__j")
+            _register_run_time_kinds(unwind.alias, alias, _bool_flags, context)
         return
     if _run_time:
         # 4.7.0 row 21: a list built at run time goes through CY_LIST_KINDS, so a boolean element carries a flag
@@ -8547,8 +8565,7 @@ def translate_unwind_clause(unwind, context):
             f"JSON_TABLE({expr}, '$[*]' COLUMNS ({col} {col_type} PATH '$.v', "
             f"{col}__k VARCHAR(1) PATH '$.k', {col}__j VARCHAR(32000) PATH '$.j')) {alias}"
         )
-        _bool_flags[unwind.alias] = (alias, f"(CASE WHEN {alias}.{col}__k = 'b' THEN 1 ELSE 0 END)", "json",
-                                     f"{alias}.{col}__j")
+        _register_run_time_kinds(unwind.alias, alias, _bool_flags, context)
     if _mark_empty:
         col, inner = _safe_alias(unwind.alias), f"{alias}j"
         json_table_sql = (
@@ -8562,6 +8579,105 @@ def translate_unwind_clause(unwind, context):
 
 
 _STAGE_FROM = re.compile(r"(Stage\d+)(?: \1)?")
+
+
+@dataclasses.dataclass(frozen=True)
+class _UnwoundTemporal:
+    """A temporal element of an UNWIND list literal, as a UNION row: its kind and its SQL text (4.7.0 row 22)."""
+
+    kind: str
+    sql: str
+
+
+def _unwound_row_kind(v) -> str:
+    """The kind tag a UNION row of an UNWIND literal carries: n, s, b, z (null), or a temporal kind (4.7.0 row 22)."""
+    if isinstance(v, _UnwoundTemporal):
+        return v.kind
+    if v is None:
+        return "z"
+    if isinstance(v, bool):
+        return "b"
+    if isinstance(v, (int, float)):
+        return "n"
+    return "s"
+
+
+def _mixed_with_temporal(items, context) -> bool:
+    """A list literal's elements are scalars, nulls and temporal constructors of literal text, of more than one kind and
+    with a temporal among them: the UNION rows of 4.7.0 row 22."""
+    kinds = set()
+    for v in items:
+        if isinstance(v, ast.FunctionCall):
+            temporal = _temporal_static(v, context)
+            if temporal is None:
+                return False
+            kinds.add(temporal.kind)
+        elif v is None:
+            continue
+        elif isinstance(v, (str, int, float, bool)):
+            kinds.add(_unwound_row_kind(v))
+        else:
+            return False
+    return len(kinds) > 1 and not kinds <= {"n", "s", "b"}
+
+
+def _row_kind_of(expr, context) -> Optional[tuple]:
+    """``(alias, kind column[, "run_time"])`` of an UNWIND variable whose rows carry their kind, while it is still read
+    from those rows; None otherwise."""
+    if not isinstance(expr, ast.Variable):
+        return None
+    entry = getattr(context, "unwind_row_kinds", {}).get(expr.name)
+    if entry is None or context.variable_aliases.get(expr.name) != entry[0]:
+        return None
+    return entry
+
+
+_ORDERING_OPS = frozenset({ast.BooleanOperator.LESS_THAN, ast.BooleanOperator.LESS_THAN_OR_EQUAL,
+                           ast.BooleanOperator.GREATER_THAN, ast.BooleanOperator.GREATER_THAN_OR_EQUAL})
+
+
+def _kind_guarded_ordering(expr, context) -> Optional[str]:
+    """An ordering comparison of a mixed-kind UNWIND row with a value of a known kind, null on a row of another kind
+    (4.7.0 row 22: `UNWIND [1, 'b'] AS e RETURN e < 'c'` answered true for 1). None when it does not apply."""
+    if expr.operator not in _ORDERING_OPS or len(expr.operands) != 2 or getattr(context, "_row_kind_guard", False):
+        return None
+    a, b = expr.operands
+    for var, other in ((a, b), (b, a)):
+        entry = _row_kind_of(var, context)
+        if entry is None:
+            continue
+        col = entry[1]
+        temporal = _temporal_static(other, context)
+        if temporal is not None and len(entry) > 2:
+            return None  # a list built at run time holds a temporal value as its text: the row's kind is s
+        kind = temporal.kind if temporal is not None else _static_value_kind(other)
+        tag = {"num": "n", "str": "s", "bool": "b"}.get(kind, kind)
+        if tag is None or tag in ("list", "map"):
+            return None
+        context._row_kind_guard = True
+        try:
+            inner = translate_boolean_expression(expr, context)
+        finally:
+            context._row_kind_guard = False
+        return f"(CASE WHEN {col} <> '{tag}' THEN NULL WHEN {inner} THEN 1 ELSE 0 END = 1)"
+    return None
+
+
+def _register_run_time_kinds(var: str, alias: str, bool_flags, context) -> None:
+    """An UNWIND read through CY_LIST_KINDS: its boolean flag and JSON text (row 21), and its row kind, which an ordering
+    comparison reads (row 22). The kind of a temporal element is its text's, s."""
+    col = _safe_alias(var)
+    bool_flags[var] = (alias, f"(CASE WHEN {alias}.{col}__k = 'b' THEN 1 ELSE 0 END)", "json", f"{alias}.{col}__j")
+    context.__dict__.setdefault("unwind_row_kinds", {})[var] = (alias, f"{alias}.{col}__k", "run_time")
+
+
+def _literal_holding_a_nested_value(expr) -> bool:
+    """A list literal with a list or map element: JSON_TABLE reads that element as its JSON text, the same text as a
+    string that spells it ('[2]' beside [2]), and a boolean beside it as '1'; CY_LIST_KINDS tells them apart (row 22)."""
+    if not (isinstance(expr, ast.Literal) and isinstance(expr.value, list)):
+        return False
+    return any(isinstance(v, ast.MapLiteral) or (isinstance(v, ast.Literal) and isinstance(v.value, (list, dict)))
+               for v in expr.value)
 
 
 def _is_run_time_list(expr, context) -> bool:
@@ -17925,6 +18041,9 @@ def translate_boolean_expression(expr, context) -> str:
         _folded, _fv = _cy_try_fold(expr)
         if _folded and (_fv is None or isinstance(_fv, bool)):
             return "NULL" if _fv is None else ("(1=1)" if _fv else "(1=0)")
+        _guarded = _kind_guarded_ordering(expr, context)
+        if _guarded is not None:
+            return _guarded
     if isinstance(expr, ast.ExistsExpression):
         result = _boolean_expr_exists(expr, context)
         if result is not None:
@@ -20744,10 +20863,17 @@ def _bool_flag_column(alias) -> str:
     return _safe_alias(f"{alias}__b")
 
 
+def _json_text_column(alias) -> str:
+    """The stage column that carries a run-time list row's JSON text (4.7.0 row 22)."""
+    return _safe_alias(f"{alias}__j")
+
+
 def _register_stage_bool_flags(context, stage) -> None:
     """The flags the WITH just projected are read from `stage` from here on (4.6.0 R286)."""
     pending = getattr(context, "_pending_bool_flags", None) or {}
     context._pending_bool_flags = {}
+    texts = getattr(context, "_pending_json_texts", None) or set()
+    context._pending_json_texts = set()
     if not pending:
         return
     flags = getattr(context, "unwind_bool_flags", None)
@@ -20755,7 +20881,8 @@ def _register_stage_bool_flags(context, stage) -> None:
         flags = context.unwind_bool_flags = {}
     for alias, kind in pending.items():
         if context.variable_aliases.get(alias) == stage:
-            flags[alias] = (stage, f"{stage}.{_bool_flag_column(alias)}", kind)
+            flags[alias] = (stage, f"{stage}.{_bool_flag_column(alias)}", kind) + (
+                (f"{stage}.{_json_text_column(alias)}",) if alias in texts else ())
 
 
 def _unwind_json_text(expr, context) -> Optional[str]:
@@ -29862,13 +29989,17 @@ def translate_return_clause(ret, context):
                 # binds true as 1), as CY_LIST_ELEM marks a list element's JSON; any other row as CY_TYPED reads it
                 # (R286: a row list's element through a WITH holds its boolean as 'true' / 'false', and a string
                 # 'true' with no flag is the string)
-                # 4.7.0 row 21: a run-time list's element as its JSON type (R310's CY_JSON_TYPED), as it read unflagged
-                _other_fn = "CY_JSON_TYPED" if _bool_flag_kind(item.expression, context) == "json" else "CY_TYPED"
-                context.select_items.append(
-                    f"CASE WHEN {_bool_flag} = 1 THEN CHAR(1) || 'J' || "
-                    f"{_flagged_bool_text(sql, _bool_flag_kind(item.expression, context))} "
-                    f"ELSE {_fn(_other_fn)}({sql}) END AS {safe}"
-                )
+                _json_text = _unwind_json_text(item.expression, context)
+                if _json_text is not None:
+                    # 4.7.0 rows 21, 22: a run-time list's row as its own JSON text (CY_LIST_KINDS' "j"): a boolean,
+                    # '', a nested list or map, and a string spelling one, each as itself
+                    context.select_items.append(f"CHAR(1) || 'J' || {_json_text} AS {safe}")
+                else:
+                    context.select_items.append(
+                        f"CASE WHEN {_bool_flag} = 1 THEN CHAR(1) || 'J' || "
+                        f"{_flagged_bool_text(sql, _bool_flag_kind(item.expression, context))} "
+                        f"ELSE {_fn('CY_TYPED')}({sql}) END AS {safe}"
+                    )
                 context.typed_value_aliases.append(safe)
             elif _typed or _arith_col:
                 # R218: read as the type it is stored with, under any driver; GROUP BY below keeps the plain `sql`
@@ -30510,6 +30641,13 @@ def translate_with_clause(with_clause, context):
             if _pending is None:
                 _pending = context._pending_bool_flags = {}
             _pending[alias] = _flag_kind
+            # 4.7.0 row 22: a run-time list's row goes on with its JSON text too, which a collect() after the WITH lists
+            _json_text = _unwind_json_text(item.expression, context) if isinstance(item.expression, ast.Variable) else None
+            if _json_text is not None:
+                context.select_items.append(f"{_json_text} AS {_json_text_column(alias)}")
+                context.__dict__.setdefault("_pending_json_texts", set()).add(alias)
+                if has_agg and not _contains_aggregation(item.expression):
+                    context.group_by_items.append(_json_text)
             if has_agg and not _contains_aggregation(item.expression):
                 # a grouping column's flag groups with it; one of an aggregate (`head(collect(x))`) is the aggregate's
                 context.group_by_items.append(_flag_sql)
