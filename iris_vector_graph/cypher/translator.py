@@ -10304,6 +10304,26 @@ def translate_delete_clause(delete, context, metadata):
         ids = captured[t]
         touching = _graph_scoped(t, f"s IN ({ids}) OR o_id IN ({ids})")
         if delete.detach:
+            # 4.7.0 row 11: an edge's reification goes with it, and its reifier node, as delete_node does (the reifier
+            # nodes of the incident edges, in each graph holding them); the rdf_reifications row was left behind. Read
+            # while the edges are there. Under USE GRAPH the reifier's rows are named `graph_id = ''` first (reify_edge
+            # makes it a default-graph node), which add_dml leaves as it is; the edges are read in the clause's graph.
+            edges_of = f"SELECT edge_id FROM {_table('rdf_edges')} WHERE {touching}"
+            reifier_graph = ""
+            if context.graph_context is not None:
+                g = context.graph_context.replace("'", "''")
+                edges_of = f"SELECT edge_id FROM {_table('rdf_edges')} WHERE ({touching}) AND graph_id = '{g}'"
+                reifier_graph = "graph_id = '' AND "
+            reifiers = f"SELECT reifier_id FROM {_table('rdf_reifications')} WHERE edge_id IN ({edges_of})"
+            for table, col in (("rdf_labels", "s"), ("rdf_props", "s"), ("kg_NodeEmbeddings", "node_id")):
+                context.add_dml(f"DELETE FROM {_table(table)} WHERE {reifier_graph}{col} IN ({reifiers})", [])
+            context.add_dml(
+                f"DELETE FROM {_table('rdf_edges')} WHERE {reifier_graph}(s IN ({reifiers}) OR o_id IN "
+                f"({reifiers})) AND edge_id NOT IN ({edges_of})",
+                [],
+            )
+            context.add_dml(f"DELETE FROM {_table('nodes')} WHERE {reifier_graph}node_id IN ({reifiers})", [])
+            context.add_dml(f"DELETE FROM {_table('rdf_reifications')} WHERE edge_id IN ({edges_of})", [])
             context.add_dml(f"DELETE FROM {_table('rdf_edges')} WHERE {touching}", [])
         else:
             if context.graph_context is not None:
@@ -10335,6 +10355,18 @@ def translate_delete_clause(delete, context, metadata):
         )
     for t in nodes:
         ids = captured[t]
+        # 4.7.0 row 11: a deleted reifier's own link (delete_reification's effect). A reifier is a default-graph node
+        # and rdf_reifications has no graph, so the link goes only with the default graph's node of that id: under
+        # no USE GRAPH, for the rows the MATCH bound in the default graph (`__GRAPHV_<key>__`, each bound row's
+        # graph); else the default graph's node of each id; under another USE GRAPH, none.
+        key = ids[len("__IDS_"):-2]
+        if context.graph_context is None and t in graph_pred:
+            context.add_dml(
+                f"DELETE FROM {_table('rdf_reifications')} WHERE reifier_id IN ({ids}) AND __GRAPHV_{key}__ = ''", []
+            )
+        elif context.graph_context in (None, ""):
+            default_nodes = f"SELECT node_id FROM {_table('nodes')} WHERE graph_id = '' AND node_id IN ({ids})"
+            context.add_dml(f"DELETE FROM {_table('rdf_reifications')} WHERE reifier_id IN ({default_nodes})", [])
         context.add_dml(
             f"DELETE FROM {_table('nodes')} WHERE {_graph_scoped(t, f'node_id IN ({ids})')}", []
         )

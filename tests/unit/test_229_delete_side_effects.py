@@ -70,9 +70,12 @@ class TestNodeDeleteReadsCapturedIds:
 
     def test_detach_delete_removes_edges_by_captured_ids(self):
         stmts = sqls("MATCH (n:X) DETACH DELETE n")
-        i = _first(stmts, r"^DELETE FROM (?:\w+\.)?rdf_edges\b")
+        # 4.7.0 row 11: the reifier nodes of the edges go first, read through rdf_reifications while the edges are
+        # there; these are the node's own edge and label deletes
+        own = [s if "rdf_reifications" not in s else "" for s in stmts]
+        i = _first(own, r"^DELETE FROM (?:\w+\.)?rdf_edges\b")
         assert "__IDS_" in stmts[i]
-        assert i < _first(stmts, r"^DELETE FROM (?:\w+\.)?rdf_labels\b")
+        assert i < _first(own, r"^DELETE FROM (?:\w+\.)?rdf_labels\b")
 
     def test_capture_after_with_stage_keeps_the_cte(self):
         stmts = sqls("MATCH (n:N) WITH n WHERE n.num > 1 DELETE n")

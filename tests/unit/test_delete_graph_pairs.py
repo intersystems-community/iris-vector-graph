@@ -47,7 +47,8 @@ class TestTranslatorGraphLess:
 
     def test_detach_keeps_both_endpoints_inside_the_graph(self):
         stmts = sqls("MATCH (n:Foo) DETACH DELETE n")
-        edge = next(s for s in stmts if s.startswith("DELETE FROM rdf_edges"))
+        # the node's own edges (4.7.0 row 11 deletes its edges' reifier nodes' edges first, through rdf_reifications)
+        edge = next(s for s in stmts if s.startswith("DELETE FROM rdf_edges") and "rdf_reifications" not in s)
         assert edge == (
             "DELETE FROM rdf_edges WHERE (s IN (__IDS_d0__) OR o_id IN (__IDS_d0__)) "
             "AND graph_id = __GRAPH_d0__"
