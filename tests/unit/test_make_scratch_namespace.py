@@ -28,7 +28,7 @@ def msn():
 # ── names ──────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("ns", ["IVG262ALT", "IVG262FX8", "IVG460FXA", "IVG460DC1", "IVG460INV", "IVG460DOC", "IVG463A"])
+@pytest.mark.parametrize("ns", ["IVG262ALT", "IVG262FX8", "IVG460FXA", "IVG460DC1", "IVG460INV", "IVG460DOC", "IVG463A", "IVG470A"])
 def test_creatable(msn, ns):
     assert msn.may_create(ns)
 
@@ -40,7 +40,7 @@ def test_not_creatable(msn, ns):
 
 @pytest.mark.parametrize(
     "ns", ["IVG262ALT", "IVG262UPG", "IVG460INV", "IVG460FX", "IVG460FXA", "IVG460FX15", "IVG460DC", "IVG460DC1",
-           "IVG460DC3", "IVG463A", "IVG463B"],
+           "IVG460DC3", "IVG463A", "IVG463B", "IVG470A", "IVG470RPT"],
 )
 def test_droppable(msn, ns):
     assert msn.may_drop(ns)
