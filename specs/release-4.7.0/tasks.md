@@ -97,8 +97,8 @@ Rows are `~/.cache/ivg-bench/rel-470/ranked.md`'s. Each row has a test task, wri
 
 ## Waiting on Tom
 
-- [ ] T062 [TOM] Row 6 test: with the default Tom picks: a purge leaves no edgeless endpoint it created; a node with other edges or properties stays
-- [ ] T063 [TOM] Row 6 fix: opsreview: a temporal purge keeps the endpoint nodes it leaves bare unless `retire_bare_nodes=True`; waits on Tom's decision about the default
+- [ ] T062 [TOM] Row 6 test (Tom 2026-11-10: on by default): with defaults, a purge leaves no edgeless endpoint it created; a node with other edges or properties stays
+- [ ] T063 [TOM] Row 6 fix: opsreview: a temporal purge keeps the endpoint nodes it leaves bare unless `retire_bare_nodes=True`; the default becomes True (Tom, 2026-11-10), `False` keeps the old behaviour; CHANGELOG says the default changed
 - [ ] T064 [TOM] Row 27 test: outside multigraph mode: a parallel edge or an error, as Tom decides
 - [ ] T065 [TOM] Row 27 fix: `CREATE` of a relationship that already exists writes nothing and says nothing; waits on Tom's decision
 

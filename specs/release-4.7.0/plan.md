@@ -20,7 +20,7 @@ errors. Tom's cut ("both"): rows 1–29 and rows 33–35, 32 of the 55. Rows 30�
 | Silent wrong answers and silent data loss | 8–29 |
 | Loud errors on common queries | 33, 34, 35 |
 
-Waiting on Tom: row 6 (whether a temporal purge retires the endpoints it leaves bare by default) and row 27 (whether
+Row 6: a temporal purge retires the endpoints it leaves bare by default (Tom, 2026-11-10). Waiting on Tom: row 27 (whether
 `CREATE` of an existing relationship adds a parallel one or raises). Row 7 waits on the reporter's rerun on 4.6.5.
 
 ## Rules
