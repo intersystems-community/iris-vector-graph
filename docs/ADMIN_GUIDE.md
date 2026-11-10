@@ -952,7 +952,8 @@ namespace that refuses the engine nothing is probed), the report prints `unknown
 for the graph's size, the acceleration, the sync state, the vector and full-text indexes, the IVF and PLAID indexes and
 the ledger, and lists each failure, with what it asked, under `Probe errors`; `status().unknown` names them
 (`"graph"`, `"acceleration"`, `"sync"`, `"vector_index"`, `"fulltext_index"`, `"ivf_index"`, `"plaid_index"`,
-`"ledger"`). Before 4.6.0 (R050) it printed `0 nodes` and `in sync` there, and `absent` and `not enabled` for an index
+`"ledger"`, and `"routines"`: a user without EXECUTE on IVG's routines cannot tell they are there, and `errors` names
+the ones it could not check; before 4.7.0 they were listed under `missing_routines`). Before 4.6.0 (R050) it printed `0 nodes` and `in sync` there, and `absent` and `not enabled` for an index
 or ledger probe that failed. A routine setup could not create (the server
 refused its `CREATE`) is not fatal: setup logs a warning with the server's error, names it at the end of its INFO
 summary (`1 routine not created: kg_RRF_FUSE (…)`), and the report lists it under `Routines missing`. Running

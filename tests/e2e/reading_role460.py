@@ -28,7 +28,7 @@ DIM = 768
 
 
 def _usable_namespace() -> bool:
-    return NS.upper() == NS and NS.startswith(("IVG460", "IVG262"))
+    return NS.upper() == NS and NS.startswith(("IVG470", "IVG460", "IVG262"))
 
 
 def container_running() -> bool:
@@ -42,7 +42,7 @@ def container_running() -> bool:
 
 requires_namespace = [
     pytest.mark.skipif(not _usable_namespace(),
-                       reason="IVG_NAMESPACE must name an IVG460*/IVG262* scratch namespace set up with Graph_KG"),
+                       reason="IVG_NAMESPACE must name an IVG470*/IVG460*/IVG262* scratch namespace set up with Graph_KG"),
     pytest.mark.skipif(not container_running(), reason=f"{CONTAINER} is not running"),
 ]
 

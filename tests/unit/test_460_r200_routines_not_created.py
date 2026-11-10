@@ -78,7 +78,10 @@ def _routines_present(names):
 
 
 def test_status_lists_a_declared_routine_the_namespace_lacks():
+    # the view does not list it, and the database answers -359 (no such routine) when asked (4.7.0 row 29)
     registry = _routines_present([n for n in _all_names() if n != "KG_RRF_FUSE"])
+    registry.fail_on["SELECT TOP 0 Graph_KG.kg_RRF_FUSE("] = RuntimeError(
+        "[SQLCODE: <-359>:<SQL Function (function stored procedure) not found>]")
     status, _ = _status(registry, native=_native())
     assert status.missing_routines == ["kg_RRF_FUSE"]
     assert "Routines missing: kg_RRF_FUSE" in status.report()
@@ -94,3 +97,14 @@ def test_a_failed_routine_read_is_a_probe_error():
     registry = _Registry(fail_on={"INFORMATION_SCHEMA.ROUTINES": RuntimeError("[SQLCODE: <-99>]")})
     status, _ = _status(registry, native=_native())
     assert any("routine check failed" in e and "-99" in e for e in status.errors), status.errors
+
+
+def test_a_routine_the_caller_may_not_run_is_unchecked_not_missing():
+    """4.7.0 row 29: INFORMATION_SCHEMA.ROUTINES lists only routines the caller may run; a SELECT-only user saw none
+    and status() reported every declared routine missing. Asked, the database answers -99 for those."""
+    registry = _routines_present([n for n in _all_names() if n != "KG_RRF_FUSE"])
+    registry.fail_on["SELECT TOP 0 Graph_KG.kg_RRF_FUSE("] = RuntimeError("[SQLCODE: <-99>:<Privilege violation>]")
+    status, _ = _status(registry, native=_native())
+    assert status.missing_routines == []
+    assert "routines" in status.unknown
+    assert any("could not check 1 routine(s)" in e and "kg_RRF_FUSE" in e for e in status.errors), status.errors
