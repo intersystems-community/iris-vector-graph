@@ -47,7 +47,7 @@ def _cleanup(engine, prefix: str) -> None:
 def engine(iris_connection):
     """Engine with .cls layer deployed."""
     eng = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    eng.initialize_schema(auto_deploy_objectscript=True)
+    eng.initialize_schema(auto_deploy_objectscript=True, rewidth=True)
     return eng
 
 
@@ -377,7 +377,7 @@ def test_bfs_fast_json_1hop_only(iris_connection, chain_graph, engine):
 def test_ppr_fallback_without_cls(iris_connection):
     p = f"{PREFIX}_FALLBACK"
     eng = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    eng.initialize_schema(auto_deploy_objectscript=False)
+    eng.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
     
     _cleanup(eng, p)
     

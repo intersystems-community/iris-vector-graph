@@ -40,8 +40,8 @@ def _projecting(conn, sql_name: str) -> list:
 
 @pytest.fixture(scope="module")
 def upg():
-    if not (NS.startswith(("IVG262", "IVG460FX")) and NS.upper() == NS):
-        pytest.fail(f"refusing {NS}: an IVG262* or IVG460FX* scratch namespace only")
+    if not (NS.startswith(("IVG262", "IVG460FX", "IVG470")) and NS.upper() == NS):
+        pytest.fail(f"refusing {NS}: an IVG262*, IVG460FX* or IVG470* scratch namespace only")
     from build_release_namespace import build
 
     import make_scratch_namespace

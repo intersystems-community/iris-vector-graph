@@ -69,8 +69,8 @@ SOURCES = _sources()
 
 @pytest.fixture(scope="module")
 def ns_guard():
-    if not NS.startswith("IVG460FX"):
-        pytest.fail(f"refusing {NS}: this file recreates its namespace, an IVG460FX* scratch namespace only")
+    if not NS.startswith(("IVG460FX", "IVG470")):
+        pytest.fail(f"refusing {NS}: this file recreates its namespace, an IVG460FX* or IVG470* scratch namespace only")
     yield NS
 
 

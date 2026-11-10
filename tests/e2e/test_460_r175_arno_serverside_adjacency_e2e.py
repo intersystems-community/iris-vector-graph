@@ -25,8 +25,8 @@ CYCLE = ("r175a", "r175b", "r175c")
 
 @pytest.fixture(scope="module")
 def conn():
-    if not NS.startswith(("IVG262", "IVG460FX")):  # the scratch prefixes make_scratch_namespace drops
-        pytest.fail(f"refusing {NS}: an IVG262* or IVG460FX* scratch namespace only")
+    if not NS.startswith(("IVG262", "IVG460FX", "IVG470")):  # the scratch prefixes make_scratch_namespace drops
+        pytest.fail(f"refusing {NS}: an IVG262*, IVG460FX* or IVG470* scratch namespace only")
     from iris_vector_graph import IRISGraphEngine
 
     ns262.recreate(NS)

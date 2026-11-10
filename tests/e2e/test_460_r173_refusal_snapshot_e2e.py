@@ -60,8 +60,8 @@ def _diff(before: dict, after: dict) -> dict:
 
 @pytest.fixture(scope="module")
 def rag():
-    if not NS.startswith("IVG460FX"):
-        pytest.fail(f"refusing {NS}: R173's namespace is an IVG460FX* scratch namespace")
+    if not NS.startswith(("IVG460FX", "IVG470")):
+        pytest.fail(f"refusing {NS}: R173's namespace is an IVG460FX* or IVG470* scratch namespace")
     import make_scratch_namespace
 
     from iris_vector_graph import IRISGraphEngine

@@ -39,8 +39,8 @@ def _registry(conn) -> list:
 def built():
     from build_release_namespace import build
 
-    if not NS.startswith(("IVG460FX", "IVG262")):
-        pytest.fail(f"refusing {NS}: this file rebuilds its namespace, an IVG460FX*/IVG262* scratch namespace only")
+    if not NS.startswith(("IVG460FX", "IVG262", "IVG470")):
+        pytest.fail(f"refusing {NS}: this file rebuilds its namespace, an IVG460FX*/IVG262*/IVG470* scratch namespace only")
     build(RELEASE, NS)
     conn = ns262.connect(NS)
     yield conn

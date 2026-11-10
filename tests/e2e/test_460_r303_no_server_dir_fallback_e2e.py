@@ -47,8 +47,8 @@ def _compiled(conn, names: set) -> set:
 
 @pytest.fixture(scope="module")
 def conn():
-    if not NS.startswith("IVG460FX"):
-        pytest.fail(f"refusing {NS}: R303's namespace is an IVG460FX* scratch namespace")
+    if not NS.startswith(("IVG460FX", "IVG470")):
+        pytest.fail(f"refusing {NS}: R303's namespace is an IVG460FX* or IVG470* scratch namespace")
     ns262.recreate(NS)
     c = ns262.connect(NS)
     yield c
