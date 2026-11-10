@@ -3737,7 +3737,7 @@ def _maybe_split_deep_joins(sql: str, params: list, context) -> str:
     if order_m:
         start = order_m.start()
         ends = [m.start() for m in (offset_m, limit_m) if m and m.start() > start]
-        suffix += sql[start:min(ends) if ends else len(sql)]
+        suffix += sql[start : min(ends, default=len(sql))]
     if offset_m:
         suffix += f"\nOFFSET {offset_m.group(1)} ROWS"  # before the FETCH, as apply_pagination writes it
     if limit_m:

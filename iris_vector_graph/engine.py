@@ -809,9 +809,10 @@ class IRISGraphEngine(
                 except subprocess.TimeoutExpired:
                     self._drop_fetch_first_probe_tables((a, b))
                     raise
-                if "DROPPED" not in (r.stdout or ""):
+                out = r.stdout or ""
+                if "DROPPED" not in out:
                     self._drop_fetch_first_probe_tables((a, b))
-                if "AGG_FF_REFUSED" in (r.stdout or ""):
+                if "AGG_FF_REFUSED" in out:
                     logger.info(
                         "IRIS build refuses an ORDER BY of an aggregate with FETCH FIRST (Community 2026.1); ivg "
                         "will emit TOP for LIMIT queries"
