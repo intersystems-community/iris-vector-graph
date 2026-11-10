@@ -2,6 +2,202 @@
 
 # Changelog
 
+### v4.7.0 (2026-11-11)
+
+**Upgrading: run `initialize_schema()` once per namespace, outside a transaction** (it now refuses one that holds a
+write: `CallerTransactionOpenError`). It deploys the changed `Graph.KG` classes (among them the new
+`Graph.KG.PropWrite`) and replaces or adds the SQL functions `CY_PROPS_MAP`, `Prop_Set`, `CY_LIST_KINDS` and `kg_PPR`
+(a seventh parameter). Until it runs, a namespace keeps 4.6.5's classes and functions: a Cypher `SET` writes as 4.6.x
+did (an equal-text value leaves the string) rather than fail, and `kg_PPR` gets six arguments (the engine reads its
+parameters once and logs that `initialize_schema()` brings it up to date). A namespace first set up at another vector width now needs
+`initialize_schema(rewidth=True)` once (below). Number filters, `properties(n)` and `toBoolean` change for old data
+whatever setup ran: see the list that follows.
+
+**Behaviour changes you will see**
+
+- `create_node` with a label over 128 characters raises `ValueError` (it answered False); `create_node`,
+  `bulk_create_nodes`, `bulk_create_edges` and `BulkLoader` refuse a too-wide label, property key, predicate or node
+  id, and `BulkLoader`, `load_networkx` and `import_rdf` refuse a value over 64,000 characters or a key over 128, where
+  they cut it. `BulkLoader` refuses a missing id, source, predicate or target.
+- `initialize_schema()` raises `EmbeddingIdentityConflict` for an empty vector column at another width, where it
+  re-declared it; `initialize_schema(rewidth=True)` re-declares it. `POST /admin/schema/init` answers `409 Conflict` for
+  it (it was `500`), takes `"rewidth": true`, and `ivg schema init --rewidth` sends it.
+- `purge_raw_before` and `purge_before` default to `retire_bare_nodes=True` in the Python API. ObjectScript callers of
+  `Graph.KG.TemporalIndex.PurgeRawBefore` / `PurgeBefore` keep `pRetireNodes = 0` unless they pass 1.
+- A number filter on a node property matches stored numbers only, and `properties(n)` types each value as `n.p` does,
+  so a number that the Python API stored as text before 4.6.4 is a string to both (retype it with
+  `SET n.p = toFloat(n.p)`).
+- A cosine VecIndex's `score` is the cosine (it was cos − 1): add 1 to a threshold written for the old scale.
+- `toBoolean()` converts only `'true'` and `'false'` (any case); other strings answer null.
+- A clause after a `db.*`, `dbms.*` or `apoc.*` call is applied (a `WITH ... WHERE` of yielded names, a `RETURN` of a
+  subset of them) or raises; it was dropped.
+- The ledger's `enable()` and `redact()` refuse an open transaction (`LedgerTransactionOpenError`) on every engine.
+- `initialize_schema()`, `restore_snapshot`, every `BulkLoader` method, the four migration entries,
+  `remove_legacy_objects(dry_run=False)` and the first vector of a new embedding route refuse a caller's open
+  transaction (`CallerTransactionOpenError`), where they committed it.
+- PageRank and personalized PageRank refuse an alpha or damping outside (0, 1) and an iteration count below 1; a
+  VecIndex refuses a metric it does not compute; `fhir_graph_schedule` / `unschedule` refuse a `task_id` that names
+  another task.
+
+**Fixed: reported by users**
+
+- **GitHub #13 (ArnolfJp): `count(DISTINCT ...)` + `ORDER BY` that count + `LIMIT` on a `from_connect()` engine.** On
+  IRIS Community 2026.1 any ORDER BY of an aggregate with FETCH FIRST, LIMIT or OFFSET fails at Prepare (SQLCODE -400
+  `<UNDEFINED>main+129^%qaqcasl *mt("top")`); the `from_connect()` engine's probe tried only the JOIN shape and emitted
+  FETCH FIRST. It now also tries the aggregate shape and answers with TOP when refused. #13's query answers
+  `[['InterSystems', 2]]` on both engines, on 2026.1 and 2026.3. On a build where FETCH FIRST is safe (2026.3) the same
+  engine wrote `FETCH FIRST n ROWS ONLY OFFSET k`, which IRIS refuses (SQLCODE -25), so every `SKIP ... LIMIT` failed;
+  OFFSET now comes first (TCK skip/limit and order-by with that path forced: 3 failures before, none after).
+- **GitHub #12 (ArnolfJp): `bulk_create_nodes()` stores `id`.** Fixed in 4.6.0 (R089) and checked again: bulk and
+  create answer the issue's six queries alike.
+- **python-devx: loading 10k nodes and 30k edges into a new namespace is no longer quadratic.** The script's load took
+  37.8 to 42.8 s on 4.6.5 against 16.5 to 21.4 s on 4.4.1: the server node loader's per-row checks read every node of
+  the label and every node holding `id`. They read the node's own rows now: 9.8 to 10.4 s (4.4.1: 16.7 to 17.0 s).
+  Loads into a used namespace were and are within noise of 4.4.1 (medians 6.75 s and 6.49 s). The same check, quadratic
+  the same way, in `create_node`, `store_node`, the bulk SQL path and Cypher writes: `UNWIND $rows AS r CREATE
+(:L {k: r})`, 1,000 rows a statement, took 2.3 s for the first statement and 8.4 s for the tenth, and takes 1.1 to
+  2.9 s; `create_node` went from 0.86 s rising to 1.72 s per 500 to about 0.5 s.
+- **python-devx's class: IVG no longer commits a transaction you opened.** Measured on 4.6.5 after `START TRANSACTION`
+  and a row of the caller's: `bulk_load_session` and `embed_nodes` left `$TLEVEL` 0 (they called `conn.commit()`), so
+  the caller's `ROLLBACK` kept everything; so did `embed_edges`, `map_sql_table`, `map_sql_relationship`,
+  `remove_table_mapping`, `attach_embeddings_to_table`, `fhir_bridge_add`, `code_crosswalk_add`,
+  `migrate_fhir_bridges_to_crosswalk`, `register_namespace`, `import_rdf`, `reify_edge`, `delete_reification`,
+  `set_embedding_identity`, `place_quarantined`, `measure_route_recall`'s write and `retract_inference`. Each now joins
+  your transaction: your rollback removes your row and the call's writes, your commit keeps both. Inside it,
+  `bulk_load_session` keeps the indexes in place, tunes nothing, does not retry on a dropped connection, and leaves the
+  adjacency for `sync()` (`stats["in_caller_transaction"]` says which way it ran). The calls that cannot be part of a
+  transaction refuse it, listed above; on 4.6.5 `initialize_schema()` left the caller's row behind its own `ROLLBACK`.
+  What commits is IVG's `conn.commit()`, not DDL: measured, `CREATE TABLE`, `CREATE INDEX`, `DROP INDEX` and
+  `TUNE TABLE` each left `$TLEVEL` at 1, and `ROLLBACK` took them back with the caller's row.
+- **A ledger commit inside your transaction is part of it.** On 4.6.5 an engine on the caller's connection raised
+  `LedgerTransactionOpenError`, and a `from_connect` engine committed on its own Native API connection, so the caller's
+  `ROLLBACK` left the revision row and the node. `ledger.commit` now runs nested in the caller's transaction: a rollback
+  leaves no revision, no head move and no graph change, and leaves no gap in `seq`; a commit keeps them, and
+  `ledger.verify()` answers equal. The head stays locked until the caller's transaction ends (another connection's
+  commit raised `LedgerLockTimeoutError` after 30 s, then committed in 0.01 s once the caller rolled back).
+- **opsreview: a temporal purge retires the endpoint nodes it leaves bare, by default (Python API).** With the defaults
+  on 4.6.5 a purge of 5 edges left their 4 bare endpoints (`nodes_retired` 0); now all 4 go, and a node with another
+  edge, a label or a property stays. opsreview reported the growth (941 nodes to 7.2 million); they purge from
+  ObjectScript, whose three-argument `PurgeRawBefore(graph, tsEnd, tsStart)` still keeps the nodes and answers
+  `deleted:skipped`, and they sweep orphans themselves. `retire_bare_nodes=False` keeps every endpoint. The store now
+  always sends the option, so the Python default does not depend on the class's.
+- **python-devx: `IVG.CypherEngine` and `IVG.Percentile` compile on 2026.1** (checked, not a defect: setup's check
+  listed `Graph.KG.` classes only; on Community 2026.1 only the three `%AI` MCP classes are skipped).
+- **Mindwalk: a variable-length `RETURN DISTINCT b.id AS dst LIMIT 25` from a 305-edge node** was not reproduced (25
+  rows under `dst`, 405 of 405 without the LIMIT); no change.
+
+**Fixed: silent wrong answers and data loss**
+
+- **A number filter on a node property matches numbers only.** With 0.95 on one node and the strings `'.95'` and
+  `'0.95'` on others, `WHERE n.p = 0.95` matched all three, `<> 0.95` none, and `<=` / `>=` the strings too. A node row
+  keeps the number's type, and the filter now reads it: `=` finds the number, `<>` the strings, and `<`, `<=`, `>`, `>=`
+  never match a string, under `NOT` too, on the native and SQL routes, for `= $v`, the inline `{p: 0.95}`, a whole
+  number (`= 7` and `= 7.0` find 7, not `'7'`) and a variable-length path's `WHERE s.id = 5`. This retires 4.6.0's rule
+  of matching every spelling of the number (R121, R168) for nodes. Relationship filters are unchanged: a Cypher-written
+  relationship number is stored as JSON text ([Known issues](docs/KNOWN_ISSUES.md)). TCK comparison, match-where,
+  with-where, return-orderby, with-orderBy, literals, typeConversion and merge: 705 of 705 before and after.
+- **`properties(n)` types each value as `n.p` does.** For `{"s": "30", "i": 30, "f": 0.5, "b": True}` `RETURN n.s`
+  answered `'30'` and `properties(n)` `{'s': 30, ...}`; the map now answers `'30'`. A number 4.6.3 or earlier stored
+  through the API is text, and the map answers that text where it answered the number. `properties(r)` is unchanged.
+- **A Cypher `SET` writes the value it is given.** `SET n.p = toInteger(n.p)` (and `toFloat`, `toString`, `toBoolean`,
+  and functions of the node such as `toUpper(n.s)`, `substring`, `size`, `coalesce`, `CASE`, `labels(n)`, `n.l[1]`)
+  failed with GraphWriteError (SQLCODE -23) and wrote nothing; `SET n.p = n.i ^ 2` failed with SQLCODE -1. Over a
+  stored `'30'`, `SET n.p = 30`, `= $v`, `+= {p: 30}` and `MERGE ... ON MATCH SET` left the string (IRIS writes no value
+  whose text equals the stored one). Every Cypher UPDATE of a node property now goes through `Graph_KG.Prop_Set`
+  (`Graph.KG.PropWrite`), one write in the caller's transaction under the row's lock; `SET n.p = 1` on 2,000 nodes took
+  0.945 s before and 0.866 s after. A SET whose value is null removes the property (`n.missing + 1` left an empty
+  value), and a SET value IVG cannot translate raises where it stored null.
+- **`toBoolean()` follows openCypher.** `'yes'`, `'y'` and `'1'` answered true and `'no'`, `'n'`, `'0'` false; only
+  `'true'` and `'false'` convert, in any case, and `RETURN toBoolean($s)` (which failed "Incorrect number of
+  parameters") answers.
+- **Personalized PageRank.** `CALL ivg.ppr(['a'], 2.0, 5)` answered b 22.0 and a -21.0: every route took any alpha and
+  maxIter, and global PageRank any damping. Now `ivg.ppr`, `kg_PERSONALIZED_PAGERANK`, `ppr()`, `kg_PPR`,
+  `kg_PPR_GUIDED_SUBGRAPH`, the seeded `kg_PAGERANK`, `fhir_concept_ppr`, `kg_PAGERANK()`, `gds.pageRank.stream` and
+  the ObjectScript entries raise naming the parameter; alpha 0.5 still answers 0.6154. The answer holds every node of
+  the graph, 0.0 for one the walk never reaches (on `a -> b` plus a loner `c`: a 0.540541, b 0.459459, c 0.0, as
+  networkx), and a seed that is no node of the graph scores nothing (`['zz']` answered `zz` 1.0; `['a', 'zz']` split
+  the restart, a 0.3509 for 0.5405).
+- **A cosine VecIndex's `score` is the cosine.** Querying `[1, 0]`, an identical vector scored 0.0, an orthogonal one
+  -1.0 and an opposite one -2.0; they score 1.0, 0.0 and -1.0 now, on brute force and tree search. `distance` and the
+  order are unchanged. A VecIndex refuses a metric it does not compute (`mahalanobis` was measured as cosine).
+- **Leiden's `topK` counts rows.** On three cliques of 4, 3 and 2 nodes `leiden_communities(top_k=1)` answered 4 rows
+  and `top_k=5` 7; they answer 1 and 5, each row's `size` still the whole community's.
+- **A clause after a `db.*`, `dbms.*` or `apoc.*` call is applied or refused.** `CALL db.labels() YIELD label WITH label
+WHERE label = 'A' RETURN label` answered every label; it answers the filtered one, and a clause IVG cannot apply there
+  raises naming it.
+- **Temporal values.** A named zone's offset comes from the `tzdata` wheel first, so Stockholm 1818 is `+00:53:28` on
+  Debian and macOS alike (it was `+01:12:12` on Debian), and it is the offset at the value's own wall time
+  (`2015-03-29T12:00[Europe/Berlin]` answered `+01:00`; it is `+02:00`); `datetime({..., timezone: ...})` prints the
+  offset's seconds, and `datetime.truncate()` / `time.truncate()` of a zoned string keep the zone. A date read by
+  position from a `collect()`ed list, or an UNWIND row of another kind, compares as the value: `l[0] < l[1]` of a date
+  and a string answered true and answers null, as openCypher does (the crosstype oracle's cases for both shapes).
+- **Lists and paths.** A relationship list a `WITH` collected answers the relationships (`['R', 'R']` before), and so
+  does an element of it (`rs[0]` was the type); `nodes(p)` and `relationships(p)` of a fixed-length path answer the
+  nodes and relationships (they answered ids and types), and so do their `reverse()` and `tail()`; `reverse()` of a
+  path's list reversed its JSON text character by character (`']"R"['`). An unwound boolean or `''` of a list built
+  while the query runs reads as itself (`1`, `0`, null before), and an UNWIND reads a nested list, map or boolean as
+  itself (`['[1]', 'a', true]` was answered for `[[1], 'a', true]`), including from `UNWIND $p` over mixed values.
+- **SET of an UNWIND variable writes each row's value**, and the batch idiom `UNWIND $rows AS r MATCH (n {id: r.id})
+SET n += r` works (both raised); `MERGE ... ON MATCH SET` after an UNWIND wrote nothing silently and writes.
+- **Writers that dropped rows or values without a word.** `bulk_create_nodes` returned every id with a too-wide label
+  missing, and `create_node(id, labels=["A", long])` answered True with only `A` (the driver skips a refused row of a
+  batch); widths are checked first and a shortfall of rows raises `GraphWriteError`. `BulkLoader` and `load_networkx`
+  cut values to 60,000 characters (`rdf_props.val` holds 64,000) and `import_rdf` cut literals to 64,000 and keys to
+  128; they store a value whole and refuse one the column cannot hold. `BulkLoader.build_graph_globals` sent the `Graph.KG.Traversal.BuildKG()` call as SQL (SQLCODE -51) and answered False, so `^KG` was never rebuilt; it rebuilds `^KG`, `^NKG`
+  and the two-hop counts. `attach_embeddings_to_table` dropped rows without a node; it reports `no_node`,
+  `no_node_ids`, `errors` and `error_ids`. `bulk_create_nodes` wrote `id` into the caller's own properties dict. A
+  migration step whose commit failed was logged at DEBUG and the upgrade went on; it rolls back and raises.
+- **The adjacency index.** A plain index named `idx_edges_adj` was taken for the adjacency index, so every writer left
+  `^KG` to it and new edges were missing from `^KG`; `initialize_schema()` replaces it, and `status().adjacency.index`
+  reads `functional`, `plain`, `absent` or `unknown`. An edge write whose shared lock was not granted in 5 s left the row
+  written and `^KG` without the edge (`create_edge` answered True); it writes `^KG` without the lock, keeps the degree
+  cache off for that graph until `sync()`, and `status().adjacency.degree_cache_off` names it.
+- **`DETACH DELETE` takes an edge's reification and its reifier node with it** (the `rdf_reifications` row stayed).
+- **Snapshots.** A snapshot left out `fhir_graphs`, `code_crosswalk`, `rdf_namespaces`, `table_mappings`,
+  `relationship_mappings` and `fhir_bridges`, so a restore elsewhere left a FHIR graph unregistered, its crosswalk empty
+  and the SQL mappings gone; over the same namespace the registration kept watermarks reset to 0 (4242 came back 0).
+  They are archived now and restored on their primary keys (a replacing restore writes the archive's row, a merge keeps
+  the one there). After a restore into another instance `fhir_graphs.task_id` named that instance's Task Manager task,
+  and `fhir_graph_schedule` rewrote, and `fhir_graph_unschedule` deleted, whichever task had that ID; both now check
+  the task is the graph's and raise `FHIRGraphError` otherwise.
+- **Vector width.** Two processes setting up one namespace at different widths both succeeded: setup at 768 then 384
+  re-declared the empty vector columns at 384 with no warning, and the first process's writes failed. The second now
+  raises `EmbeddingIdentityConflict` before writing anything, naming both widths and both ways through (an engine at
+  the column's width, or `initialize_schema(rewidth=True)` once, the usual case being a namespace first set up at the
+  CLI's and server's default 768). A column holding vectors is never re-declared.
+
+**Fixed: loud errors**
+
+- `RETURN exists(n.name)` (and in a WITH, under NOT, of a relationship's or a map's key) failed with SQLCODE -12; it
+  answers true or false.
+- `CALL ... YIELD ... WHERE` raised CypherParseError for every procedure; the WHERE filters the yielded rows, in SQL
+  for the translator's procedures and with three-valued logic for the engine's handlers.
+- `status()` as a user without EXECUTE on IVG's routines reported all 58 routines missing; it names the ones it may
+  not run in `errors` and adds `routines` to `status().unknown`.
+
+**Speed**
+
+- Number equality on a node property reads the `(key, val_key)` index, where it read every row of the key. On 50,000
+  nodes, median of 7 in three interleaved pairs: a labelled `n.p = 0.95` 14.2 to 14.7 ms before, 1.4 to 1.6 ms after;
+  the inline `{p: 0.95}` without a label 14.0 to 14.3 ms and 1.1 to 1.5 ms; `{q: 777}` 10.7 to 11.4 ms and 0.9 to 1.1
+  ms. A range filter (`n.p < 0.002`) keeps its plan: 11.4 to 12.3 ms and 11.6 to 11.7 ms.
+- `CALL ivg.ppr(...) YIELD node, score RETURN ... ORDER BY score DESC LIMIT 20` reads only the rows it returns
+  (`kg_PPR`'s new `rowLimit`): 159.4 ms to 6.6 ms on 100,000 nodes, a walk reaching 21. Answering every node costs the
+  plain call: 5.4 ms for 21 rows before, 146 ms for 1,000 now (136 ms of it `JSON_TABLE`).
+- The quadratic first loads into a new namespace (python-devx, above).
+
+**Added**
+
+- `initialize_schema(rewidth=True)`; `"rewidth": true` on `POST /admin/schema/init` and `ivg schema init --rewidth`.
+- `CallerTransactionOpenError`, exported from `iris_vector_graph`: an `IVGError` and a `RuntimeError`, with
+  `operation` and `level`.
+- `status().adjacency.index` and `status().adjacency.degree_cache_off`.
+- `attach_embeddings_to_table`'s `no_node`, `no_node_ids`, `errors` and `error_ids`.
+- `Graph.KG.PropWrite` and `Graph_KG.Prop_Set`; `CY_LIST_KINDS`; `kg_PPR`'s seventh parameter, `rowLimit`.
+- `tzdata` (2025.2 or later) is a dependency.
+
+<!-- opened / closed: the count from the lead goes here -->
+
 ### v4.6.5 (2026-11-09)
 
 **Fixed: Cypher writes**
@@ -154,8 +350,7 @@ maxIter), not an options map`), and `ivg.shortestPath.weighted` raises without `
   which inside a transaction costs a journaled statement rollback (200 duplicates: 121 ms, now 84 ms).
 - **Known, not fixed here:** the driver's `executemany` skips a row IRIS refuses (SQLCODE -104 for a label longer
   than 128 characters) without raising, so `create_node`, `bulk_create_nodes` and the other batch writers answer
-  success without that row. What each writer does, one label or several, is in
-  [Known issues](docs/KNOWN_ISSUES.md#a-label-longer-than-128-characters-is-refused-and-the-python-writers-answer-it-differently).
+  success without that row. Fixed in 4.7.0: the writers check widths first and raise for a row IRIS refuses.
 
 ### v4.6.3 (2026-11-08)
 
