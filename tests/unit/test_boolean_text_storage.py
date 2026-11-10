@@ -91,9 +91,13 @@ class TestCypherWritersEmitText:
         assert "true" in vals and not any(isinstance(v, bool) for v in vals)
 
     def test_computed_boolean_set_stored_as_text(self):
+        """From 4.7.0 (row 35b) the comparison is read per node ahead of the writes (`__capture_pairs__`), as the text
+        'true' / 'false', and each write sets that pair; before, the UPDATE named the MATCH's alias (SQLCODE -23)."""
         t = tr("MATCH (n:M) SET n.c = (n.a = 1)")
+        cap = [s for s in _stmts(t) if s.startswith("__capture_pairs__")]
+        assert len(cap) == 1 and "'true'" in cap[0] and "'false'" in cap[0], cap
         upd = [s for s in _stmts(t) if "rdf_props" in s and ("UPDATE" in s or "INSERT" in s)]
-        assert upd and all("'true'" in s and "'false'" in s for s in upd), upd
+        assert upd and all("__PAIR_" in s for s in upd), upd
 
     def test_edge_qualifier_bool_is_text(self):
         t = tr("CREATE ()-[:R {b: true, c: false}]->()")

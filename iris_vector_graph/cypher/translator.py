@@ -11751,6 +11751,85 @@ def _is_with_value(name: str, context) -> bool:
     )
 
 
+#: functions whose openCypher value is a float, whatever the SQL type IRIS gives it (SQRT(4) is the number 2)
+_FLOAT_RESULT_FUNCS = frozenset({
+    "sqrt", "exp", "log", "log10", "sin", "cos", "tan", "cot", "asin", "acos", "atan", "atan2", "degrees", "radians",
+    "haversin", "pi", "e", "rand", "round", "ceil", "floor",
+})
+
+
+def _captured_value_sql(e, value_sql: str, context) -> str:
+    """A captured SET value's SQL, marked so the pair reads back as RETURN reads the value (`_set_value_capture_key`):
+    a boolean as the text 'true' / 'false' a Cypher SET stores (exists(n.q) was 1), a float as a $DOUBLE (sqrt(n.i)
+    was the integer 2), a known integer as one, a list element as CY_LIST_ELEM's own JSON mark (head(n.l) was the
+    string '7'), anything else through CY_TYPED, which marks a stored number's type."""
+    if _is_bool_valued(e, context):
+        return f"CASE WHEN ({value_sql}) = 1 THEN 'true' WHEN ({value_sql}) = 0 THEN 'false' END"
+    fn = e.function_name.lower() if isinstance(e, ast.FunctionCall) else ""
+    static = _numeric_static_type(e, context)
+    if fn in _FLOAT_RESULT_FUNCS or fn in _FLOAT_VALUED_FUNCS or static == "float":
+        return f"{_fn('CY_TYPED')}(CAST(({value_sql}) AS DOUBLE))"
+    if static == "int":
+        # an integer the SQL computes as a DOUBLE (abs(n.i - 10) was 6.0), cast as a RETURN column of it is
+        return f"{_fn('CY_TYPED')}(CAST(({value_sql}) AS BIGINT))"
+    if value_sql.startswith(f"{_typed_list_elem_udf(context)}("):
+        return value_sql
+    return f"{_fn('CY_TYPED')}({value_sql})"
+
+
+def _set_value_capture_key(context, target, e) -> str:
+    """The `__capture_pairs__` key pairing each node `target` writes with the value of `e` on its own MATCH row
+    (4.7.0 row 35b): `SET n.p = toUpper(n.q)`, `SET n.p = labels(n)` and the rest of what the UPDATE of rdf_props
+    cannot compute itself, read once ahead of the writes, as `WITH n, toUpper(n.q) AS v SET n.p = v` reads its value.
+    Before, the UPDATE named the MATCH's alias (n0) or a property join it does not have: SQLCODE -23, nothing written.
+
+    A value whose SQL needs a parameter, or that reads a relationship, raises a SyntaxError naming the WITH form rather
+    than guess at the binding."""
+    var, alias = target
+    saved = (list(context.join_clauses), list(context.join_params), list(context.select_params))
+    # head() / last() / l[i] as the value itself: the element typed as a RETURN column of it reads it (CY_LIST_ELEM's
+    # JSON mark; JSON_ARRAYGET answers the element's text, so head(n.l) stored the string '7')
+    elem_before = (getattr(context, "_typed_list_elem", None), getattr(context, "_typed_list_elem_args", None))
+    context._typed_list_elem = e
+    try:
+        value_sql = translate_expression(e, context, segment="select")
+        if "?" in value_sql or len(context.select_params) != len(saved[2]):
+            raise SyntaxError(
+                f"SET {var}.<key> = <value>: this value takes a parameter IVG cannot bind inside the write; compute it "
+                f"in a WITH first (`WITH {var}, <value> AS v SET {var}.<key> = v`)"
+            )
+        value_sql = _captured_value_sql(e, value_sql, context)
+        # the value's own reads (its property and label sub-SELECTs) in the row's graph, as a RETURN's select items
+        # are scoped: build_dml_subquery scopes the context's lists, not the select it is given
+        row_graphs = _carries_row_graphs(context)  # False under USE GRAPH
+        if context.graph_context is not None:
+            value_sql = _graph_scope_fragment(value_sql, context.graph_context.replace("'", "''"))
+        elif row_graphs:
+            kept = (list(context.join_clauses), list(context.where_conditions), list(context.select_items))
+            try:
+                value_sql = _correlate_graphs_in_reads(context, [value_sql])[0]
+            finally:
+                context.join_clauses, context.where_conditions, context.select_items = kept
+        first = getattr(context, "node_id_expr", {}).get(alias, f"{alias}.node_id")
+        graph = None
+        if row_graphs:
+            m = re.fullmatch(r"(\w+)\.node_id", first)
+            graph = f"{m.group(1)}.graph_id" if m else None
+        select = f"SELECT {first}, {value_sql}" + (f", {graph}" if graph else "")
+        cte, subquery, subparams = context.build_dml_subquery(select_override=select)
+    finally:
+        context.join_clauses, context.join_params, context.select_params = saved
+        context._typed_list_elem, context._typed_list_elem_args = elem_before
+    key = _capture_key(context, cte, subquery, subparams, prefix="v", sentinel="__capture_pairs__")
+    if graph:
+        _add_graph_capture(context, key)
+    used = getattr(context, "_set_pair_key_used", None)
+    if used is not None and used != key:
+        raise SyntaxError(f"SET {var}.<key> = <value>: the value reads properties of more than one other variable")
+    context._set_pair_key_used = key
+    return key
+
+
 def _set_pair_key(context, target, other: str, target_id=None, other_edge=False, value=False) -> str:
     """The `__capture_pairs__` key pairing each node `target` (`(var, alias)`) writes with the row's `other` node.
 
@@ -12048,6 +12127,10 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
                         f"END"
                     )
                     return concat_sql, left_params + right_params
+            target = getattr(context, "_set_target", None)
+            if op == "^" and target is not None and target[1]:
+                # IRIS SQL has no ^ (SQLCODE -1); RETURN's POWER, read per row (4.7.0 row 35b)
+                return f"__PAIR_{_set_value_capture_key(context, target, e)}__[{_SET_ROW}]", []
             if op in ("-", "*", "/", "%"):
                 _raise_if_not_numbers(e, op, context)
             left_sql, left_params = _translate_expr_for_update(e.arguments[0], node_var)
@@ -12091,6 +12174,11 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             convert, store = conversion
             return store(convert(arg_sql)), arg_params * convert("\0").count("\0")
 
+        target = getattr(context, "_set_target", None)
+        if target is not None and target[1]:
+            # a node's value the UPDATE cannot compute (a function, CASE, reduce, labels(n), ...): each node's own row's
+            # value, read ahead of the writes (4.7.0 row 35b; the regular translation below named the MATCH's alias)
+            return f"__PAIR_{_set_value_capture_key(context, target, e)}__[{_SET_ROW}]", []
         # Fallback: try regular translation (for string concatenation etc.). An error raises: it was caught and the
         # value stored as NULL, which removed or nulled the property and answered success (4.7.0 row 35b).
         sql = translate_expression(e, context, segment="select")
@@ -12099,8 +12187,9 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
     # Determine the node variable from the expression's context
     node_var = ""
     sql, params = _translate_expr_for_update(expr, node_var)
-    if isinstance(expr, (ast.BooleanExpression, ast.ListPredicateExpression, ast.ExistsExpression)):
-        # A computed boolean is 1 / 0 in SQL; store it as 'true' / 'false' text.
+    is_boolean = isinstance(expr, (ast.BooleanExpression, ast.ListPredicateExpression, ast.ExistsExpression))
+    if is_boolean and not sql.startswith("__PAIR_"):
+        # A computed boolean is 1 / 0 in SQL; store it as 'true' / 'false' text (a captured value is already that).
         sql = f"CASE WHEN ({sql}) = 1 THEN 'true' WHEN ({sql}) = 0 THEN 'false' END"
         params = params + params
     return (sql, params, True)
