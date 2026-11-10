@@ -120,6 +120,14 @@ def test_a_namespace_the_caller_named_is_left_alone():
                                                                "IVG460FXGAB12X"}
 
 
+@pytest.mark.parametrize("ns", ["IVG463A", "IVG470TXN"])
+def test_a_scratch_namespace_of_the_later_releases_is_left_alone(ns):
+    """4.7.0: SCRATCH_PREFIXES knew only IVG460/IVG262, so a run with IVG_NAMESPACE=IVG470* (make_scratch_namespace's
+    4.7.0 prefix) or IVG463* had its modules sent to a namespace the gate made, under another name than the run's."""
+    plan = _plan(env={"IVG_NAMESPACE": ns})
+    assert "IVG_NAMESPACE" not in plan.env_for({"primary"})
+
+
 def test_a_session_namespace_that_is_not_a_scratch_one_still_gets_the_gated_modules_a_scratch_one():
     plan = _plan(env={"IVG_NAMESPACE": "IVGFIX"})
     assert plan.env_for({"primary"}) == {"IVG_NAMESPACE": "IVG460FXGAB12P"}

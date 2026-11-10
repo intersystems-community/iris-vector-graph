@@ -23,7 +23,7 @@
                namespace themselves, and the name is this run's, so two runs never share one (R191)
 
     Names are `IVG460FXG<run id><suffix>`, upper case, which `make_scratch_namespace.may_drop` accepts. A variable the
-    caller set is left alone (IVG_NAMESPACE when it already names an IVG460*/IVG262* namespace), and its namespace is
+    caller set is left alone (IVG_NAMESPACE when it already names an IVG470*/IVG463*/IVG460*/IVG262* namespace), and its namespace is
     neither made nor dropped. `IVG_GATE_NAMESPACES=0` turns this off (and with `SKIP_IRIS_TESTS=true`, or with the test
     container not running, there is nothing to make it on); `IVG_GATE_KEEP_NAMESPACES=1` leaves this run's namespaces
     in place at the end. Container and port: IVG_TEST_CONTAINER and IVG_PORT, as make_scratch_namespace reads them.
@@ -55,7 +55,7 @@ REPO = Path(__file__).resolve().parents[2]
 _HELPER_GROUP = {"ns460alt": "rag", "reading_role460": "primary", "ns463": "primary"}
 #: Modules under tests/e2e that read IVG_NAMESPACE at import into `NS`; patched to the module's namespace.
 HELPERS = tuple(f"tests.e2e.{stem}" for stem in _HELPER_GROUP)
-SCRATCH_PREFIXES = ("IVG460", "IVG262")
+SCRATCH_PREFIXES = ("IVG470", "IVG463", "IVG460", "IVG262")
 NAME_PREFIX = "IVG460FXG"
 
 
