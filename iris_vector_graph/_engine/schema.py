@@ -2452,6 +2452,8 @@ class SchemaMixin:
         # ensure_indexes may just have created the rdf_props value-key column and index (spec: lookup by value).
         self._props_value_key_cached = None
         self._adjacency_indexed_cached = None
+        # setup has just re-created kg_PPR, with rowLimit (4.7.0)
+        self._kg_ppr_row_limit_cached = None
         # Update the engine flag after migration — ensure_indexes runs
         # add_graph_id_to_nodes which adds the column if absent.
         self._nodes_has_graph_id = self._probe_nodes_graph_id()

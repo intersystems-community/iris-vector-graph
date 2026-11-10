@@ -3038,6 +3038,24 @@ def _translate_neighbors(proc: ast.CypherProcedureCall, context: TranslationCont
         context.variable_aliases[item] = "Neighbors"
 
 
+_warned_kg_ppr_row_limit = False
+
+
+def _kg_ppr_takes_row_limit(engine) -> bool:
+    """Whether ``engine``'s namespace has 4.7.0's kg_PPR, with ``rowLimit``; True without an engine (the SQL is then
+    this release's). An older one is said once per process, naming the remedy."""
+    global _warned_kg_ppr_row_limit
+    if engine is None or getattr(engine, "_kg_ppr_row_limit", True) is True:
+        return True
+    if not _warned_kg_ppr_row_limit:
+        _warned_kg_ppr_row_limit = True
+        logger.warning(
+            "This namespace's kg_PPR predates 4.7.0 (no rowLimit): CALL ivg.ppr ... LIMIT k reads its 1000 rows, and "
+            "its answer is the older release's. Run initialize_schema() to bring the functions and classes up to date."
+        )
+    return False
+
+
 def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
     """CALL ivg.ppr($seeds, 0.85, 20) YIELD node, score
 
@@ -3067,8 +3085,11 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
 
     seed_json = json.dumps(seeds)
     ppr_fn = _fn("kg_PPR")
-    # the rows the query reads of the answer, when a LIMIT after the CALL says (4.7.0 row 9; _ppr_row_limit)
+    # the rows the query reads of the answer, when a LIMIT after the CALL says (4.7.0 row 9; _ppr_row_limit), and the
+    # namespace's kg_PPR takes them: one set up before 4.7.0 has six parameters, and a seventh fails the query
     row_limit = getattr(context, "ppr_row_limit", None)
+    if row_limit is not None and not _kg_ppr_takes_row_limit(getattr(context, "_engine", None)):
+        row_limit = None
     limit_arg = "" if row_limit is None else f", {int(row_limit)}"
 
     # Inline, for the reason given in `_translate_bm25_search`: a `?` inside

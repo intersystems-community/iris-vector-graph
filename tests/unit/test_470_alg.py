@@ -272,3 +272,47 @@ def test_vec_create_index_refuses_an_unknown_metric(metric):
 
     with pytest.raises(ValueError, match=r"^vec_create_index: metric must be one of cosine, l2, l1, dot, chebyshev"):
         VectorMixin.vec_create_index(_NoDatabase(), "idx", 2, metric=metric)
+
+
+# ------------------------------------------------------------------- row 9: a kg_PPR older than 4.7.0's rowLimit
+
+
+class _Engine:
+    """What the translator asks an engine about kg_PPR: whether the namespace's function takes rowLimit."""
+
+    def __init__(self, takes):
+        self._kg_ppr_row_limit = takes
+
+
+def _limit_with(engine, query):
+    import re
+
+    sql = translate_to_sql(parse_query(query), {}, engine=engine).sql
+    sql = sql if isinstance(sql, str) else "\n".join(sql)
+    return re.search(r"kg_PPR\(([^)]*)\)", sql).group(1).split(", ")[6:]
+
+
+LIMITED = CALL + "RETURN node, score ORDER BY score DESC LIMIT 5"
+
+
+def test_a_namespace_whose_kg_ppr_takes_rowlimit_gets_it():
+    assert _limit_with(_Engine(True), LIMITED) == ["5"]
+
+
+def test_a_namespace_set_up_before_4_7_gets_six_arguments(caplog):
+    """Its kg_PPR has six parameters, and a seventh is <PARAMETER>: the call reads the 1000 rows, and says once
+    that initialize_schema() brings the function up to date."""
+    import logging
+
+    from iris_vector_graph.cypher import translator
+
+    translator._warned_kg_ppr_row_limit = False
+    with caplog.at_level(logging.WARNING):
+        assert _limit_with(_Engine(False), LIMITED) == []
+        assert _limit_with(_Engine(False), LIMITED) == []
+    said = [r.getMessage() for r in caplog.records if "kg_PPR" in r.getMessage()]
+    assert len(said) == 1 and "initialize_schema()" in said[0], said
+
+
+def test_no_engine_translates_for_this_release():
+    assert _limit_with(None, LIMITED) == ["5"]

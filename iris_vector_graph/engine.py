@@ -355,6 +355,7 @@ class IRISGraphEngine(
         self._in_bulk_load: bool = False
         self._fetch_first_unsafe_cached: Optional[bool] = None  # build-106 %qaqpre probe (lazy)
         self._props_value_key_cached: Optional[bool] = None  # rdf_props value-key column + index (lazy)
+        self._kg_ppr_row_limit_cached: Optional[bool] = None  # kg_PPR takes 4.7.0's rowLimit (lazy)
         self._adjacency_indexed_cached: Optional[bool] = None  # spec 252 adjacency functional index declared (lazy)
         self._native_conn = (
             None  # dedicated connection for iris.createIRIS — never used for cursor DDL
@@ -636,6 +637,33 @@ class IRISGraphEngine(
             return False
         finally:
             cursor.close()
+
+    @property
+    def _kg_ppr_row_limit(self) -> bool:
+        """True when the namespace's ``kg_PPR`` takes 4.7.0's seventh parameter, ``rowLimit``.
+
+        A namespace set up by an earlier release and not set up again since (nothing makes a caller run
+        ``initialize_schema()`` after an upgrade) has the six-parameter function, which a seventh argument fails with
+        ``<PARAMETER>`` (SQLCODE -149): the translator then sends six and the query reads the 1000 rows. Read once per
+        engine from INFORMATION_SCHEMA.PARAMETERS (about 20 ms); ``initialize_schema`` resets it. A read that fails
+        answers False, the six arguments every release's function takes, and says why.
+        """
+        if self._kg_ppr_row_limit_cached is None:
+            cur = self.conn.cursor()
+            try:
+                cur.execute(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARAMETERS "
+                    "WHERE SPECIFIC_SCHEMA = ? AND SPECIFIC_NAME = 'kg_PPR' AND PARAMETER_NAME = 'rowLimit'",
+                    [self._ivg_schema],
+                )
+                row = cur.fetchone()
+                self._kg_ppr_row_limit_cached = bool(row and int(row[0]))
+            except Exception as exc:  # noqa: BLE001 - said; six arguments are what every kg_PPR takes
+                logger.warning("kg_PPR's parameters could not be read (%s); CALL ivg.ppr sends it six arguments", exc)
+                self._kg_ppr_row_limit_cached = False
+            finally:
+                cur.close()
+        return self._kg_ppr_row_limit_cached is True
 
     @property
     def _props_value_key(self) -> bool:
