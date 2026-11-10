@@ -17,6 +17,11 @@ import subprocess
 
 import pytest
 
+from tests.e2e.gate import SCRATCH_PREFIXES
+
+#: "IVG470*/IVG463*/IVG460*/IVG262*", for the skip reason
+_PREFIXES_TEXT = "/".join(p + "*" for p in SCRATCH_PREFIXES)
+
 PORT = int(os.environ.get("IVG_PORT", "31972"))
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 NS = os.environ.get("IVG_NAMESPACE", "")
@@ -28,7 +33,8 @@ DIM = 768
 
 
 def _usable_namespace() -> bool:
-    return NS.upper() == NS and NS.startswith(("IVG470", "IVG460", "IVG262"))
+    # the gate's own list (4.7.0: IVG470*/IVG463* namespaces skipped here while the gate honoured them)
+    return bool(NS) and NS.upper() == NS and NS.startswith(SCRATCH_PREFIXES)
 
 
 def container_running() -> bool:
@@ -42,7 +48,7 @@ def container_running() -> bool:
 
 requires_namespace = [
     pytest.mark.skipif(not _usable_namespace(),
-                       reason="IVG_NAMESPACE must name an IVG470*/IVG460*/IVG262* scratch namespace set up with Graph_KG"),
+                       reason=f"IVG_NAMESPACE must name an {_PREFIXES_TEXT} scratch namespace set up with Graph_KG"),
     pytest.mark.skipif(not container_running(), reason=f"{CONTAINER} is not running"),
 ]
 
