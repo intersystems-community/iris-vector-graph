@@ -309,8 +309,10 @@ def test_setup_and_its_dry_run_report_both(monkeypatch):
     monkeypatch.setattr("iris_vector_graph.schema_name.refuse_package_clash", lambda conn, schema: None)
     monkeypatch.setattr("iris_vector_graph.schema_name.native_namespace", lambda native: "NS")
     monkeypatch.setattr(IRISGraphEngine, "_iris_obj", lambda self: object(), raising=False)
-    monkeypatch.setattr(IRISGraphEngine, "_plan_vector_dimensions", lambda self, cur, dim: None, raising=False)
-    monkeypatch.setattr(IRISGraphEngine, "_initialize_schema", lambda self, deploy: {"warnings": []}, raising=False)
+    monkeypatch.setattr(IRISGraphEngine, "_plan_vector_dimensions", lambda self, cur, dim, rewidth=False: None, raising=False)
+    monkeypatch.setattr(IRISGraphEngine, "_initialize_schema", lambda self, deploy, rewidth=False: {"warnings": []},
+                        raising=False)
+    monkeypatch.setattr(IRISGraphEngine, "_refuse_width_change", lambda self, cur, dim, rewidth: None)  # 4.7.0 row 25
     monkeypatch.setattr(IRISGraphEngine, "_plan_setup", lambda self, *a: {})  # R050's plan: not this test's subject
 
     class Conn:

@@ -44,7 +44,7 @@ def setup():
     from iris_vector_graph import IRISGraphEngine
 
     engine = IRISGraphEngine(conn, embedding_dimension=4, namespace=NS)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
     yield conn, engine._schema_prefix
     conn.close()
 
@@ -137,7 +137,7 @@ def world(request):
     from iris_vector_graph.ledger import Changeset
 
     e = IRISGraphEngine(conn, embedding_dimension=4, namespace=ns, schema_prefix=schema, native_cypher=False)
-    status = e.initialize_schema()
+    status = e.initialize_schema(rewidth=True)
     assert [w for w in status["warnings"] if "deploy error" in w] == [], status["warnings"]
     for node, name in (("fp:a", "red apple"), ("fp:b", "green pear"), ("fp:c", "red cherry")):
         e.create_node(node, labels=["Fruit"], properties={"name": name})

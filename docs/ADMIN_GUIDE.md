@@ -162,8 +162,9 @@ engine.initialize_schema(dry_run=True)["schema_recorded"]
 it chose it (`schema_recorded`: `new`, `existing`, `inferred` or `explicit`), the 4.5.x objects still in `SQLUser` and
 `User` (`legacy_objects`), the grants it would copy, any other schema holding IVG tables (`other_schemas`), and what
 the engine's `embedding_dimension` would do to the vector tables (`embedding_dimension`: the tables it would alter to
-that width, those already at it, and those it cannot change because they hold vectors of another width,
-`needs_manual_migration`). It also lists what the run would create or build, under the keys the run replies them in:
+that width, those already at it, those it cannot change because they hold vectors of another width,
+`needs_manual_migration`, and the empty ones at another width that a run refuses without `rewidth=True`,
+`needs_rewidth`). It also lists what the run would create or build, under the keys the run replies them in:
 the tables (`tables_created`), the functions and procedures (`routines`), the classes it would compile and skip
 (`objectscript_compiled`, `objectscript_skipped`), the adjacency indexes it would declare (`adjacency_index`), and
 whether it would build `^KG` and `^NKG` from the rows in `rdf_edges` (`kg_built`). On a namespace never set up that is
@@ -414,7 +415,7 @@ Every key of the dictionary `initialize_schema()` returns, and of the one `initi
 | `ifind_indexes`          | run         | `{index: searchable}` for the two iFind indexes; one that is not is also a warning                                                                                                                                                                                                               |
 | `ledger_index`           | run         | `idx_ledger_correlation` on `ledger_revisions`: `present`, `created`, `skipped: …` or `not created: …` (also a warning)                                                                                                                                                                          |
 | `tuned`                  | run         | `{table: True}` for each core table `TUNE TABLE` ran on                                                                                                                                                                                                                                          |
-| `embedding_dimension`    | both        | the run: the width of the vector tables. The dry run: `{"configured", "alter", "unchanged", "needs_manual_migration"}`, the width and the tables it would alter to it, leave, or cannot change                                                                                                   |
+| `embedding_dimension`    | both        | the run: the width of the vector tables. The dry run: `{"configured", "alter", "unchanged", "needs_manual_migration", "needs_rewidth"}`, the width and the tables it would alter to it, leave, or cannot change                                                                                  |
 | `needs_manual_migration` | run         | the vector tables holding rows at another width, which the run cannot alter (each also a warning)                                                                                                                                                                                                |
 | `legacy_objects`         | both        | how many objects 4.5.x made in `SQLUser` and `User` are still there ([Upgrading](#6-upgrading))                                                                                                                                                                                                  |
 | `grants_copied`          | both        | one record per direct grant on a 4.5.x object copied to its replacement in the IVG Schema                                                                                                                                                                                                        |
@@ -1263,8 +1264,11 @@ only global PageRank answers from the library ([Arno](#arno-the-native-accelerat
 **An embedding write fails with a dimension mismatch or `EmbeddingIdentityConflict`.** The table's `emb` column is
 declared for another width, or the registry records another width or model than the writer declares. Read the
 registry ([Embedding tables](#embedding-tables-the-registry-and-the-quarantine)), then write at that width or re-embed.
-Setup alters the column only while the table is empty; on a populated table it names the table in
-`status["needs_manual_migration"]`, with a matching entry in `status["warnings"]`, and you must clear or drop it first.
+Setup changes a column's width only when asked, and only while the table is empty: `initialize_schema()` at another
+width than an empty table's raises `EmbeddingIdentityConflict` (4.7.0), and `initialize_schema(rewidth=True)`
+re-declares it at the engine's width. On a populated table `rewidth=True` raises too, and plain `initialize_schema()`
+names the table in `status["needs_manual_migration"]`, with a matching entry in `status["warnings"]`: delete the
+table's vectors first, then run `initialize_schema(rewidth=True)`.
 
 **Setup's log shows `CREATE INDEX idx_props_key_valkey ... SQLCODE -400 ... ERROR #5017: Too many errors` (or
 `<SUBSCRIPT>`) after an upgrade from 4.3.0 to 4.4.1.** Harmless: those releases built that index over `val` before

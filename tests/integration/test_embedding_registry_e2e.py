@@ -198,7 +198,7 @@ class TestFreshSchemaRecordsIdentity:
         dim = _live_dimension(iris_connection) or 128
 
         engine = IRISGraphEngine(iris_connection, embedding_dimension=dim, embedding_config=model)
-        engine.initialize_schema(auto_deploy_objectscript=False)
+        engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
 
         rows = _registry_rows(iris_connection)
         present = _existing_embedding_tables(iris_connection)
@@ -521,7 +521,7 @@ class TestAdoption:
         # action. `initialize_schema` adopts, then migrates, and the row it leaves behind
         # agrees with the column as the column now stands.
         _clear_registry(iris_connection)
-        engine.initialize_schema(auto_deploy_objectscript=False)
+        engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
         rows = _registry_rows(iris_connection)
         assert (
             rows[_NODE_TABLE]["set_by"] == "adopted"

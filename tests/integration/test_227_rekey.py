@@ -117,7 +117,7 @@ def rekeyed(iris_connection):
     # width — a column declared with no length answers every later INSERT with
     # SQLCODE -260.
     engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
-    engine.initialize_schema(auto_deploy_objectscript=False)
+    engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
 
     def wipe():
         import contextlib

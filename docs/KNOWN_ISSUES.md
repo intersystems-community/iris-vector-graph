@@ -629,8 +629,10 @@ graph_id FROM Graph_KG.rdf_edges__ivg400unplaced`, and drop the table (migration
 - **Symptom:** two processes that call `initialize_schema()` on one namespace with different `embedding_dimension`
   values each succeed with no warning; the last one re-declares an empty vector column to its width. The other process's
   writes then fail with `EmbeddingIdentityConflict`.
-- **Versions:** 3.2.0 and later.
-- **Workaround:** use one embedding width per namespace, or per `(graph, model_key)` route.
+- **Versions:** 3.2.0 to 4.6.5. Fixed in 4.7.0: the second `initialize_schema()` raises `EmbeddingIdentityConflict`
+  naming both widths and changes no column.
+- **Workaround:** use one embedding width per namespace, or per `(graph, model_key)` route. On 4.7.0, to change the
+  width of an empty vector table on purpose, run `initialize_schema(rewidth=True)` from an engine at the new width.
 - **Check:** `SELECT table_name, graph_id, model_key, dimension, set_by FROM Graph_KG.embedding_registry`.
 
 ### Snapshots made through the REST API land in the temporary directory

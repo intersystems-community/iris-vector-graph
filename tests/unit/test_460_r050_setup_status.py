@@ -156,7 +156,7 @@ def _dry_run(monkeypatch, ns: _Namespace) -> dict:
     monkeypatch.setattr(legacy, "copy_ledger_history", lambda conn, schema, dry_run: {})
     monkeypatch.setattr(legacy, "grant_read_path", lambda *a, **k: [])
     monkeypatch.setattr(legacy, "arno_copies", lambda conn: [])
-    monkeypatch.setattr(IRISGraphEngine, "_plan_vector_dimensions", lambda self, cur, dim: None, raising=False)
+    monkeypatch.setattr(IRISGraphEngine, "_plan_vector_dimensions", lambda self, cur, dim, rewidth=False: None, raising=False)
     engine = IRISGraphEngine.__new__(IRISGraphEngine)
     engine.conn = conn
     engine._schema_prefix = "Graph_KG"

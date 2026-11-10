@@ -66,7 +66,7 @@ def engine(iris_connection):
     """Create and initialize an IRISGraphEngine for testing."""
     _clear_embedding_tables(iris_connection)
     engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
-    engine.initialize_schema(auto_deploy_objectscript=True)
+    engine.initialize_schema(auto_deploy_objectscript=True, rewidth=True)  # 4.7.0 row 25: the emptied tables
     yield engine
     # Put the session width back so the next vector test finds the table it expects.
     _clear_embedding_tables(iris_connection)
@@ -74,7 +74,7 @@ def engine(iris_connection):
         IRISGraphEngine(
             iris_connection, embedding_dimension=SESSION_EMBEDDING_DIM
         ).initialize_schema(
-            auto_deploy_objectscript=False
+            auto_deploy_objectscript=False, rewidth=True
         )
     except Exception:
         pass

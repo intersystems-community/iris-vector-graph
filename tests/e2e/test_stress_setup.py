@@ -21,7 +21,7 @@ def raw_conn(iris_connection):
 def fresh_engine(raw_conn):
     from iris_vector_graph.engine import IRISGraphEngine
     e = IRISGraphEngine(raw_conn, embedding_dimension=4)
-    e.initialize_schema()
+    e.initialize_schema(rewidth=True)
     yield e
 
 
@@ -30,7 +30,7 @@ class TestColdInit:
     def test_initialize_schema_creates_tables(self, raw_conn):
         from iris_vector_graph.engine import IRISGraphEngine
         e = IRISGraphEngine(raw_conn, embedding_dimension=4)
-        e.initialize_schema()
+        e.initialize_schema(rewidth=True)
         cur = raw_conn.cursor()
         cur.execute("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'Graph_KG'")
         count = cur.fetchone()[0]
@@ -40,7 +40,7 @@ class TestColdInit:
         from iris_vector_graph.engine import IRISGraphEngine
         e = IRISGraphEngine(raw_conn, embedding_dimension=4)
         for _ in range(3):
-            e.initialize_schema()
+            e.initialize_schema(rewidth=True)
         # Should not raise, should not duplicate tables
         cur = raw_conn.cursor()
         cur.execute("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'Graph_KG'")
@@ -162,7 +162,7 @@ class TestEmbeddingDimension:
         for dim in [4, 64]:
             try:
                 e = IRISGraphEngine(raw_conn, embedding_dimension=dim)
-                e.initialize_schema()
+                e.initialize_schema(rewidth=True)
             except Exception as ex:
                 pytest.skip(f"Multi-dim init test skipped: {ex}")
 
@@ -171,7 +171,7 @@ class TestEmbeddingDimension:
         from iris_vector_graph.engine import IRISGraphEngine
         e1 = IRISGraphEngine(raw_conn, embedding_dimension=768)
         try:
-            e1.initialize_schema()
+            e1.initialize_schema(rewidth=True)
         except Exception:
             pass
         with pytest.raises(Exception) if False else contextlib.suppress(Exception):

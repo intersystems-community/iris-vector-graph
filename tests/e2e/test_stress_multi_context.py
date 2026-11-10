@@ -11,7 +11,7 @@ import pytest
 def engine(iris_connection):
     from iris_vector_graph.engine import IRISGraphEngine
     e = IRISGraphEngine(iris_connection, embedding_dimension=4)
-    e.initialize_schema()
+    e.initialize_schema(rewidth=True)
     return e
 
 

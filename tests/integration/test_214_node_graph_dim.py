@@ -64,5 +64,5 @@ class TestBackwardCompatibility:
         assert count == 0
 
     def test_initialize_schema_idempotent(self, eng):
-        eng.initialize_schema()
-        eng.initialize_schema()
+        eng.initialize_schema(rewidth=True)
+        eng.initialize_schema(rewidth=True)

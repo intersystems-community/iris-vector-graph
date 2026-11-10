@@ -88,8 +88,8 @@ class TestReadmeClaims:
 
     def test_readme_initialize_schema_idempotent(self, engine):
         """README: initialize_schema() is safe to call on existing schema."""
-        engine.initialize_schema()  # already called once in fixture
-        engine.initialize_schema()  # second call must not raise
+        engine.initialize_schema(rewidth=True)  # already called once in fixture
+        engine.initialize_schema(rewidth=True)  # second call must not raise
 
 
 # ===========================================================================

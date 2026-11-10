@@ -819,7 +819,8 @@ def iris_connection(iris_test_container):
         # 768 matches schema.py's own default (get_base_schema_sql) and what
         # most of the e2e/integration suite assumes for kg_NodeEmbeddings.
         eng = IRISGraphEngine(conn, embedding_dimension=SESSION_EMBEDDING_DIM)
-        eng.initialize_schema(auto_deploy_objectscript=False)
+        # 4.7.0 row 25: an empty vector column at another width is re-declared only when asked
+        eng.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
     except Exception as e:
         logger.warning("Schema init failed (may already exist): %s", e)
 
@@ -847,8 +848,8 @@ def _restore_session_embedding_width(conn) -> None:
     """Put `Graph_KG.kg_NodeEmbeddings` back at the session width, loudly.
 
     The shared legacy embedding table has one `emb VECTOR(DOUBLE, n)` declaration
-    for the whole namespace, and `initialize_schema()` alters it to the calling
-    engine's width whenever the table is empty. Live tests legitimately build
+    for the whole namespace, and `initialize_schema(rewidth=True)` alters it to the calling
+    engine's width whenever the table is empty (before 4.7.0 `initialize_schema()` did, unasked). Live tests legitimately build
     engines at other widths — 4, 8, 128, 384, 1536 all appear, some of them
     exercising the width migration itself — so any of them can leave the shared
     column narrowed.
@@ -892,7 +893,7 @@ def _restore_session_embedding_width(conn) -> None:
 
             IRISGraphEngine(
                 conn, embedding_dimension=SESSION_EMBEDDING_DIM
-            ).initialize_schema(auto_deploy_objectscript=False)
+            ).initialize_schema(auto_deploy_objectscript=False, rewidth=True)
             restored = GraphSchema.get_embedding_dimension(cursor, table)
             if restored != SESSION_EMBEDDING_DIM:
                 logger.error(

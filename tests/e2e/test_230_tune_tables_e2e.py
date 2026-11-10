@@ -72,7 +72,7 @@ class TestTuneTablesE2E:
         from iris_vector_graph.engine import IRISGraphEngine
 
         engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
-        status = engine.initialize_schema(auto_deploy_objectscript=False)
+        status = engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
         assert "tuned" in status, sorted(status)
         for table in ("nodes", "rdf_edges", "rdf_labels", "rdf_props"):
             assert status["tuned"][f"Graph_KG.{table}"] is True, status["tuned"]
@@ -84,7 +84,7 @@ class TestTuneTablesE2E:
         from iris_vector_graph.engine import IRISGraphEngine
 
         engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
-        engine.initialize_schema(auto_deploy_objectscript=False)
+        engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
 
         plan = _plan(iris_connection, SCOPED_LOOKUP)
         assert INDEX_MAP in plan, f"not reading an index map:\n{plan}"

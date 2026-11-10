@@ -1,6 +1,6 @@
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, Any, Optional, List
 
 from iris_vector_graph.schema import (
@@ -10,7 +10,7 @@ from iris_vector_graph.schema import (
     repair_ifind_helpers,
 )
 from iris_vector_graph.capabilities import IRISCapabilities
-from iris_vector_graph.constants import DEFAULT_GRAPH, VECTOR_TABLE_NAMES
+from iris_vector_graph.constants import DEFAULT_EMBEDDING_DIMENSION, DEFAULT_GRAPH, VECTOR_TABLE_NAMES
 from iris_vector_graph.routing import graph_scope_predicate, route_table_name
 from iris_vector_graph._validate import validate_graph_name
 from iris_vector_graph._write_txn import write_txn
@@ -1514,9 +1514,10 @@ class SchemaMixin:
         return outcomes
 
     @staticmethod
-    def _vector_column_action(cursor, table: str, dim: int):
+    def _vector_column_action(cursor, table: str, dim: int, rewidth: bool = False):
         """``(action, db_dim, rows)`` for one vector column at ``dim``: ``"unchanged"``, ``"alter"`` (an untyped column,
-        or an empty one at another width) or ``"manual"`` (a column at another width whose table has rows, or whose
+        or with ``rewidth`` an empty one at another width), ``"rewidth"`` (an empty one at another width, without
+        ``rewidth``: 4.7.0, setup refuses it) or ``"manual"`` (a column at another width whose table has rows, or whose
         rows could not be counted). ``rows`` is None where it was not counted. Read-only; shared by setup and its dry
         run (4.6.0 R207)."""
         db_dim = GraphSchema.get_embedding_dimension(cursor, table)
@@ -1531,26 +1532,73 @@ class SchemaMixin:
             rows = int(row[0]) if row else None
         except Exception as e:
             logger.debug("Could not count %s: %s", table, e)
-        return ("alter" if rows == 0 else "manual"), db_dim, rows
+        if rows != 0:
+            return "manual", db_dim, rows
+        return ("alter" if rewidth else "rewidth"), db_dim, rows
 
-    def _plan_vector_dimensions(self, cursor, dim: int) -> Dict[str, Any]:
+    def _plan_vector_dimensions(self, cursor, dim: int, rewidth: bool = False) -> Dict[str, Any]:
         """What ``_migrate_vector_dimensions`` would do at ``dim``, read-only, for ``initialize_schema(dry_run=True)``
         (4.6.0 R207, P6): ``configured``, ``alter``, ``unchanged`` and ``needs_manual_migration`` (a populated column at
         another width, which setup leaves alone). A table that does not exist yet is not listed: setup creates it at
-        ``dim``."""
-        from iris_vector_graph.migrations.kg_node_stores import _table_exists
-
-        plan: Dict[str, Any] = {"configured": dim, "alter": [], "unchanged": [], "needs_manual_migration": []}
-        bucket = {"unchanged": "unchanged", "alter": "alter", "manual": "needs_manual_migration"}
-        for name in VECTOR_TABLES:
-            if not _table_exists(cursor, self._schema_prefix, name):
-                continue  # setup creates it
-            table = self._t(name)
-            action, _, _ = self._vector_column_action(cursor, table, dim)
+        ``dim``. 4.7.0: ``needs_rewidth`` lists an empty column at another width, which a run refuses without
+        ``rewidth``."""
+        plan: Dict[str, Any] = {
+            "configured": dim, "alter": [], "unchanged": [], "needs_manual_migration": [], "needs_rewidth": [],
+        }
+        bucket = {"unchanged": "unchanged", "alter": "alter", "manual": "needs_manual_migration",
+                  "rewidth": "needs_rewidth"}
+        for table, action, _, _ in self._vector_column_actions(cursor, dim, rewidth):
             plan[bucket[action]].append(table)
         return plan
 
-    def _migrate_vector_dimensions(self, cursor, dim: int) -> Dict[str, Any]:
+    def _vector_column_actions(self, cursor, dim: int, rewidth: bool):
+        """``(table, action, db_dim, rows)`` for each vector table that exists (setup creates a missing one at
+        ``dim``)."""
+        from iris_vector_graph.migrations.kg_node_stores import _table_exists
+
+        for name in VECTOR_TABLES:
+            if _table_exists(cursor, self._schema_prefix, name):
+                table = self._t(name)
+                yield (table, *self._vector_column_action(cursor, table, dim, rewidth))
+
+    def _refuse_width_change(self, cursor, dim: int, rewidth: bool) -> None:
+        """``EmbeddingIdentityConflict`` for a vector column setup would re-declare at ``dim`` without being asked
+        (empty, at another width, no ``rewidth``), or cannot re-declare though asked (``rewidth``, holding vectors).
+        Read-only; runs before setup writes anything (4.7.0 row 25)."""
+        actions = list(self._vector_column_actions(cursor, dim, rewidth))
+        empty = [(t, db) for t, action, db, _ in actions if action == "rewidth"]
+        held = [(t, db, rows) for t, action, db, rows in actions if action == "manual"] if rewidth else []
+        if empty:
+            table, db = empty[0]
+            named = ", ".join(f"{t} (VECTOR(DOUBLE, {w}))" for t, w in empty)
+            reason = (
+                f"{named} holds no vectors, and this engine's embedding_dimension is {dim}; setup changes no "
+                f"column's width without being asked (4.7.0). If {dim} is your model's width (a namespace first set "
+                f"up at another one, such as the default {DEFAULT_EMBEDDING_DIMENSION} of the ivg CLI and the "
+                f"server, is the usual case), run initialize_schema(rewidth=True) once: it re-declares the empty "
+                f"columns at {dim}. If {db} is the width you use, construct the engine with embedding_dimension={db}"
+            )
+        elif held:
+            table, db, _ = held[0]
+            named = ", ".join(
+                f"{t} (VECTOR(DOUBLE, {w}), holds {'an uncounted number of' if n is None else n} "
+                f"vector{'' if n == 1 else 's'})" for t, w, n in held
+            )
+            reason = (
+                f"{named}: initialize_schema(rewidth=True) re-declares only an empty column, as a column's vectors "
+                f"cannot be kept at another width, and this engine's embedding_dimension is {dim}. Construct the "
+                f"engine with embedding_dimension={db} to use the vectors there, or re-embed at {dim}: delete the "
+                f"table's vectors (DELETE FROM {table}), run initialize_schema(rewidth=True), and store the new ones"
+            )
+        else:
+            return
+        name =table.rsplit(".", 1)[-1]
+        recorded = self.get_embedding_identity(name) or EmbeddingIdentity(mechanism=None, model_key=None)
+        recorded = replace(recorded, dimension=db)
+        offered = replace(self._offered_embedding_identity(), dimension=dim)
+        raise EmbeddingIdentityConflict(name, recorded, offered, reason)
+
+    def _migrate_vector_dimensions(self, cursor, dim: int, rewidth: bool = False) -> Dict[str, Any]:
         """Bring every vector column in ``VECTOR_TABLES`` to ``dim``.
 
         Each table is read on its own — a column already at ``dim`` is left
@@ -1581,7 +1629,9 @@ class SchemaMixin:
 
         for name in VECTOR_TABLES:
             table = self._t(name)
-            action, db_dim, row_count = self._vector_column_action(cursor, table, dim)
+            action, db_dim, row_count = self._vector_column_action(cursor, table, dim, rewidth)
+            if action == "rewidth" or (rewidth and action == "manual"):
+                self._refuse_width_change(cursor, dim, rewidth)  # raises; setup asked before writing anything
 
             if action == "unchanged":
                 report["unchanged"].append(table)
@@ -2044,7 +2094,9 @@ class SchemaMixin:
             return None
         return (str(row[0]), row[1], row[2])
 
-    def initialize_schema(self, auto_deploy_objectscript: bool = True, dry_run: bool = False) -> dict:
+    def initialize_schema(
+        self, auto_deploy_objectscript: bool = True, dry_run: bool = False, rewidth: bool = False
+    ) -> dict:
         """Create IVG's tables, functions and classes in the IVG Schema and return a status dict.
 
         Safe to rerun on an installed namespace. Raises ``ValueError`` when the engine has no
@@ -2085,6 +2137,14 @@ class SchemaMixin:
         ``CallerTransactionOpenError`` before doing anything, ``dry_run`` included: it commits as it goes and compiles
         classes, which no rollback takes back, and it committed the caller's work. The driver's autocommit off with
         nothing written yet (``$TLEVEL`` 0) is no refusal: there is nothing to lose.
+
+        4.7.0: a vector column declared at another width than the engine's ``embedding_dimension`` is changed only
+        when asked. An empty one raises ``EmbeddingIdentityConflict`` before anything is done, naming both widths,
+        unless ``rewidth=True``, which re-declares it at the engine's width (it used to follow the engine without a
+        word, so a second process at another width re-declared the first one's column). A column that holds vectors
+        is never re-declared: with ``rewidth=True`` it raises too, and without it setup leaves it and lists it in
+        ``needs_manual_migration``, as before. The dry run lists an empty column at another width in
+        ``embedding_dimension["needs_rewidth"]`` (in ``alter`` with ``rewidth=True``).
         """
         from iris_vector_graph._write_txn import refuse_in_caller_transaction
 
@@ -2095,7 +2155,7 @@ class SchemaMixin:
                 "setup commits as it goes (which would commit the caller's work) and compiles classes, which no "
                 "rollback takes back",
             )
-            status = self._record_and_initialize(auto_deploy_objectscript, dry_run)
+            status = self._record_and_initialize(auto_deploy_objectscript, dry_run, rewidth)
         if not dry_run:
             self._schema_check_passed()
         return status
@@ -2135,7 +2195,7 @@ class SchemaMixin:
         finally:
             cur.close()
 
-    def _record_and_initialize(self, auto_deploy_objectscript: bool, dry_run: bool) -> dict:
+    def _record_and_initialize(self, auto_deploy_objectscript: bool, dry_run: bool, rewidth: bool = False) -> dict:
         """The record transitions of data-model.md, then setup (``_initialize_schema``) unless ``dry_run``."""
         from iris_vector_graph import __version__
         from iris_vector_graph._engine import legacy
@@ -2191,7 +2251,7 @@ class SchemaMixin:
             if dim:
                 cursor = self.conn.cursor()
                 try:
-                    widths = self._plan_vector_dimensions(cursor, dim)
+                    widths = self._plan_vector_dimensions(cursor, dim, rewidth)
                 finally:
                     cursor.close()
             arno = legacy.arno_copies(self.conn) if iris_obj is not None else []
@@ -2212,10 +2272,16 @@ class SchemaMixin:
                 **self._plan_setup(in_schema(self.conn, schema), iris_obj, auto_deploy_objectscript),
             }
 
+        # 4.7.0 row 25: a width change is refused before setup writes anything
+        cursor = self.conn.cursor()
+        try:
+            self._refuse_width_change(cursor, self.embedding_dimension, rewidth)
+        finally:
+            cursor.close()
         conn = self.conn
         self.conn = in_schema(conn, schema)
         try:
-            status = self._initialize_schema(auto_deploy_objectscript)
+            status = self._initialize_schema(auto_deploy_objectscript, rewidth=rewidth)
         finally:
             self.conn = conn
         # Test seam (T038): an upgrade interrupted here, with the IVG Schema's functions created and nothing recorded,
@@ -2341,7 +2407,7 @@ class SchemaMixin:
             out[name] = "present" if row and int(row[0]) else "created"
         return out
 
-    def _initialize_schema(self, auto_deploy_objectscript: bool = True) -> dict:
+    def _initialize_schema(self, auto_deploy_objectscript: bool = True, rewidth: bool = False) -> dict:
         """
         Create the base schema tables in IRIS.
 
@@ -2492,7 +2558,7 @@ class SchemaMixin:
         # only through `logger.error` left the returned status reading as a clean setup.
         vector_migration: Dict[str, Any] = {}
         try:
-            vector_migration = self._migrate_vector_dimensions(cursor, dim) or {}
+            vector_migration = self._migrate_vector_dimensions(cursor, dim, rewidth) or {}
         except _ALTER_TOLERATED_ERRORS as e:
             logger.warning("Could not verify embedding dimension: %s", e)
         needs_manual_migration = list(vector_migration.get("needs_manual_migration") or [])

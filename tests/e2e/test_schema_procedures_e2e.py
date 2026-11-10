@@ -76,7 +76,7 @@ def test_fresh_install_procedures_exist_e2e(clean_iris_procedures):
 
     conn = clean_iris_procedures
     engine = IRISGraphEngine(conn, embedding_dimension=768)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
 
     cursor = conn.cursor()
     cursor.execute(
@@ -94,7 +94,7 @@ def test_server_side_path_no_fallback_e2e(clean_iris_procedures):
 
     conn = clean_iris_procedures
     engine = IRISGraphEngine(conn, embedding_dimension=768)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
 
     query_vec = json.dumps([math.sin(i * 0.01) for i in range(768)])
 
@@ -114,8 +114,8 @@ def test_initialize_schema_idempotent_e2e(clean_iris_procedures):
 
     conn = clean_iris_procedures
     engine = IRISGraphEngine(conn, embedding_dimension=768)
-    engine.initialize_schema()
-    engine.initialize_schema()  # second call must not raise
+    engine.initialize_schema(rewidth=True)
+    engine.initialize_schema(rewidth=True)  # second call must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ def test_dimension_1536_procedure_e2e(iris_connection):
     from iris_vector_graph.engine import IRISGraphEngine
 
     engine = IRISGraphEngine(iris_connection, embedding_dimension=1536)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
 
     # Verify the procedure was installed at all (dimension baked into DDL at install time)
     cursor = iris_connection.cursor()
@@ -179,4 +179,4 @@ def test_ddl_failure_raises_runtime_error_e2e(iris_connection):
     engine2 = IRISGraphEngine(mock_conn, embedding_dimension=384)
     with patch.object(engine2, "_get_embedding_dimension", return_value=384):
         with pytest.raises(RuntimeError, match="stored procedure"):
-            engine2.initialize_schema()
+            engine2.initialize_schema(rewidth=True)

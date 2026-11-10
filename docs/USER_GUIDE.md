@@ -897,10 +897,15 @@ writes.
 ### Vector search
 
 A node's vector is stored in the IVG Schema's `kg_NodeEmbeddings`, at the engine's `embedding_dimension`. Choose it
-before you store vectors: `initialize_schema()` with another width changes an empty vector table to it without a
-word, and leaves a table holding vectors at its width, logging an error and listing it in the status's `warnings`, so
-every write at the new width is then refused. `initialize_schema(dry_run=True)` shows which it would be
-(`embedding_dimension` in its answer). These test
+before you store vectors. Since 4.7.0, `initialize_schema()` with another width than an empty vector table's raises
+`EmbeddingIdentityConflict` naming both widths, before it changes anything (it used to re-declare the table without a
+word, so a second process at another width re-declared the first one's). `initialize_schema(rewidth=True)`
+re-declares the empty table at the engine's width: run it once when the namespace was first set up at another width,
+such as the default 768 of the `ivg` CLI and the server. A table that holds vectors keeps its width: `rewidth=True`
+raises for it too, and plain `initialize_schema()` leaves it, logging an error and listing it in the status's
+`warnings`, so every write at the new width is then refused. To change the width of a table that holds vectors,
+delete its vectors, run `initialize_schema(rewidth=True)` and store them again at the new width.
+`initialize_schema(dry_run=True)` shows which it would be (`embedding_dimension` in its answer). These test
 vectors are 768 wide, with only their first two dimensions set:
 
 ```python

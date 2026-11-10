@@ -38,7 +38,7 @@ def _sql(cypher, params=None):
 @pytest.fixture
 def eng(iris_connection, iris_master_cleanup):
     e = IRISGraphEngine(iris_connection, embedding_dimension=128)
-    e.initialize_schema(auto_deploy_objectscript=False)
+    e.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
     for i in range(8):
         e.create_node(f"cp_{i}", labels=["N"], properties={"score": str(i * 0.5)})
     for i in range(7):

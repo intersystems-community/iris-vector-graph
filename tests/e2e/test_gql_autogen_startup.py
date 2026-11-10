@@ -11,7 +11,7 @@ def test_gql_autogen_startup(iris_connection, iris_master_cleanup):
     """
     # 1. Setup test data (ensure at least one label exists)
     engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
     engine.create_node("GQL:STARTUP:NODE1", labels=["TestLabel"])
     
     try:

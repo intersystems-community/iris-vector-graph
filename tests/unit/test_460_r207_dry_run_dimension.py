@@ -40,7 +40,7 @@ class _Cursor:
         pass
 
 
-def _plan(monkeypatch, dims, rows, dim):
+def _plan(monkeypatch, dims, rows, dim, rewidth=False):
     from iris_vector_graph import schema as schema_mod
 
     monkeypatch.setattr(schema_mod.GraphSchema, "get_embedding_dimension",
@@ -48,28 +48,38 @@ def _plan(monkeypatch, dims, rows, dim):
     engine = IRISGraphEngine.__new__(IRISGraphEngine)
     engine._schema_prefix = "Graph_KG"
     engine.embedding_dimension = dim
-    return engine._plan_vector_dimensions(_Cursor(rows), dim)
+    return engine._plan_vector_dimensions(_Cursor(rows), dim, rewidth)
 
 
-def test_a_different_width_on_empty_tables_would_alter_them(monkeypatch):
+def test_a_different_width_on_empty_tables_needs_rewidth(monkeypatch):
+    """4.7.0 row 25: a run without rewidth=True refuses them; with it, it alters them."""
     plan = _plan(monkeypatch, {NODE: 768, OPT: 768, EDGE: 768}, {NODE: 0, OPT: 0, EDGE: 0}, 384)
-    assert plan == {"configured": 384, "alter": [NODE, OPT, EDGE], "unchanged": [], "needs_manual_migration": []}
+    assert plan == {"configured": 384, "alter": [], "unchanged": [], "needs_manual_migration": [],
+                    "needs_rewidth": [NODE, OPT, EDGE]}
+    plan = _plan(monkeypatch, {NODE: 768, OPT: 768, EDGE: 768}, {NODE: 0, OPT: 0, EDGE: 0}, 384, rewidth=True)
+    assert plan == {"configured": 384, "alter": [NODE, OPT, EDGE], "unchanged": [], "needs_manual_migration": [],
+                    "needs_rewidth": []}
 
 
 def test_a_populated_table_at_another_width_is_named_as_needing_a_person(monkeypatch):
     plan = _plan(monkeypatch, {NODE: 768, OPT: 768, EDGE: 768}, {NODE: 6, OPT: 0, EDGE: 0}, 384)
     assert plan["needs_manual_migration"] == [NODE]
+    assert plan["needs_rewidth"] == [OPT, EDGE]
+    plan = _plan(monkeypatch, {NODE: 768, OPT: 768, EDGE: 768}, {NODE: 6, OPT: 0, EDGE: 0}, 384, rewidth=True)
+    assert plan["needs_manual_migration"] == [NODE]  # rewidth=True re-declares no column that holds vectors
     assert plan["alter"] == [OPT, EDGE]
 
 
 def test_the_same_width_changes_nothing(monkeypatch):
     plan = _plan(monkeypatch, {NODE: 768, OPT: 768, EDGE: 768}, {NODE: 6, OPT: 0, EDGE: 0}, 768)
-    assert plan == {"configured": 768, "alter": [], "unchanged": [NODE, OPT, EDGE], "needs_manual_migration": []}
+    assert plan == {"configured": 768, "alter": [], "unchanged": [NODE, OPT, EDGE], "needs_manual_migration": [],
+                    "needs_rewidth": []}
 
 
 def test_an_untyped_column_would_be_typed_and_a_missing_table_is_not_listed(monkeypatch):
     plan = _plan(monkeypatch, {NODE: None, EDGE: 768}, {NODE: 0, EDGE: 0}, 768)
-    assert plan == {"configured": 768, "alter": [NODE], "unchanged": [EDGE], "needs_manual_migration": []}
+    assert plan == {"configured": 768, "alter": [NODE], "unchanged": [EDGE], "needs_manual_migration": [],
+                    "needs_rewidth": []}
 
 
 def test_the_dry_run_reports_the_plan(monkeypatch):
@@ -94,7 +104,8 @@ def test_the_dry_run_reports_the_plan(monkeypatch):
     monkeypatch.setattr(legacy, "arno_copies", lambda conn: [])  # R293's Arno plan: not this test's subject either
     monkeypatch.setattr(IRISGraphEngine, "_plan_setup", lambda self, *a: {})  # R050's plan: nor this
     planned = {"configured": 384, "alter": [NODE], "unchanged": [], "needs_manual_migration": []}
-    monkeypatch.setattr(IRISGraphEngine, "_plan_vector_dimensions", lambda self, cur, dim: planned, raising=False)
+    monkeypatch.setattr(IRISGraphEngine, "_plan_vector_dimensions", lambda self, cur, dim, rewidth=False: planned,
+                        raising=False)
     status = engine._record_and_initialize(True, True)
     assert status["dry_run"] is True
     assert status["embedding_dimension"] == planned

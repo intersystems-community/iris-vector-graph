@@ -10,7 +10,7 @@ def test_gql_node_queries(iris_connection, iris_master_cleanup):
     Test that the auto-generated GraphQL server can query nodes and properties.
     """
     engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
     
     # 1. Setup test data
     node_id = "GQL:QUERY:NODE1"

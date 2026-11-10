@@ -10,7 +10,7 @@ def test_gql_cypher_passthrough(iris_connection):
     Test raw Cypher passthrough via GraphQL.
     """
     engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
     
     # 1. Setup test data
     node_id = "GQL:CYPHER:NODE1"

@@ -58,7 +58,7 @@ def test_initialize_schema_installs_all_procedures(clean_procedures):
 
     conn = clean_procedures
     engine = IRISGraphEngine(conn, embedding_dimension=384)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
 
     cursor = conn.cursor()
     cursor.execute(
@@ -79,7 +79,7 @@ def test_kg_knn_vec_callable_after_init(clean_procedures):
 
     conn = clean_procedures
     engine = IRISGraphEngine(conn, embedding_dimension=384)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
 
     # Build a 384-dim query vector as JSON
     query_vec = json.dumps([math.sin(i * 0.01) for i in range(384)])
@@ -99,7 +99,7 @@ def test_kg_knn_vec_uses_server_side_path(clean_procedures):
 
     conn = clean_procedures
     engine = IRISGraphEngine(conn, embedding_dimension=768)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
 
     import math
     query_vec = json.dumps([math.sin(i * 0.01) for i in range(768)])
@@ -123,9 +123,9 @@ def test_initialize_schema_is_idempotent(clean_procedures):
 
     conn = clean_procedures
     engine = IRISGraphEngine(conn, embedding_dimension=384)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
     # Second call — must be idempotent (CREATE OR REPLACE handles procedures)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ def test_initialize_schema_dimension_in_procedure(iris_connection):
 
     # Use a dimension != 1000 to verify it's not hardcoded
     engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
 
     cursor = iris_connection.cursor()
 

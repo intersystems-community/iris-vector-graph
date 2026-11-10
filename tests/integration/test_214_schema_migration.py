@@ -82,8 +82,8 @@ class TestSchemaMigration214:
 
     def test_initialize_schema_idempotent(self, eng):
         """Calling initialize_schema twice must not raise or break anything."""
-        eng.initialize_schema()
-        eng.initialize_schema()
+        eng.initialize_schema(rewidth=True)
+        eng.initialize_schema(rewidth=True)
 
     def test_default_graph_reads_work(self, eng, iris_connection):
         eng.create_node("default_test", labels=["L"], properties={"k": "v"})

@@ -75,7 +75,7 @@ def orphan_route(iris_connection):
 
 def test_erase_graph_succeeds_with_an_orphan_routed_table(iris_connection, orphan_route):
     engine = IRISGraphEngine(iris_connection, embedding_dimension=8)
-    engine.initialize_schema(auto_deploy_objectscript=False)
+    engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
 
     cur = iris_connection.cursor()
     cur.execute(
@@ -104,7 +104,7 @@ def test_erase_graph_succeeds_with_an_orphan_routed_table(iris_connection, orpha
 def test_an_unregistered_route_is_emptied_but_not_dropped(iris_connection, orphan_route):
     """The registry stays the authority for DDL (FR-011); only the rows go."""
     engine = IRISGraphEngine(iris_connection, embedding_dimension=8)
-    engine.initialize_schema(auto_deploy_objectscript=False)
+    engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
 
     cur = iris_connection.cursor()
     cur.execute(

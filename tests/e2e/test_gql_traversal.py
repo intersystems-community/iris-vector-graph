@@ -10,7 +10,7 @@ def test_gql_traversal(iris_connection, iris_master_cleanup):
     Test bi-directional relationship traversal via GraphQL.
     """
     engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
     
     # 1. Setup test data
     node1 = "GQL:TRAV:NODE1"

@@ -49,7 +49,7 @@ def user_engine():
             cur.execute(f"DROP TABLE Graph_KG.{t}")
     conn.commit()
     engine = IRISGraphEngine(conn, embedding_dimension=4)
-    engine.initialize_schema(auto_deploy_objectscript=False)
+    engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
     yield engine, cur
     conn.close()
 

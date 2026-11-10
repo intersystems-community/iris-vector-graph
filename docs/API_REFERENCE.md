@@ -247,7 +247,11 @@ A schema diagram as `{"nodes": [...], "relationships": [...]}`: one node per lab
 #### `initialize_schema`
 
 ```python
-def initialize_schema(auto_deploy_objectscript: bool = True, dry_run: bool = False) -> dict
+def initialize_schema(
+    auto_deploy_objectscript: bool = True,
+    dry_run: bool = False,
+    rewidth: bool = False,
+) -> dict
 ```
 
 Create IVG's tables, functions and classes in the IVG Schema and return a status dict.

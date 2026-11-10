@@ -39,7 +39,7 @@ def _native(iris_connection):
 @pytest.fixture
 def engine(iris_connection):
     engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    engine.initialize_schema(auto_deploy_objectscript=True)
+    engine.initialize_schema(auto_deploy_objectscript=True, rewidth=True)
     yield engine
 
 
@@ -82,7 +82,7 @@ def chain_graph(engine):
 class TestObjectScriptDeployment:
     def test_objectscript_classes_deployed_after_initialize_schema(self, iris_connection):
         engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-        engine.initialize_schema(auto_deploy_objectscript=True)
+        engine.initialize_schema(auto_deploy_objectscript=True, rewidth=True)
         assert engine.capabilities.objectscript_deployed
 
         cursor = iris_connection.cursor()
@@ -98,9 +98,9 @@ class TestObjectScriptDeployment:
 
     def test_deploy_idempotent(self, iris_connection):
         engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-        engine.initialize_schema(auto_deploy_objectscript=True)
+        engine.initialize_schema(auto_deploy_objectscript=True, rewidth=True)
         # Should not raise on second call
-        engine.initialize_schema(auto_deploy_objectscript=True)
+        engine.initialize_schema(auto_deploy_objectscript=True, rewidth=True)
 
 
 class TestKGGlobalBootstrap:
@@ -147,7 +147,7 @@ class TestKGGlobalBootstrap:
         iris_connection.commit()
 
         engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-        engine.initialize_schema(auto_deploy_objectscript=True)
+        engine.initialize_schema(auto_deploy_objectscript=True, rewidth=True)
         if not engine.capabilities.objectscript_deployed:
             pytest.skip("ObjectScript classes not deployed")
 
@@ -155,7 +155,7 @@ class TestKGGlobalBootstrap:
         first_flag = irispy.classMethodValue('Graph.KG.Meta', 'IsSet', 'kg_built')
         assert first_flag == 1
 
-        engine.initialize_schema(auto_deploy_objectscript=True)
+        engine.initialize_schema(auto_deploy_objectscript=True, rewidth=True)
         second_flag = irispy.classMethodValue('Graph.KG.Meta', 'IsSet', 'kg_built')
         assert second_flag == 1
 
@@ -248,7 +248,7 @@ class TestFallbackGraceful:
         iris_connection.commit()
 
         engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-        engine.initialize_schema(auto_deploy_objectscript=False)
+        engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
         engine.capabilities.objectscript_deployed = False
         assert not engine.capabilities.objectscript_deployed
 
