@@ -90,7 +90,8 @@ def test_a_marker_beside_a_row_divisor_is_cy_arith_with_one_marker():
 def test_a_constant_division_by_zero_reads_its_case_condition():
     sql = _sql("MATCH (n:L) RETURN CASE WHEN n.k > 9 THEN 1 / 0 END")
     raise_arg = sql[sql.index("IVGTYPEERROR(") :]
-    assert "CASE WHEN CAST(%EXACT(" in raise_arg.split(") AS DOUBLE)")[0], sql
+    # the condition, as the outer CASE reads it: n.k as a number (4.7.0 row 24: a stored string is null against 9)
+    assert "CAST(%EXACT(p2.val) AS DOUBLE) END) > 9 THEN" in raise_arg, sql
     assert "1 / 0" not in sql, sql  # no SQL division IRIS folds into <DIVIDE> at Query Open
 
 

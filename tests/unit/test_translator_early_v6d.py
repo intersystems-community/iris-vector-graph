@@ -458,7 +458,7 @@ class TestNumericComparisons:
 
     def test_not_equal(self):
         sql = tr("MATCH (n) WHERE n.age <> 0 RETURN n")
-        assert "NOT IN ('0', '0.0')" in sql  # a stored number's every spelling (4.6.0 R168)
+        assert "NOT (" in sql and "CAST(p1.val AS DOUBLE) = CAST('0' AS DOUBLE)" in sql  # a stored number (4.7.0 row 24)
         assert "age" in sql.lower()
 
     def test_and_combined(self):

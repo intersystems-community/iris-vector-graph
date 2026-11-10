@@ -12,6 +12,7 @@ from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.read_only import split_statements, writes_cypher
 from iris_vector_graph.cypher.row_where import handler_tail, where_rows, yield_names
 from iris_vector_graph.cypher.translator import (
+    _stored_number_test,
     properties_subquery,
     rewrite_ambiguous_param_unwind,
     translate_to_sql,
@@ -20,7 +21,13 @@ from iris_vector_graph.cypher.translator import (
 from iris_vector_graph.cypher.merge_rows import plan_row_create, plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
 from iris_vector_graph.result import IVGResult
-from iris_vector_graph.prop_values import decode_json_value, parse_prop_text, parse_rel_prop_text, read_prop_value
+from iris_vector_graph.prop_values import (
+    decode_json_value,
+    number_spellings,
+    parse_prop_text,
+    parse_rel_prop_text,
+    read_prop_value,
+)
 from iris_vector_graph._validate import CypherInput, KHop2Input
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
 from iris_vector_graph._engine.temporal_only_warning import warn_empty_cypher
@@ -65,7 +72,10 @@ def bound_id_property(sql_str: str, params: List[Any], alias: str) -> Union[str,
     """The value `alias`'s `id` property is held equal to (`pK.val = ?` or a literal), where pK joins rdf_props on
     alias with key 'id'; else None. `WHERE s.id = $x` reads the property, not the identity. Only a conjunct reaches
     here: `NOT` and `OR` over it translate to CY_VLP_PATHS, not to the BFS routes. A number is held to every text it
-    is stored as (`pK.val IN ('5', '5.0')`, 4.6.0 R168): that answers the list of texts."""
+    is stored as (`pK.val IN ('5', '5.0')`, 4.6.0 R168): that answers the list of texts. From 4.7.0 (row 24) a number
+    is held to a stored number of its value (`pK.val_key IN ('5', '5.0', ...)` with the row's type test, or the
+    type test and `CAST(pK.val AS DOUBLE) = CAST('5' AS DOUBLE)`): the list of its texts too, which id_holders reads
+    as numbers only."""
     for join in re.finditer(
         r"\bJOIN\s+\S*rdf_props\s+(\w+)\s+ON\s+\1\.s\s*=\s*" + re.escape(alias) + r'\.node_id\b[^\n]*?\1\."key"\s*=\s*\?',
         sql_str,
@@ -75,9 +85,15 @@ def bound_id_property(sql_str: str, params: List[Any], alias: str) -> Union[str,
         if index >= len(params) or params[index] != "id":
             continue
         pk = re.escape(join.group(1))
-        spelled = re.search(r"\b" + pk + r"\.val\s+IN\s+\(((?:'[-+.0-9eE]+'(?:,\s*)?)+)\)", sql_str, re.IGNORECASE)
+        spelled = re.search(r"\b" + pk + r"\.val(?:_key)?\s+IN\s+\(((?:'[-+.0-9eE]+'(?:,\s*)?)+)", sql_str, re.IGNORECASE)
         if spelled:
             return re.findall(r"'([^']*)'", spelled.group(1))
+        cast = re.search(r"CAST\(" + pk + r"\.val AS DOUBLE\) = CAST\('([-+.0-9eE]+)' AS DOUBLE\)", sql_str)
+        if cast:
+            text = cast.group(1)
+            number = float(text) if any(c in text for c in ".eE") else int(text)
+            twin = int(number) if isinstance(number, float) and number.is_integer() else float(number)
+            return list(dict.fromkeys(number_spellings(number) + number_spellings(twin)))
         bound = re.search(r"\b" + pk + r"\.val\s*=\s*\?", sql_str, re.IGNORECASE)
         if bound:
             index = _placeholder_index(sql_str, bound.end())
@@ -111,6 +127,9 @@ def id_holders(
     args: List[Any] = list(value) if isinstance(value, list) else [value]
     placeholders = ", ".join("?" for _ in args)
     sql = f'SELECT DISTINCT p.s FROM {schema}.rdf_props p WHERE p."key" = \'id\' AND p.val IN ({placeholders})'
+    if isinstance(value, list):
+        # a number's texts (bound_id_property): a stored number of that value, not a string that spells it (row 24)
+        sql += f" AND {_stored_number_test('p.val')}"
     if node is not None:
         sql += " AND p.s = ?"
         args.append(node)

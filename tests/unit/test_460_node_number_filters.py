@@ -8,7 +8,10 @@ API's `0.95` never matched. The comparison is now: the text is one of the spelli
 R121 and R139 fixed the same comparison on relationships by naming every spelling (`prop_values.number_spellings`);
 the node filters now use that comparison too.
 
-The live answers are in `tests/e2e/test_460_node_number_props_e2e.py`; this pins the SQL for each shape.
+4.7.0 row 24: a number filter matches a stored number of that value only. The row's `$LISTBUILD` type byte tells a
+number from the string that spells it, so the strings '.95' and '0.95' no longer match (`<>` holds for them), nor does
+the API's text from before 4.6.4. The live answers are in `tests/e2e/test_470_number_filters_e2e.py`; this pins the
+SQL for each shape.
 """
 
 from __future__ import annotations
@@ -50,21 +53,24 @@ def _params(query, params=None):
     ids=["where_literal", "where_param", "param_on_left", "inline_literal", "inline_param", "inline_on_target",
          "inline_on_undirected_target"],
 )
-def test_a_number_compares_every_stored_spelling(query):
+def test_a_number_compares_a_stored_number_only(query):
     sql = _sql(query, {"v": 0.95})
-    assert re.search(r"\((p\d+)\.val IN \('\.95', '0\.95'\) OR \1\.val = CAST\('0\.95' AS DOUBLE\)\)", sql), sql
+    typed = r"\(ASCII\(\$LISTBUILD\(%EXACT\((p\d+)\.val\)\)\) > 0 AND ASCII\(SUBSTRING\(\$LISTBUILD\(%EXACT\(\1\.val\)\), 2, 1\)\) BETWEEN 4 AND 9\)"
+    assert re.search(typed + r" AND CAST\(\1\.val AS DOUBLE\) = CAST\('0\.95' AS DOUBLE\)", sql), sql
+    assert "IN ('.95', '0.95')" not in sql, sql
     assert 0.95 not in _params(query, {"v": 0.95}), "inlined, not bound"
 
 
-def test_not_equal_is_not_in():
+def test_not_equal_holds_for_anything_but_that_number():
     sql = _sql("MATCH (n:L) WHERE n.score <> $v RETURN n.id", {"v": 0.95})
-    assert "(p2.val NOT IN ('.95', '0.95') AND p2.val <> CAST('0.95' AS DOUBLE))" in sql, sql
+    assert "(p2.val IS NOT NULL AND NOT ((ASCII($LISTBUILD(%EXACT(p2.val))) > 0" in sql, sql
+    assert "AND CAST(p2.val AS DOUBLE) = CAST('0.95' AS DOUBLE)))" in sql, sql
 
 
-def test_a_whole_number_also_matches_its_float_spelling():
-    # a whole $DOUBLE reads back as the text 5, so no double comparison is needed
+def test_a_whole_number_compares_as_a_number():
+    # 5.0 = 5 in Cypher: the stored integer 5 and the $DOUBLE 5.0 both compare equal as doubles
     sql = _sql("MATCH (n:L) WHERE n.score = 5.0 RETURN n.id")
-    assert "p2.val IN ('5', '5.0')" in sql and "AS DOUBLE" not in sql, sql
+    assert "CAST(p2.val AS DOUBLE) = CAST('5.0' AS DOUBLE)" in sql and "IN ('5', '5.0')" not in sql, sql
 
 
 def test_a_string_filter_is_unchanged():

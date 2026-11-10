@@ -404,7 +404,7 @@ class TestBooleanExpressionOps:
 
     def test_not_equals(self):
         sql = tr("MATCH (n) WHERE n.x <> 1 RETURN n.node_id")
-        assert "NOT IN ('1', '1.0')" in sql  # a stored number's every spelling (4.6.0 R168)
+        assert "NOT (" in sql and "CAST(p1.val AS DOUBLE) = CAST('1' AS DOUBLE)" in sql  # a stored number (4.7.0 row 24)
 
     def test_less_than(self):
         sql = tr("MATCH (n) WHERE n.x < 5 RETURN n.node_id")

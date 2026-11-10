@@ -31,4 +31,4 @@ def test_the_create_s_stage_reads_the_captured_rows(use):
 def test_a_key_the_query_does_not_write_keeps_its_test_under_use_graph():
     stmts = _statements("USE GRAPH 'g' MATCH (n {j: 1}) SET n.k = 5 WITH n, n.k AS k CREATE (:H {v: k})")
     stage = next(s for s in stmts if "INSERT INTO" in s and "Stage1 AS (" in s).split("Stage1 AS (", 1)[1]
-    assert "IN ('1', '1.0')" in stage.split("\n)", 1)[0]
+    assert "CAST(p1.val AS DOUBLE) = CAST('1' AS DOUBLE)" in stage.split("\n)", 1)[0]  # a stored number (4.7.0 row 24)

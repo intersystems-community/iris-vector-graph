@@ -115,15 +115,31 @@ r = engine.execute_cypher(
   `MATCH (n:L {k: 1}) SET n = {k: 1, z: 2}` after the `MERGE`.
 - **Check:** `MATCH (n:L {k: 1}) RETURN properties(n)` answers the stored properties.
 
+### A Cypher-written relationship number is stored as JSON text
+
+- **Symptom:** a Cypher write of a relationship property stores a number as a JSON string: `CREATE ()-[:R {p:
+0.95}]->()` and `CREATE ()-[:R {p: '0.95'}]->()` both store `{"p": "0.95"}` in `rdf_edges.qualifiers`, the same
+  bytes. A number filter on a relationship property therefore cannot tell 0.95 from `'0.95'`: `WHERE r.p = 0.95`
+  matches both (and `'.95'`, `create_edge`'s JSON number 0.95 too), and `RETURN r.p` and `properties(r)` read the
+  string `'0.95'` back as the number 0.95. A node property keeps the type, and its filters read it from 4.7.0.
+- **Versions:** all 4.x. Re-typing needs a stored marker, planned with the typed relationship storage (4.8.0).
+- **Workaround:** write a numeric relationship property with `create_edge`, which stores a
+  JSON number, and keep number-like text under a property name of its own; read a numeric one with `toFloat(r.p)`.
+- **Check:** `SELECT qualifiers FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?` shows `"p": "0.95"`
+  (quoted) for a Cypher-written number and `"p": 0.95` for one `create_edge` wrote.
+
 ### A property cannot tell a number from a string that spells it
 
 - **Symptom:** a number filter also matches a string that spells the number, and a read can answer the wrong one of
   the two types. With `score` the number 0.95 on one node or relationship and the string `".95"` or `"0.95"` on
   another:
-  - `WHERE x.score = 0.95` matches both and `WHERE x.score <> 0.95` matches neither, for a node `n` and a relationship
-    `r` alike. openCypher matches only the number, and its `<>` matches the string. The shapes are `= 0.95`, `= $v`,
-    the inline `{score: 0.95}`, and for a relationship a filter on a `WITH r.score AS s` column. A string literal has
-    the same problem in reverse: `WHERE r.score = '.95'` also matches the number 0.95 written by `create_edge`.
+  - On a relationship `r`, `WHERE r.score = 0.95` matches both and `WHERE r.score <> 0.95` matches neither.
+    openCypher matches only the number, and its `<>` matches the string. The shapes are `= 0.95`, `= $v`, the inline
+    `{score: 0.95}`, and a filter on a `WITH r.score AS s` column. A string literal has the same problem in reverse:
+    `WHERE r.score = '.95'` also matches the number 0.95 written by `create_edge`. A node filter reads the stored type
+    from 4.7.0: `n.score = 0.95` matches the number only, `<> 0.95` the strings, and `<`, `<=`, `>`, `>=` never
+    match a string (null in openCypher). So a node number that an earlier release's Python writer stored as text
+    (below) is a string to a filter too, as `RETURN n.score` reads it.
   - `RETURN r.score`, `properties(r)` and a returned `r` read the string `"0.95"` as the number 0.95. The string
     `".95"` stays a string.
   - `ORDER BY` sorts a string that spells a number as that number, and a string that is an ISO 8601 duration
@@ -149,8 +165,9 @@ r = engine.execute_cypher(
   but a Cypher write stores a number as the JSON string `"0.95"`, the same as the string. Existing data cannot be
   re-typed without a stored marker telling the two apart, so the readers treat number-shaped text the way 4.5.x did,
   and `initialize_schema()` leaves an earlier release's text as it is.
-- **Versions:** all 4.x for the reads. The filters match every form of the number from 4.6.0; before, an inline or
-  literal number missed the API's `0.95` (and a node filter missed the Cypher-written double). From 4.6.0 a node
+- **Versions:** all 4.x for the reads, and for the relationship filters. The filters matched every form of the number
+  from 4.6.0 to 4.6.5; before, an inline or literal number missed the API's `0.95` (and a node filter missed the
+  Cypher-written double). From 4.7.0 a node filter matches a stored number only. From 4.6.0 a node
   value reads with the type it is stored with whatever the driver version; before, which type a Cypher-written number
   read as depended on the query's path and on the driver (5.4.0 read the number, 5.4.1 the text). The Python writers
   store a node number as a number from 4.6.4.

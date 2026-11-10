@@ -18,7 +18,8 @@ So:
 - ``c.s * 2`` is 5 on both paths;
 - ``ORDER BY n.f`` over z1, z2 is 9.5 then 10.5 (a text order would put 10.5 first), through a WITH alias too;
 - ``max(n.f)`` over z1, z2 is 10.5;
-- ``WHERE n.f = 0.95`` over c, a, z1, z2 matches c and a (R168: every form of the number), ``<> 0.95`` z1 and z2;
+- ``WHERE n.f = 0.95`` over c, a, z1, z2 matches c, ``<> 0.95`` a, z1 and z2 (4.7.0 row 24: a filter reads the
+  stored type, and a's text is a string as it reads; R168 had matched every form of the number, c and a);
 - ``get_node`` reads c as 0.95, 29, 5 and a as '0.95', '29'; ``get_property_values`` of a key only c and a hold
   answers 0.95 and '0.95'.
 """
@@ -126,8 +127,8 @@ def test_max_of_stored_floats(g):
         assert _typed(rows) == [[(10.5, "float")]], path
 
 
-@pytest.mark.parametrize("cond, ends", [("n.f = 0.95", ["a", "c"]), ("n.f <> 0.95", ["z1", "z2"])])
-def test_filters_match_what_r168_matches(g, cond, ends):
+@pytest.mark.parametrize("cond, ends", [("n.f = 0.95", ["c"]), ("n.f <> 0.95", ["a", "z1", "z2"])])
+def test_filters_read_the_stored_type(g, cond, ends):
     e, ids, _ = g
     q = f"MATCH (n:T218) WHERE n.id IN $ids AND {cond} RETURN n.id ORDER BY n.id"
     back = {v: k for k, v in ids.items()}

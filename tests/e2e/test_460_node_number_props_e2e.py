@@ -14,8 +14,9 @@ The graph, worked by hand (label L168, ids unique to the run):
 - score 0.25, the number, on z_api (create_node) and z_cy (Cypher CREATE);
 - txt, a string: ".95" on z_api and "0.95" on z_cy (a string that spells the number).
 
-So `n.score = 0.95`, `= $v`, `{score: 0.95}` and `{score: $v}` answer the seven n_* nodes; `n.score <> 0.95` answers
-z_api and z_cy. `RETURN n.score` is the float 0.95 for the six n_* nodes a number was written to and the string '0.95'
+So `n.score = 0.95`, `= $v`, `{score: 0.95}` and `{score: $v}` answer the six n_* nodes a number was written to;
+`n.score <> 0.95` answers z_api, z_cy and n_old. 4.7.0 row 24: a number filter reads the row's type, so n_old's text
+(a string, as `RETURN n.score` reads it) is not 0.95 any more; before, every n_* node matched and n_old not `<>`. `RETURN n.score` is the float 0.95 for the six n_* nodes a number was written to and the string '0.95'
 for n_old (0.25 for z_api and z_cy); `RETURN n.txt` is the string ".95" and the
 string "0.95". A string compared with a number is the KNOWN_ISSUES entry, not checked here.
 """
@@ -30,6 +31,7 @@ import pytest
 pytestmark = [pytest.mark.e2e]
 
 NUMBERED = ("n_api", "n_bulk", "n_store", "n_cy", "n_set", "n_param", "n_old")
+NUMBERS = NUMBERED[:-1]  # n_old holds 4.6.3's text, a string to a filter since 4.7.0 (row 24)
 OTHERS = ("z_api", "z_cy")
 
 
@@ -82,11 +84,11 @@ def _ids(g, query, params=None):
     ids=["where_literal", "where_param", "inline_literal", "inline_param"],
 )
 def test_a_number_filter_finds_every_writer_s_number(g, query):
-    assert _ids(g, query, {"v": 0.95}) == sorted(NUMBERED)
+    assert _ids(g, query, {"v": 0.95}) == sorted(NUMBERS)
 
 
 def test_not_equal_leaves_the_number_out(g):
-    assert _ids(g, "MATCH (n:L168) WHERE n.score <> $v RETURN n.id", {"v": 0.95}) == sorted(OTHERS)
+    assert _ids(g, "MATCH (n:L168) WHERE n.score <> $v RETURN n.id", {"v": 0.95}) == sorted(OTHERS + ("n_old",))
 
 
 def test_return_answers_the_written_type(g):

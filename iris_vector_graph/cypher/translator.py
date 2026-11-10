@@ -15853,18 +15853,24 @@ def _static_number(expr, context, infinite_ok: bool = False):
     return v
 
 
-def _number_eq_sql(col_sql: str, value, negate: bool = False, doubles: bool = False) -> str:
-    """A stored property equals the number `value`: its text is one of the number's stored spellings (R121, R168).
+_NODE_VAL_RE = re.compile(r"(p\d+)\.val")
 
-    A relationship's `JSON_VALUE` text is `.95` for a JSON number (ObjectScript's form) and `0.95` for one a Cypher
-    CREATE wrote (the JSON string `"0.95"`). A node's `rdf_props.val` is the text `0.95` where the API wrote `str(v)`,
-    and a `$DOUBLE` where a Cypher CREATE or SET bound the float, whose text is `.94999999999999995559`: no spelling
-    matches that, and a comparison with `CAST('0.95' AS DOUBLE)` matches only it.
-    ``doubles`` (a node property) adds that comparison for a fraction. Comparing the text with an inlined 0.95 (`.95`)
-    or a bound one matched one form each. The spellings are digits, sign, point and exponent only, so they are
-    inlined. A whole number also accepts its twin's (`5` and `5.0`: equal in Cypher, and a Cypher CREATE of `{c: 5.0}`
-    stored `5.0`); a whole `$DOUBLE` reads `5`. ``negate`` is `<>`: NOT IN, still null for a null property.
-    """
+
+def _stored_number_test(col_sql: str) -> str:
+    """True when a node property row's `val` holds a number, read from the value's `$LISTBUILD` type byte (4.7.0
+    row 24; row 35): 4 to 7 an integer or a decimal, 8 or 9 a `$DOUBLE`; a string is 1 or 2. A number's element is
+    short, so its first byte is its length; a long string's is 0, and its second byte is a length, not a type."""
+    lb = f"$LISTBUILD(%EXACT({col_sql}))"
+    return f"(ASCII({lb}) > 0 AND ASCII(SUBSTRING({lb}, 2, 1)) BETWEEN 4 AND 9)"
+
+
+def _stored_number_value(col_sql: str) -> str:
+    """A node property row's `val` as a DOUBLE when it holds a number, else NULL: a string never orders against a
+    number (openCypher: null), where `CAST(val AS DOUBLE)` read the string '.95' as 0.95 (4.7.0 row 24)."""
+    return f"(CASE WHEN {_stored_number_test(col_sql)} THEN CAST({col_sql} AS DOUBLE) END)"
+
+
+def _number_texts(value) -> List[str]:
     texts = list(number_spellings(value))
     twin = None
     if isinstance(value, float) and value.is_integer():
@@ -15873,7 +15879,50 @@ def _number_eq_sql(col_sql: str, value, negate: bool = False, doubles: bool = Fa
         twin = float(value)
     if twin is not None and abs(value) < 2**53:
         texts += [t for t in number_spellings(twin) if t not in texts]
-    spellings = ", ".join(f"'{t}'" for t in texts)
+    return texts
+
+
+def _node_number_eq_sql(col_sql: str, value, negate: bool, value_key: bool) -> str:
+    """A node property row equals the number `value`: it holds a number (`_stored_number_test`) of that value (4.7.0
+    row 24). The strings '.95' and '0.95' are not 0.95, and `<>` holds for them; before, the row's text was compared
+    with each spelling of the number, so `= 0.95` matched them and `<>` did not. With ``value_key`` the equality also
+    names the `val_key` texts a number of that value is stored with, so `(key, val_key)` is read by index: the
+    canonical spellings (an integer or a decimal) and the `$DOUBLE`'s own text, which IRIS writes itself
+    (`.94999999999999995559` for 0.95). An earlier release's text number ('0.95' from the API before 4.6.4) is a
+    string here, as `RETURN n.p` reads it (row 10)."""
+    exact = repr(value) if isinstance(value, float) else str(value)
+    if isinstance(value, int) and abs(value) >= 2**53:
+        same = f"%EXACT({col_sql}) = '{value}'"  # past a double's precision: an integer's canonical text
+    else:
+        same = f"CAST({col_sql} AS DOUBLE) = CAST('{exact}' AS DOUBLE)"
+    hit = f"{_stored_number_test(col_sql)} AND {same}"
+    if negate:
+        return f"({col_sql} IS NOT NULL AND NOT ({hit}))"
+    if not value_key or (isinstance(value, float) and value != value):
+        return f"({hit})"
+    alias = _NODE_VAL_RE.fullmatch(col_sql).group(1)
+    keys = ", ".join([f"'{t}'" for t in _number_texts(value)] + [f"CAST(CAST('{exact}' AS DOUBLE) AS VARCHAR(128))"])
+    return f"({alias}.val_key IN ({keys}) AND {hit})"
+
+
+def _number_eq_sql(col_sql: str, value, negate: bool = False, doubles: bool = False, value_key: bool = False) -> str:
+    """A stored property equals the number `value`: its text is one of the number's stored spellings (R121, R168).
+
+    A relationship's `JSON_VALUE` text is `.95` for a JSON number (ObjectScript's form) and `0.95` for one a Cypher
+    CREATE wrote (the JSON string `"0.95"`). A node's `rdf_props.val` is the text `0.95` where the API wrote `str(v)`,
+    and a `$DOUBLE` where a Cypher CREATE or SET bound the float, whose text is `.94999999999999995559`: no spelling
+    matches that, and a comparison with `CAST('0.95' AS DOUBLE)` matches only it.
+    ``doubles`` (a node property): 4.7.0 row 24, a stored number of that value only (`_node_number_eq_sql`), when
+    the column is the row's `val`; a relationship's text keeps the spellings. Comparing the text with an inlined 0.95 (`.95`)
+    or a bound one matched one form each. The spellings are digits, sign, point and exponent only, so they are
+    inlined. A whole number also accepts its twin's (`5` and `5.0`: equal in Cypher, and a Cypher CREATE of `{c: 5.0}`
+    stored `5.0`); a whole `$DOUBLE` reads `5`. ``negate`` is `<>`: NOT IN, still null for a null property.
+    """
+    # an infinity is stored as text (the API's 'inf', R307; IRIS's JSON has none), so it keeps the spellings
+    finite = not (isinstance(value, float) and value in (float("inf"), float("-inf")))
+    if doubles and finite and _NODE_VAL_RE.fullmatch(col_sql.strip()):
+        return _node_number_eq_sql(col_sql.strip(), value, negate, value_key)
+    spellings = ", ".join(f"'{t}'" for t in _number_texts(value))
     if col_sql.startswith("CASE WHEN ") and col_sql.endswith(" END"):
         col_sql = f"({col_sql})"  # IRIS refuses a bare CASE before IN (SQLCODE -25)
     spelled = f"{col_sql} {'NOT IN' if negate else 'IN'} ({spellings})"
@@ -15925,7 +15974,8 @@ def _stored_number_comparison(op, left_expr, right_expr, context) -> Optional[st
         if num is None:
             continue
         col = translate_expression(prop, context, segment="where")
-        return _number_eq_sql(col, num, negate=op == ast.BooleanOperator.NOT_EQUALS, doubles=not rel_text)
+        return _number_eq_sql(col, num, negate=op == ast.BooleanOperator.NOT_EQUALS, doubles=not rel_text,
+                              value_key=_has_value_key(context))
     return None
 
 
@@ -16612,11 +16662,14 @@ def translate_where_clause(where, context):
     context._cmp_udf_ok = not getattr(context, "optional_match_new_aliases", set())
     _guardable_before = getattr(context, "_guardable_refs", frozenset())
     context._guardable_refs = _null_rejecting_refs(where.expression)
+    _filter_before = getattr(context, "_filter_position", False)
+    context._filter_position = True
     try:
         cond = translate_boolean_expression(where.expression, context)
     finally:
         context._cmp_udf_ok = _udf_ok_before
         context._guardable_refs = _guardable_before
+        context._filter_position = _filter_before
     # NULL in WHERE is invalid SQL. In Cypher, NULL in WHERE means "no match" — use (1=0).
     if cond == "NULL" or cond == "(NULL)":
         cond = "(1=0)"
@@ -17454,6 +17507,11 @@ def _prop_value_sql(v, context) -> str:
 _VALUE_KEY_LEN = 128
 
 
+def _has_value_key(context) -> bool:
+    """The engine's `rdf_props` has `val_key` and its `(key, val_key)` index (see _value_key_predicate)."""
+    return getattr(getattr(context, "_engine", None), "_props_value_key", False) is True
+
+
 def _value_key_predicate(col_sql, value_expr, context) -> str:
     """` AND <alias>.val_key = '<prefix>'` for a string equality on a property row, when the engine has the column.
 
@@ -17464,8 +17522,7 @@ def _value_key_predicate(col_sql, value_expr, context) -> str:
     _boolean_expr_comparison_ops). Off unless the engine says the column exists (`_props_value_key is True`): on an install
     without it the SQL is unchanged.
     """
-    engine = getattr(context, "_engine", None)
-    if getattr(engine, "_props_value_key", False) is not True:
+    if not _has_value_key(context):
         return ""
     m = re.fullmatch(r"(p\d+)\.val", col_sql.strip())
     if not m:
@@ -17509,7 +17566,7 @@ def _prop_eq_sql(col_sql: str, v, val_sql: str, context) -> str:
         return _stored_bool_in(col_sql, b)
     num = _static_number(v, context)
     if num is not None:
-        return _number_eq_sql(col_sql, num, doubles=True)
+        return _number_eq_sql(col_sql, num, doubles=True, value_key=_has_value_key(context))
     key = _value_key_predicate(col_sql, v, context)
     return f"({col_sql} = {val_sql}{key})" if key else f"{col_sql} = {val_sql}"
 
@@ -18159,6 +18216,18 @@ def _collect_all_prop_refs(expr, context) -> set:
 
 
 def translate_boolean_expression(expr, context) -> str:
+    """The SQL of a Cypher boolean expression. ``context._filter_position``: true while the expression's truth goes
+    straight to a WHERE (its own, or a conjunct of an AND there), where false and null both drop the row; a comparison
+    may then add a sargable twin (4.7.0 row 24). NOT, OR and every other operator turn it off for their operands."""
+    direct = getattr(context, "_filter_position", False)
+    context._filter_position = direct and isinstance(expr, ast.BooleanExpression) and expr.operator == ast.BooleanOperator.AND
+    try:
+        return _translate_boolean_expression(expr, context, direct)
+    finally:
+        context._filter_position = direct
+
+
+def _translate_boolean_expression(expr, context, direct: bool) -> str:
     if isinstance(expr, ast.BooleanExpression):
         _folded, _fv = _cy_try_fold(expr)
         if _folded and (_fv is None or isinstance(_fv, bool)):
@@ -18511,6 +18580,7 @@ def translate_boolean_expression(expr, context) -> str:
         if _lk and _rk and not (_lk & _rk):
             _neq = "1" if op == ast.BooleanOperator.NOT_EQUALS else "0"
             return f"(CASE WHEN ({left}) IS NULL OR ({right}) IS NULL THEN NULL ELSE {_neq} END = 1)"
+    hint = None
     if op in (
         ast.BooleanOperator.LESS_THAN,
         ast.BooleanOperator.LESS_THAN_OR_EQUAL,
@@ -18527,10 +18597,28 @@ def translate_boolean_expression(expr, context) -> str:
                 return isinstance(context.input_params.get(e.name), str)
             return False
 
+        # 4.7.0 row 24: a node property row reads as a number only when it holds one; a string is null against a
+        # number (openCypher), where CAST made '.95' 0.95. The plain CAST comparison is kept beside it (`hint`): with the
+        # CASE alone IRIS 2026.3 planned the query from nodes with temp files, 105 ms where it took 11 (50k rows).
+        def _as_number(sql):
+            nonlocal typed
+            if _NODE_VAL_RE.fullmatch(sql.strip()):
+                typed = True
+                return _stored_number_value(sql.strip())
+            return f"CAST({sql} AS DOUBLE)"
+
+        typed = False
+        cast_left, cast_right = left, right
         if isinstance(left_expr, ast.PropertyReference) and not _other_is_str(right_expr):
-            left = f"CAST({left} AS DOUBLE)"
+            cast_left = f"CAST({left} AS DOUBLE)"
+            left = _as_number(left)
         if isinstance(right_expr, ast.PropertyReference) and not _other_is_str(left_expr):
-            right = f"CAST({right} AS DOUBLE)"
+            cast_right = f"CAST({right} AS DOUBLE)"
+            right = _as_number(right)
+        if typed and direct:
+            # only where null and false both drop the row: under NOT, or as a value, the twin's false would not be
+            # the CASE's null (a string '.5' against 0.9)
+            hint = (cast_left, cast_right)
         # Numeric literal type promotion: IRIS treats 1 <> 1.0 due to INTEGER vs DOUBLE.
         # When comparing int with float literal, cast both to DOUBLE.
         _left_is_int = (
@@ -18576,6 +18664,10 @@ def translate_boolean_expression(expr, context) -> str:
             right = f"CAST({right} AS DOUBLE)"
     spelled = _json_literal_comparison(op, left, left_expr, right, right_expr)
     result = spelled or _boolean_expr_comparison_ops(op, left, left_expr, right, right_expr)
+    if result is not None and hint is not None:
+        hinted = _boolean_expr_comparison_ops(op, hint[0], left_expr, hint[1], right_expr)
+        if hinted is not None:
+            result = f"({hinted} AND ({result}))"
     if result is not None and op == ast.BooleanOperator.REGEX_MATCH:
         # REGEX_MATCH answers 1, 0 or NULL (a null operand, 4.6.0 R274): a RETURN item reads that value
         if not hasattr(context, "tri_valued_predicates"):

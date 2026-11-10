@@ -53,6 +53,14 @@ Answers that change in 4.6.0, with no action needed beyond the redeploy:
 `initialize_schema()` also builds the new index `idx_edges_graph_oid` on `rdf_edges` (a single pass, 0.3 s for
 300,000 rows when measured).
 
+## To 4.7.0: node number filters read the stored type
+
+A filter comparing a node property with a number matches a stored number only (row 24): `n.score = 0.95` no longer
+matches the strings `'.95'` and `'0.95'`, `<> 0.95` matches them, and `<`, `<=`, `>`, `>=` never match a string. That
+includes the text an earlier release's Python writers stored for a number (below): `= 0.95` does not find it in 4.7.0.
+Retype such a property before you rely on the filter: from 4.7.0 a Cypher `SET n.score = toFloat(n.score)` stores the
+number (`toInteger` for an integer), or use the recipe below. A relationship filter is unchanged.
+
 ## To 4.6.4: numbers the Python API writes
 
 From 4.6.4 `create_node`, `store_node`, `bulk_create_nodes` and the other Python writers store a node number as a
@@ -61,8 +69,8 @@ Cypher write does, so it reads back as the number; before, they stored its text,
 deployed still stores the text.
 
 The numbers an earlier release's Python writers stored stay text. A text row cannot be told from a string written on
-purpose, so `initialize_schema()` does not retype them; filters, `ORDER BY` and arithmetic already treat them as
-numbers. To retype a property you know is numeric, read it and write the number back:
+purpose, so `initialize_schema()` does not retype them; `ORDER BY` and arithmetic treat them as numbers, and a filter
+did until 4.7.0 (above). To retype a property you know is numeric, read it and write the number back:
 
 <!-- doc-test: skip reason="a recipe for a namespace holding 4.6.3 data, with no such nodes here" -->
 

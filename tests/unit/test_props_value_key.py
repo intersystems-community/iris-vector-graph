@@ -67,10 +67,18 @@ def test_a_mock_engine_does_not_switch_it_on():
     assert "val_key" not in _sql("MATCH (p:Person) WHERE p.sid = $id RETURN p", {"id": "1"}, engine)
 
 
-def test_only_string_equality_gets_it():
-    for q, p in (("MATCH (p) WHERE p.age = 3 RETURN p", None), ("MATCH (p) WHERE p.sid <> $id RETURN p", {"id": "1"}),
+def test_only_string_and_number_equality_get_it():
+    for q, p in (("MATCH (p) WHERE p.sid <> $id RETURN p", {"id": "1"}), ("MATCH (p) WHERE p.age <> 3 RETURN p", None),
                  ("MATCH (p) WHERE p.sid > $id RETURN p", {"id": "1"}), ("MATCH (p) WHERE p.ok = true RETURN p", None)):
         assert "val_key" not in _sql(q, p, ON), q
+
+
+def test_a_number_equality_names_the_texts_a_number_of_that_value_is_stored_with():
+    """4.7.0 row 24: the canonical spellings and the $DOUBLE's own text (IRIS's, so the SQL asks IRIS for it); the
+    row's type test then keeps the numbers only. It used to read every row of the key (idx_props_key)."""
+    sql = _sql("MATCH (p) WHERE p.age = 3 RETURN p", None, ON)
+    assert "p1.val_key IN ('3', '3.0', CAST(CAST('3' AS DOUBLE) AS VARCHAR(128)))" in sql, sql
+    assert "BETWEEN 4 AND 9" in sql, sql
 
 
 def test_the_schema_declares_the_column_and_its_index():
