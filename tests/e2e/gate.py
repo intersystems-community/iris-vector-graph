@@ -167,6 +167,11 @@ SESSION_NAMESPACES: Dict[str, str] = {
         "on (tests/e2e/test_470_issue13_count_distinct_limit_e2e.py), which the gate cannot make; or an IVG470* "
         "scratch namespace on the enterprise container; unset, the file skips"
     ),
+    "IVG_LOAD_NS": (
+        "a new namespace with no IVG data (`make_scratch_namespace.py --no-install`): "
+        "tests/e2e/test_470_node_load_new_namespace_e2e.py times the first load into it, which a namespace the gate "
+        "set up and other modules wrote to cannot show; unset, the file skips"
+    ),
     "IVG_SETUP_NS": (
         "a namespace holding no IVG classes yet (tests/e2e/test_470_setup_compiles_every_class_e2e.py, which asserts "
         "what a first initialize_schema() compiles), on a throwaway container (IVG_SETUP_PORT) or made with "

@@ -355,7 +355,10 @@ ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 				While liter.%GetNext(.li, .label) {
 					If label = "" { Continue }
 					Set tHasLabel = 0
-					&sql(SELECT 1 INTO :tHasLabel FROM Graph_KG.rdf_labels WHERE graph_id = '' AND s = :id AND label = :label)
+					// %IGNOREINDEX: on a table whose statistics were taken near empty (a new namespace) the optimizer
+					// read idx_labels_label, every node of the label, for each lookup: a load grew quadratically
+					// (4.7.0 row 2). idx_labels_s reads the node's own rows.
+					&sql(SELECT 1 INTO :tHasLabel FROM %IGNOREINDEX Graph_KG.rdf_labels.idx_labels_label Graph_KG.rdf_labels WHERE graph_id = '' AND s = :id AND label = :label)
 					If SQLCODE = 100 {
 						&sql(INSERT INTO Graph_KG.rdf_labels (graph_id, s, label) VALUES ('', :id, :label))
 					}
@@ -391,7 +394,9 @@ ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 					// (4.6.0 R307; create_node stores '')
 					Set:valStr="" valStr = $Char(0)
 					Set tHasProp = 0
-					&sql(SELECT 1 INTO :tHasProp FROM Graph_KG.rdf_props WHERE graph_id = '' AND s = :id AND "key" = :key)
+					// %IGNOREINDEX, as for the labels above: idx_props_key is every node holding the key (every node's
+					// `id`, which the loader writes since 4.6.0 R089)
+					&sql(SELECT 1 INTO :tHasProp FROM %IGNOREINDEX Graph_KG.rdf_props.idx_props_key Graph_KG.rdf_props WHERE graph_id = '' AND s = :id AND "key" = :key)
 					If SQLCODE = 100 {
 						&sql(INSERT INTO Graph_KG.rdf_props (graph_id, s, "key", val) VALUES ('', :id, :key, :valStr))
 					}
