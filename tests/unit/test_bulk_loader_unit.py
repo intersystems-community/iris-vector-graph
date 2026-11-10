@@ -254,18 +254,28 @@ class TestRebuildAllIndices:
 # ---------------------------------------------------------------------------
 
 class TestBuildGraphGlobals:
+    """4.7.0: the class methods, on the loader's connection (`conn.iris` here, as iris_vector_graph.host.host_for
+    takes it), as the engine's sync() runs them; it sent ObjectScript as SQL (-51) and answered False.
+    tests/e2e/test_470_silent_writers_e2e.py checks ^KG is rebuilt."""
 
-    def test_success_returns_true(self):
+    def test_success_runs_buildkg_then_buildnkg(self):
         loader, conn, cursor = _make_loader()
-        cursor.execute.return_value = None
-        result = loader.build_graph_globals()
-        assert result is True
+        conn.iris.classMethodValue.return_value = "1"
+        assert loader.build_graph_globals() is True
+        called = [c.args[:2] for c in conn.iris.classMethodValue.call_args_list]
+        assert called == [("Graph.KG.Traversal", "BuildKG"), ("Graph.KG.Traversal", "BuildNKG"),
+                          ("Graph.KG.Traversal", "Build2HopStats")]
+        cursor.execute.assert_not_called()
 
-    def test_failure_returns_false(self):
+    def test_a_status_error_raises_with_its_text(self):
         loader, conn, cursor = _make_loader()
-        cursor.execute.side_effect = RuntimeError("class not found")
-        result = loader.build_graph_globals()
-        assert result is False
+
+        def answer(cls, method, *args):
+            return "0 bad" if method == "BuildKG" else "ERROR #5002: ObjectScript error: <UNDEFINED>"
+
+        conn.iris.classMethodValue.side_effect = answer
+        with pytest.raises(RuntimeError, match=r"Graph.KG.Traversal.BuildKG failed: ERROR #5002"):
+            loader.build_graph_globals()
 
 
 # ---------------------------------------------------------------------------

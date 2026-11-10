@@ -485,37 +485,29 @@ class BulkLoader:
         """
         Build ^KG and ^NKG traversal globals from SQL tables.
 
-        Calls Graph.KG.Traversal.BuildKG() which reads from rdf_edges/rdf_labels/rdf_props
-        and populates ^KG (adjacency lists) and ^NKG (NICHE-encoded index).
+        Calls Graph.KG.Traversal.BuildKG() which reads from rdf_edges/rdf_labels/rdf_props and populates ^KG
+        (adjacency lists), then BuildNKG() and Build2HopStats() for ^NKG, as the engine's ``sync()`` does, on this
+        loader's connection. Requires Graph.KG.Traversal and Graph.KG.GraphIndex to be deployed. Returns True; a
+        ``%Status`` error or a failed call raises ``RuntimeError`` naming the class method.
 
-        Requires Graph.KG.Traversal and Graph.KG.GraphIndex to be deployed.
-        Returns True if successful.
+        4.7.0: it sent ``Do ##class(Graph.KG.Traversal).BuildKG()`` as SQL, which IRIS refused (SQLCODE -51), logged
+        the error and answered False, so ``^KG`` was never rebuilt and ``load_networkx`` reported
+        ``globals_built: False`` and returned as a finished load.
         """
         self._refuse_in_caller_transaction("BulkLoader.build_graph_globals()")
-        cursor = self.conn.cursor()
-        try:
-            logger.info("Building ^KG + ^NKG globals from SQL tables...")
-            t0 = time.time()
-            cursor.execute("Do ##class(Graph.KG.Traversal).BuildKG()")
-            dt = time.time() - t0
-            try:
-                self.conn.commit()
-            except Exception:
-                pass
-            logger.info(f"BuildKG completed in {dt:.1f}s")
-            return True
-        except Exception as e:
-            logger.error(f"BuildKG failed: {e}")
-            logger.info(
-                "Ensure Graph.KG.Traversal and Graph.KG.GraphIndex classes "
-                "are deployed. BFS/PPR will not work without ^KG globals."
-            )
-            return False
-        finally:
-            try:
-                cursor.close()
-            except Exception:
-                pass
+        from iris_vector_graph.host import host_for
+
+        native = host_for(self.conn).native
+        logger.info("Building ^KG + ^NKG globals from SQL tables...")
+        t0 = time.time()
+        for method in ("BuildKG", "BuildNKG"):
+            status = native.classMethodValue("Graph.KG.Traversal", method)
+            if str(status).strip() != "1":
+                text = native.classMethodValue("%SYSTEM.Status", "GetErrorText", status)
+                raise RuntimeError(f"BulkLoader.build_graph_globals: Graph.KG.Traversal.{method} failed: {text}")
+        native.classMethodValue("Graph.KG.Traversal", "Build2HopStats")
+        logger.info(f"BuildKG + BuildNKG completed in {time.time() - t0:.1f}s")
+        return True
 
     def load_networkx(
         self,

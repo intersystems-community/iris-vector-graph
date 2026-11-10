@@ -132,6 +132,9 @@ GROUPS: Dict[str, Group] = {
     # write there.
     "r470txn": Group("IVG_R470_TXN_NS", "470T", "graph_kg"),
     "r470ledger": Group("IVG_R470_LEDGER_NS", "470L", "graph_kg"),
+    # 4.7.0 wave 2 (writers): test_470_silent_writers_e2e and the W2-WR files rebuild ^KG and change indexes on
+    # rdf_edges, so they have a namespace of their own.
+    "r470wr": Group("IVG_R470_WR_NS", "470W", "graph_kg"),
     # 4.6.5: test_465_write_schema_error_e2e deletes Txn_Begin from the classes of a namespace of its own (and puts
     # them back); test_465_stale_error_text_e2e makes a user holding the reading role there and runs failing writes.
     "r465legacy": Group("IVG_R465_LEGACY_NS", "465L", "name"),

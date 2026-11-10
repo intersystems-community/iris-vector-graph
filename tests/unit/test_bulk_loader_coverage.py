@@ -219,26 +219,9 @@ def test_rebuild_all_indices_execute_fails():
     assert isinstance(result, dict)
 
 
-def test_build_graph_globals_commit_fails():
-    loader, conn, cur = _make_loader()
-    cur.execute.return_value = None
-    conn.commit.side_effect = Exception("commit fail")
-    result = loader.build_graph_globals()
-    assert result is True
-
-
-def test_build_graph_globals_execute_fails():
-    loader, conn, cur = _make_loader()
-    cur.execute.side_effect = Exception("BuildKG not deployed")
-    result = loader.build_graph_globals()
-    assert result is False
-
-
-def test_build_graph_globals_cursor_close_fails():
-    loader, conn, cur = _make_loader_with_close_fail()
-    cur.execute.return_value = None
-    result = loader.build_graph_globals()
-    assert result is True or result is False
+# build_graph_globals' cursor, commit and False paths are gone (4.7.0): it sent ObjectScript as SQL (-51) and
+# answered False. tests/unit/test_bulk_loader_unit.py::TestBuildGraphGlobals tests the class-method route, and
+# tests/e2e/test_470_silent_writers_e2e.py that ^KG is rebuilt.
 
 
 def test_load_networkx_cursor_close_fails():
