@@ -18,7 +18,7 @@ crosses them all.
   never from IVG's output. A cell asserts the value and its Python type; a failure lists writer, reader, path, driver,
   value, what came back and what is documented, with the source of the documented answer.
 
-Namespace: `IVG_NS_IVG460FXOV`, an IVG460FX* scratch namespace with this checkout installed
+Namespace: `IVG_NS_IVG460FXOV`, an IVG460FX* (or 4.7.0's IVG470*) scratch namespace with this checkout installed
 (scripts/dev/make_scratch_namespace.py). Run it under both drivers (scripts/dev/driver_matrix.sh's interpreters):
 
     IVG_NS_IVG460FXOV=IVG460FXOV .venv/bin/python -m pytest tests/e2e/test_460_r307_value_matrix_e2e.py
@@ -48,7 +48,8 @@ REPORT = os.environ.get("IVG_R307_REPORT", "")
 
 pytestmark = [
     pytest.mark.e2e,
-    pytest.mark.skipif(not NS.startswith("IVG460FX"), reason="IVG_NS_IVG460FXOV must name an IVG460FX* scratch namespace"),
+    pytest.mark.skipif(not NS.startswith(("IVG460FX", "IVG470")),
+                       reason="IVG_NS_IVG460FXOV must name an IVG460FX* or IVG470* scratch namespace"),
     pytest.mark.skipif(not alt.container_running(), reason=f"{alt.CONTAINER} is not running"),
 ]
 

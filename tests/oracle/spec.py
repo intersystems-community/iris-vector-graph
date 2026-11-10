@@ -48,9 +48,10 @@ CITATIONS = {
         "A whole node (`RETURN n`, `collect(n)`, a node in a map, a variable-length path's target) carries each "
         "property as `RETURN n.score` reads it",
     ),
-    "props_fn_number_text": (
+    "props_fn_as_prop": (
         "docs/KNOWN_ISSUES.md",
-        "`properties(n)` reads both as 0.95, and reads the string `\"0.95\"` as 0.95 too.",
+        "From 4.7.0 `properties(n)` reads each value as `RETURN n.score` does too: the earlier release's text and the "
+        "string `\"0.95\"` as the string `'0.95'`, the stored number as 0.95.",
     ),
     "node_cypher_typed": (
         "docs/USER_GUIDE.md",
@@ -315,7 +316,7 @@ _JSON_NUMBER = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?([eE][-+]?\d+)?$")
 
 def json_number(text: str) -> Any:
     """Text JSON spells a number as that number (`'1.0'` -> 1.0, `'1e3'` -> 1000.0); any other text unchanged. How
-    properties(n) reads a node's number text (CY_PROPS_MAP, 4.6.0 R121)."""
+    properties(n) read a node's number text from 4.6.0 R121 until 4.7.0 (row 10), which reads it as the string."""
     return json.loads(text) if _JSON_NUMBER.match(text) else text
 
 
@@ -427,19 +428,18 @@ def _read_node(cls: str, v: Value, family: str) -> Expect:
         return Expect(v.oc, OPENCYPHER)
     if v.group in ("int", "float"):
         if cls == "api" and v.group == "float" and not math.isfinite(v.py):
-            # the API stores NaN and the infinities as their text, as before 4.6.4
+            # the API stores NaN and the infinities as their text, as before 4.6.4; properties(n) reads it as n.p
+            # does (4.7.0 row 10)
             text = prop_text(v.py)
-            if family == "props":
-                return Expect(json_number(text), "props_fn_number_text")
-            return Expect(text, "node_api_non_finite_text")
+            return Expect(text, "props_fn_as_prop" if family == "props" else "node_api_non_finite_text")
         if v.group == "float" and math.isfinite(v.oc) and v.oc.is_integer():
             return Expect(v.oc, "whole_float_point")
         # 4.6.4: the API binds a number as a Cypher write does (it stored the number's text, read as a string)
         return Expect(v.oc, "node_api_typed" if cls == "api" else "node_cypher_typed")
-    if family == "props" and isinstance(v.oc, str):
-        number = json_number(v.oc)
-        if number is not v.oc:
-            return Expect(number, "props_fn_number_text")
+    if family == "props" and isinstance(v.oc, str) and json_number(v.oc) is not v.oc:
+        # 4.7.0 row 10: a string JSON spells a number as (`'1.0'`, `'1e3'`) is the string in properties(n), as n.p
+        # reads it; before, it was read as that number
+        return Expect(v.oc, "props_fn_as_prop")
     return Expect(v.oc, OPENCYPHER)
 
 

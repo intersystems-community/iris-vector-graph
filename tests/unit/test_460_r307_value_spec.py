@@ -126,9 +126,9 @@ def test_known_issues_number_examples():
     assert _typed(_e("node", "api_create", "f095", "ret")) == ("float", 0.95)
     assert _typed(_e("node", "cy_create", "f095", "ret")) == ("float", 0.95)
     assert _e("node", "api_create", "f095", "tostring") == _e("node", "cy_create", "f095", "tostring") == "0.95"
-    # properties(n) reads both as 0.95, and the string "0.95" too
+    # properties(n) reads both as 0.95; from 4.7.0 (row 10) the string "0.95" as the string, as n.p does
     assert _typed(_e("node", "api_create", "f095", "props")) == ("float", 0.95)
-    assert _typed(_e("node", "cy_create", "s095", "props")) == ("float", 0.95)
+    assert _typed(_e("node", "cy_create", "s095", "props")) == ("str", "0.95")
     assert _typed(_e("node", "cy_create", "sd95", "props")) == ("str", ".95")
     # q1 0.95, q2 ".95", q3 "0.95" by create_edge: r.score 0.95, '.95', 0.95; toString '0.95', '.95', '0.95'
     assert [_typed(_e("rel", "api_edge", k, "ret")) for k in ("f095", "sd95", "s095")] == [
