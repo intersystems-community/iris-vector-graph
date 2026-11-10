@@ -1598,9 +1598,13 @@ class VectorMixin:
         self, index_name: str, query_embedding, k: int = 10, nprobe: int = 8
     ) -> list:
         """Approximate nearest neighbours of one vector in the VecIndex ``index_name``:
-        a list of up to ``k`` dicts (``id``, ``score``, ``distance``), searching
+        a list of up to ``k`` dicts (``id``, ``score``, ``distance``), nearest first, searching
         ``nprobe`` leaves per tree; an index with no trees is searched by brute force.
-        Read-only. The index holds no graph: it answers from whatever was inserted."""
+        For a cosine index ``score`` is the cosine (1.0 identical, 0.0 orthogonal, -1.0
+        opposite) and ``distance`` 1 - cosine; before 4.7.0 ``score`` was cosine - 1 (0.0
+        for identical vectors). For a dot index ``score`` is the dot product, and for the
+        other metrics the distance. Read-only. The index holds no graph: it answers from
+        whatever was inserted."""
         vec_json = json.dumps([float(v) for v in query_embedding])
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex", "SearchJSON", index_name, vec_json, k, nprobe

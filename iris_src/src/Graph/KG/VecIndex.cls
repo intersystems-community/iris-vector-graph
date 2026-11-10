@@ -379,7 +379,10 @@ ClassMethod TopK(k As %Integer, metric As %String = "cosine") As %String [ Priva
             Quit:docId=""
             Set:'first result = result _ ","
             Set first = 0
-            If (metric = "cosine") || (metric = "dot") {
+            If metric = "cosine" {
+                // the cosine: sk is 1 - cos (Distance). Before 4.7.0 (row 12) it was -sk, cos - 1: 0 for identical vectors
+                Set score = 1 - sk
+            } ElseIf metric = "dot" {
                 Set score = -sk
             } Else {
                 Set score = +sk
