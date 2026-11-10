@@ -30,6 +30,13 @@ Rows are `~/.cache/ivg-bench/rel-470/ranked.md`'s. Each row has a test task, wri
 - [ ] T016 [W1-TXN] Row 13 test: the caller's dicts compare equal to deep copies taken before the call, on both paths
 - [ ] T017 [W1-TXN] Row 13 fix: `bulk_create_nodes` adds `"id"` to the caller's own properties dict; copy before adding `id`
 
+- [ ] T083 [W1-ALG] Row 8b (found during 4.7.0, silent wrong): global `kg_PAGERANK` and `gds.pageRank.stream` take any damping/maxIterations; `PageRank.Run` scores a seed that is not a node at 1.0; `MCPTools.PPRWalk` returns "" on success; VecIndex with an unknown metric reports score = +distance; each test first
+- [ ] T084 [W1-ALG] Row 9b: `CALL ivg.ppr ... ORDER BY score DESC LIMIT k` passes k to kg_PPR's row limit (CALL 5.8 ms → 159 ms at 100k nodes when the zeros fill the 1000 cap)
+- [ ] T085 [W1-TXN] Row 3c (found during 4.7.0, silent): `BulkLoader.build_graph_globals` sends ObjectScript as SQL (-51) and never rebuilds ^KG; `attach_embeddings_to_table` silently embeds 0 rows when the node is missing; tests first
+- [ ] T080 [W1-TXN] Row 3b test (found during 4.7.0, same class as row 3): each remaining `conn.commit()` path (embed_edges, fhir.py, fhir_graph.py, rdf_export.py, snapshot.py, bulk_loader.py, bulk_create_edges' disable_indexes branch, arno_bridge.py, ledger enable/redact on from_connect): caller row + call + rollback leaves neither, or the call refuses with $TLEVEL > 0 and the caller's row is still uncommitted
+- [ ] T081 [W1-TXN] Row 3b fix: those paths join the caller's transaction or refuse it
+- [ ] T082 [W1-CY] Row 33b (found during 4.7.0, silent wrong): a clause after a handler procedure's YIELD (`CALL db.labels() YIELD label WITH label WHERE label = 'A' RETURN label`) was dropped and every label answered; it raises or is applied
+
 ## Wave 1: Cypher
 
 - [ ] T018 [W1-CY] Row 10 test: `create_node(... {"s": "30"})` and a Cypher-stored `'30'`: `properties(n)['s']` is the string `'30'` on the SQL and native paths, and a stored number stays a number
@@ -40,6 +47,8 @@ Rows are `~/.cache/ivg-bench/rel-470/ranked.md`'s. Each row has a test task, wri
 - [ ] T023 [W1-CY] Row 34 fix: `RETURN n.id, exists(n.name)` fails, SQLCODE -12
 - [ ] T024 [W1-CY] Row 35 test: `'30'` becomes 30 and reads back as the number; `'x'` becomes null as openCypher says
 - [ ] T025 [W1-CY] Row 35 fix: `SET n.p = toInteger(n.p)` fails, SQLCODE -23, nothing written
+
+- [ ] T086 [W1-CY] Row 35b (found during 4.7.0, silent): Python writers' equal-text retype; LedgerApply replay retype; `_translate_expr_for_update` silent `except` storing null; `SET n.q = n.missing + 1` leaving a NULL row; `toBoolean('yes')` answering true; tests first
 
 ## Wave 2: writers
 
@@ -77,7 +86,7 @@ Rows are `~/.cache/ivg-bench/rel-470/ranked.md`'s. Each row has a test task, wri
 ## Wave 3: value reading
 
 - [ ] T050 [W3-VAL] Row 21 test: `collect(n.on)` then `UNWIND`: `true`, `false` and `''` come back as themselves
-- [ ] T051 [W3-VAL] Row 21 fix: An unwound boolean or `''` of a list built at run time reads as `1`, `0` or null
+- [ ] T051 [W3-VAL] Row 21 fix (also `collect(exists(n.p))` and `collect(x IS NOT NULL)` answering [1, 0], found during 4.7.0): An unwound boolean or `''` of a list built at run time reads as `1`, `0` or null
 - [ ] T052 [W3-VAL] Row 22 test: `collect(e)` over `[[1], true]` answers `[[1], true]`
 - [ ] T053 [W3-VAL] Row 22 fix: An UNWIND of a run-time list reads a nested list, map or boolean as a string
 - [ ] T054 [W3-VAL] Row 23 test: store `'true'`, `'[1, 2]'` and `"\u0000"` through each writer: each reads back as the same string
