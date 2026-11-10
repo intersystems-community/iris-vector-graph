@@ -110,3 +110,37 @@ def test_load_networkx_builds_the_globals(conn):
     stats = BulkLoader(conn).load_networkx(g)
     assert stats["globals_built"] is True, stats
     assert sum(_kg_out(conn, f"{u}a", p, f"{u}b") > 0 for p in ("R470W", "RELATED_TO", "related_to")) == 1
+
+
+# ------------------------------------------------------------------------------- (ii) attach_embeddings_to_table
+
+
+@pytest.fixture
+def data_table(conn):
+    cur = conn.cursor()
+    try:
+        cur.execute(f"DROP TABLE {DATA_TABLE}")
+    except Exception:  # noqa: BLE001 - absent on the first run
+        pass
+    cur.execute(f"CREATE TABLE {DATA_TABLE} (k VARCHAR(80) PRIMARY KEY, txt VARCHAR(200))")
+    yield DATA_TABLE
+    cur.execute(f"DROP TABLE {DATA_TABLE}")
+
+
+def test_attach_embeddings_reports_rows_without_a_node(conn, data_table):
+    from iris_vector_graph import IRISGraphEngine
+
+    u = _uid()
+    label = f"L{u}"
+    cur = conn.cursor()
+    for i in range(3):
+        cur.execute(f"INSERT INTO {data_table} (k, txt) VALUES (?, ?)", [f"{u}{i}", f"text {i}"])
+    eng = IRISGraphEngine(conn, embedding_dimension=rr.DIM)
+    eng.embedder = Fake()
+    eng.map_sql_table(data_table, "k", label)
+    assert eng.create_node(f"{label}:{u}0")  # one of the three rows has its node
+    result = eng.attach_embeddings_to_table(label, ["txt"], force=True)
+    assert result["embedded"] == 1, result
+    assert result["no_node"] == 2, result
+    assert sorted(result["no_node_ids"]) == [f"{label}:{u}1", f"{label}:{u}2"], result
+    assert result["total"] == 3

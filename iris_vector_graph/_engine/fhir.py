@@ -286,6 +286,12 @@ class FhirMixin:
         A graph ID is collision avoidance, not an authorisation boundary: it is
         supplied by the caller, so it cannot decide what that caller may read
         (FR-032).
+
+        Each row's vector is stored for the node ``<label>:<id>`` in ``graph``, which must exist. Returns
+        ``embedded``, ``skipped`` (already embedded, without ``force``), ``no_node`` and ``no_node_ids`` (rows whose
+        node is not there, not embedded), ``errors`` and ``error_ids`` (rows whose text or vector failed, each logged),
+        and ``total`` (the table's rows). 4.7.0: a row without its node was logged and dropped, so a table none of
+        whose rows had nodes answered ``embedded: 0`` and nothing else; a summary WARNING now names both counts.
         """
         mapping = self.get_table_mapping(label)
         if not mapping:
@@ -304,11 +310,17 @@ class FhirMixin:
         n_total = len(all_rows)
         embedded = 0
         skipped = 0
+        no_node_ids: List[str] = []
+        error_ids: List[str] = []
         for batch_start in range(0, n_total, batch_size):
             batch = all_rows[batch_start : batch_start + batch_size]
+            present = self._nodes_present([f"{label}:{row[0]}" for row in batch], graph)
             for row in batch:
                 row_id = row[0]
                 node_id = f"{label}:{row_id}"
+                if node_id not in present:
+                    no_node_ids.append(node_id)
+                    continue
                 if not force:
                     if self.get_embedding(node_id, graph=graph, model_key=model_key):
                         skipped += 1
@@ -327,6 +339,7 @@ class FhirMixin:
                 except CallerTransactionOpenError:
                     raise  # a new route refused before anything was written: not a row's failure
                 except Exception as ex:
+                    error_ids.append(node_id)
                     logger.warning(
                         f"attach_embeddings_to_table: failed to embed {node_id}: {ex}"
                     )
@@ -337,7 +350,42 @@ class FhirMixin:
             )
             if progress_callback:
                 progress_callback(n_done, n_total)
-        return {"embedded": embedded, "skipped": skipped, "total": n_total}
+        if no_node_ids or error_ids:
+            logger.warning(
+                "attach_embeddings_to_table(%r): %d of %d rows not embedded: %d have no node %s:<id> in graph %r "
+                "(create the nodes first), %d failed",
+                label, len(no_node_ids) + len(error_ids), n_total, len(no_node_ids), label, graph, len(error_ids),
+            )
+        return {
+            "embedded": embedded,
+            "skipped": skipped,
+            "no_node": len(no_node_ids),
+            "no_node_ids": no_node_ids,
+            "errors": len(error_ids),
+            "error_ids": error_ids,
+            "total": n_total,
+        }
+
+    def _nodes_present(self, node_ids: List[str], graph: Optional[str]) -> set:
+        """The ids of ``node_ids`` that are nodes in ``graph`` (None: the default graph)."""
+        from iris_vector_graph.constants import DEFAULT_GRAPH
+        from iris_vector_graph.routing import graph_scope_predicate
+
+        graph_id = DEFAULT_GRAPH if graph is None else graph
+        found: set = set()
+        cur = self.conn.cursor()
+        try:
+            for i in range(0, len(node_ids), 500):
+                chunk = node_ids[i : i + 500]
+                cur.execute(
+                    f"SELECT %EXACT(node_id) FROM {self._t('nodes')} WHERE node_id IN ({', '.join('?' * len(chunk))})"
+                    f" AND {graph_scope_predicate('graph_id')}",
+                    chunk + [graph_id],
+                )
+                found.update(str(r[0]) for r in cur.fetchall())
+        finally:
+            cur.close()
+        return found
 
     def fhir_bridge_add(
         self,

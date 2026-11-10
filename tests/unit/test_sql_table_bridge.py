@@ -169,6 +169,8 @@ class TestSQLTableBridgeUnit:
         e.embed_text = MagicMock(return_value=[0.1] * 768)
         # Pinned (4.6.0 R276): the node check before the write read the exhausted fetchone and was passed over.
         e._assert_node_exists = MagicMock()
+        # every row's node is there (4.7.0: the rows without one are counted, tested below)
+        e._nodes_present = MagicMock(side_effect=lambda ids, graph: set(ids))
         result = e.attach_embeddings_to_table("Patient", ["Name"], force=False)
         assert result["skipped"] == 1
         assert result["embedded"] == 1
@@ -182,9 +184,28 @@ class TestSQLTableBridgeUnit:
         mock_cur.fetchall.return_value = [("P001", "Jane"), ("P002", "John")]
         e.conn.cursor.return_value = mock_cur
         e.embed_text = MagicMock(return_value=[0.1] * 768)
+        e._nodes_present = MagicMock(side_effect=lambda ids, graph: set(ids))  # every row's node is there
         result = e.attach_embeddings_to_table("Patient", ["Name"], force=True)
         assert result["embedded"] == 2
         assert result["skipped"] == 0
+
+    def test_attach_embeddings_counts_the_rows_without_a_node(self):
+        """4.7.0: a row whose node <label>:<id> is not there was logged and dropped (embedded 0, nothing else said).
+        tests/e2e/test_470_silent_writers_e2e.py has it against IRIS."""
+        e = self._make_engine()
+        e._table_mapping_cache = {
+            "Patient": {"label": "Patient", "sql_table": "T.Pat", "id_column": "PID", "prop_columns": None}
+        }
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = [("P001", "Jane"), ("P002", "John"), ("P003", "Ann")]
+        e.conn.cursor.return_value = mock_cur
+        e.embed_text = MagicMock(return_value=[0.1] * 768)
+        e.store_embedding = MagicMock()
+        e._nodes_present = MagicMock(return_value={"Patient:P002"})
+        result = e.attach_embeddings_to_table("Patient", ["Name"], force=True)
+        assert (result["embedded"], result["no_node"], result["errors"], result["total"]) == (1, 2, 0, 3)
+        assert result["no_node_ids"] == ["Patient:P001", "Patient:P003"]
+        assert [c.args[0] for c in e.store_embedding.call_args_list] == ["Patient:P002"]
 
     def test_attach_embeddings_raises_for_unmapped_label(self):
         from iris_vector_graph.engine import IRISGraphEngine
