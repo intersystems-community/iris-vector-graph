@@ -258,7 +258,7 @@ class BulkLoader:
             nodes: List of (node_id, attrs_dict) tuples; any other row raises ``ValueError``
                 before anything is written
             label_attr: Attribute name to extract as label (default: "namespace")
-            skip_existing: If True, skip nodes that already exist
+            skip_existing: If True, skip nodes that already exist: a property such a node has keeps its value
             use_noindex: If True, use %NOINDEX %NOCHECK for faster loading
 
         Returns:

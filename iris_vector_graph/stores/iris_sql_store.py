@@ -1209,7 +1209,8 @@ class IRISGraphStore:
     def write_nodes(self, nodes: list) -> IVGResult:
         """Write node rows, labels and properties in one transaction.
 
-        A duplicate row is skipped. Any other failure rolls the whole call back and
+        A duplicate row is skipped: a property the node already has keeps its value, whatever the new
+        one (as bulk_create_nodes; store_node replaces properties). Any other failure rolls the whole call back and
         raises GraphWriteError; before 4.5.0 it was logged and the node counted as
         written, with the rows before it committed.
         """
