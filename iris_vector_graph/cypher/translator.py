@@ -4871,6 +4871,10 @@ def _run_unwind_dml_rows(
             # 4.7.0: `UNWIND $p AS e ... SET n.f = e` raised UndefinedVariable, and the batch idiom `SET n += r` "takes a
             # map literal or a map parameter" (4.6.5 too): a SET value reads the row's value
             _iter_clauses = _bind_unwound_set_values(_iter_clauses, _ualias, _row_value_node(item_val))
+            # and a MATCH / WHERE compares the row's value as the same literal would: `true` beside a list was
+            # inlined as 1 (matching the node whose id is '1'), and `[1]` as raw SQL text (SQLCODE -12)
+            _iter_clauses = [_bind_variable(c, _ualias, _row_literal(item_val))
+                             if isinstance(c, (ast.MatchClause, ast.WhereClause)) else c for c in _iter_clauses]
         _bindings_changed(context)  # each row's writes follow the last row's
         for clause in _iter_clauses:
             if isinstance(clause, ast.UnwindClause):
@@ -7017,7 +7021,7 @@ def rewrite_ambiguous_param_unwind(cypher_query: ast.CypherQuery, params: Option
         return cypher_query
     if getattr(cypher_query, "writes", True) and (len(parts) == 1 or not all(
             isinstance(c, (ast.UnwindClause, ast.MatchClause, ast.WhereClause)) for c in parts[0].clauses) or not all(
-            isinstance(c, (ast.SetClause, ast.RemoveClause)) for p in parts for c in p.clauses
+            isinstance(c, (ast.SetClause, ast.RemoveClause, ast.DeleteClause)) for p in parts for c in p.clauses
             if isinstance(c, ast.UpdatingClause))):
         return cypher_query
     first = parts[0].clauses[0]
@@ -9107,6 +9111,17 @@ def _row_value_node(value):
         return value
     if isinstance(value, dict):
         return ast.MapLiteral(entries={k: ast.Literal(v) for k, v in value.items()})
+    return ast.Literal(value)
+
+
+def _row_literal(value):
+    """An UNWIND row's value as the parser would spell it as a literal: a list of literals, a map literal."""
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return value
+    if isinstance(value, (list, tuple)):
+        return ast.Literal([_row_literal(v) for v in value])
+    if isinstance(value, dict):
+        return ast.MapLiteral(entries={k: _row_literal(v) for k, v in value.items()})
     return ast.Literal(value)
 
 
@@ -14589,7 +14604,18 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
                     context.optional_null_row_labels.append(label)
     for k, v in node.properties.items():
         val_sql = _prop_value_sql(v, context)
-        if _is_node_id_key(k, v):
+        if k == "id" and _unwind_json_text(v, context) is not None and _unwind_bool_flag(v, context) is not None:
+            # 4.7.0: an UNWIND row whose kind is known only as the query runs: a string names the node, as `{id: 'x'}`
+            # does; a boolean, list or map is the `id` property, as `{id: true}` is (it compared true as the node id
+            # '1'). The property's join is a LEFT one: a string's node need not have it.
+            p_alias = context.next_alias("p")
+            context.join_clauses.append(
+                f"LEFT JOIN {_table('rdf_props')} {p_alias} "
+                f'ON {p_alias}.s = {alias}.node_id AND {p_alias}."key" = {context.add_join_param(k)}'
+            )
+            case = _row_value_case(f"{p_alias}.val", v, f"{alias}.node_id = {val_sql}", context, col_may_be_null=True)
+            context.where_conditions.append(f"({case} = 1)")
+        elif _is_node_id_key(k, v):
             context.where_conditions.append(f"{alias}.node_id = {val_sql}")
         else:
             if not optional:
@@ -17559,8 +17585,51 @@ def _value_key_prefix(value: str) -> Optional[str]:
         return None
 
 
+def _row_value_case(col_sql: str, var, plain_sql: str, context, col_may_be_null: bool = False) -> Optional[str]:
+    """`col = var` for an UNWIND variable whose rows carry their kind (CY_LIST_KINDS: a boolean flag and the JSON text),
+    as the same literal compares with a stored property: a boolean by its stored spellings (`_stored_bool_in`), a list
+    or map by its JSON text, anything else as `plain_sql` (4.7.0: `UNWIND $p AS e WITH e MATCH (n) WHERE n.id = e
+    DETACH DELETE n` over ['x', [1], true] compared true as its text 1). A CASE answering 1, 0 or NULL; None when
+    `var` has no kinds. `col_may_be_null`: a NULL `col` does not make the answer NULL (`plain_sql` reads another
+    column: a node id)."""
+    json_text = _unwind_json_text(var, context) if isinstance(var, ast.Variable) else None
+    flag = _unwind_bool_flag(var, context) if json_text is not None else None
+    if flag is None:
+        return None
+    value = translate_expression(var, context, segment="where")
+    unknown = f"{json_text} IS NULL OR {json_text} = 'null'" + ("" if col_may_be_null else f" OR {col_sql} IS NULL")
+    return (f"(CASE WHEN {unknown} THEN NULL "
+            f"WHEN {flag} = 1 THEN (CASE WHEN ({value} = 1 AND {_stored_bool_in(col_sql, True)}) "
+            f"OR ({value} = 0 AND {_stored_bool_in(col_sql, False)}) THEN 1 ELSE 0 END) "
+            f"WHEN SUBSTRING({json_text}, 1, 1) IN ('[', '{{') THEN (CASE WHEN {col_sql} = {json_text} THEN 1 ELSE 0 END) "
+            f"WHEN {plain_sql} THEN 1 ELSE 0 END)")
+
+
+def _typed_row_equality(expr, context) -> Optional[str]:
+    """`n.p = e` / `n.p <> e`, a stored property against an UNWIND variable whose rows carry their kind
+    (`_row_value_eq_sql`); None when it does not apply."""
+    if expr.operator not in (ast.BooleanOperator.EQUALS, ast.BooleanOperator.NOT_EQUALS) or len(expr.operands) != 2:
+        return None
+    a, b = expr.operands
+    for prop, var in ((a, b), (b, a)):
+        if not (isinstance(var, ast.Variable) and _is_stored_property(prop, context)):
+            continue
+        if _unwind_json_text(var, context) is None:
+            return None
+        col = translate_expression(prop, context, segment="where")
+        # a string or number element compares as it did: the stored text against the row's text
+        case = _row_value_case(col, var, f"{col} = {translate_expression(var, context, segment='where')}", context)
+        if case is None:
+            return None
+        return f"({case} = {1 if expr.operator == ast.BooleanOperator.EQUALS else 0})"
+    return None
+
+
 def _prop_eq_sql(col_sql: str, v, val_sql: str, context) -> str:
     """`{k: v}` in a pattern: `col = v`, or every stored spelling of a boolean or a number (4.6.0 R168)."""
+    typed = _row_value_case(col_sql, v, f"{col_sql} = {val_sql}", context)
+    if typed is not None:
+        return f"({typed} = 1)"
     b = _static_bool(v, context)
     if b is not None:
         return _stored_bool_in(col_sql, b)
@@ -18232,7 +18301,7 @@ def _translate_boolean_expression(expr, context, direct: bool) -> str:
         _folded, _fv = _cy_try_fold(expr)
         if _folded and (_fv is None or isinstance(_fv, bool)):
             return "NULL" if _fv is None else ("(1=1)" if _fv else "(1=0)")
-        _guarded = _kind_guarded_ordering(expr, context)
+        _guarded = _kind_guarded_ordering(expr, context) or _typed_row_equality(expr, context)
         if _guarded is not None:
             return _guarded
     if isinstance(expr, ast.ExistsExpression):

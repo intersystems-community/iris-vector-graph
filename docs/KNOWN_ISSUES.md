@@ -488,6 +488,26 @@ tables`), as such a write fails anyway (the entry below).
   writes one node per element; filter with a `WHERE` on a `MATCH`, or filter the list before passing it.
 - **Check:** the error names SQLCODE -119 and the query has a `WITH` between the `UNWIND` and the `CREATE`.
 
+### A boolean in an equality also matches a stored `'1'` or `'True'`
+
+- **Symptom:** an equality with a boolean against a stored property, `n.p = true`, `{p: true}`, `n.p = $b` with
+  `$b = true`, or an `UNWIND` element that is `true`, also matches a property holding the string `'1'` or `'True'`
+  (and `false` matches `'0'` and `'False'`). So `MATCH (n {id: true}) DETACH DELETE n` also deletes a node whose `id`
+  is the string `'1'`, and `UNWIND $p AS e MATCH (n) WHERE n.id = e DETACH DELETE n` with `true` in `$p` does too
+  (measured 2026-11-10, both routes). openCypher matches only a boolean.
+- **Cause:** a boolean and the string that spells it are stored as the same text (see "A stored string that spells
+  a boolean, a list or a map reads as one"), and IVG before 4.1.0 stored booleans as `'1'`/`'0'` (Cypher `CREATE`
+  and `SET`) or `'True'`/`'False'` (`create_node`, `create_edge`, the bulk loader). Since 4.1.0 a boolean is stored
+  as `'true'`/`'false'`, and an equality with one names every spelling, so rows those writers stored still match.
+  An `UNWIND` element compares as the same literal would (4.7.0; before, a `true` element was compared as `'1'`
+  only, missing a stored `true`, and a list element failed with SQLCODE -12).
+- **Versions:** 4.1.0 and later. A typed storage (4.8.0, if it goes ahead) is where this goes away.
+- **Workaround:** compare with the string you mean when the property holds strings (`n.id = '1'`, `{id: 'x'}`), and
+  keep booleans out of a parameter or list you match string ids with. To match only a boolean, check the stored text
+  too: `WHERE n.p = true AND toString(n.p) = 'true'`.
+- **Check:** `MATCH (n) WHERE n.p = true RETURN n.p, toString(n.p)` lists the rows the equality matches, with the
+  spelling each holds.
+
 ### A query that reads many properties prepares slowly
 
 - **Symptom:** the first run of a query that reads properties many times on the SQL route takes seconds to prepare.

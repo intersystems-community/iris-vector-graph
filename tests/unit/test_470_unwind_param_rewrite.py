@@ -122,7 +122,8 @@ def test_translate_to_sql_leaves_a_tree_as_it_is():
     ("UNWIND $p AS e WITH e MATCH (n {id: e}) REMOVE n.f", True),
     ("UNWIND $p AS e WITH e CREATE (:X {v: e})", False),  # the WITH form's CREATE fails -23
     ("UNWIND $p AS e WITH e WHERE e <> true MERGE (:X {m: e})", False),
-    ("UNWIND $p AS e WITH e MATCH (n {id: e}) DETACH DELETE n", False),
+    # a DELETE after a WITH reads the kinds too: it compared true as its text 1 and deleted the node whose id is '1'
+    ("UNWIND $p AS e WITH e MATCH (n {id: e}) DETACH DELETE n", True),
     ("UNWIND $p AS e MATCH (n {id: e}) SET n.f = e", False),  # runs row by row from the list: reads each as itself
 ])
 def test_which_writes_are_rewritten(q, rewritten):
