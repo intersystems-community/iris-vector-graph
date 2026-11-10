@@ -204,6 +204,9 @@ def _calls(engine, conn) -> dict:
         # nodes, rdf_labels, rdf_props, rdf_edges
         "rebuild_edge_indices": eq("rebuild_edge_indices(?)", ["Graph_KG"], 4, int),
         "ledger_records": ledger,
+        # 4.7.0 row 35 (421566c5) added it: Cypher's typed write of rdf_props.val. Another text than the stored one is
+        # the UPDATE's own write, so it answers the new value and writes nothing (Graph.KG.PropWrite.SetVal)
+        "Prop_Set": eq("Prop_Set(?, ?, ?)", ["1", "30", "31"], "31"),
     }
 
 
