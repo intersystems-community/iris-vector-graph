@@ -2581,7 +2581,7 @@ Register the connected namespace's FHIR repository as a named graph.
 def fhir_graph_schedule(graph: 'str', interval_s: 'Optional[int]' = None) -> 'Dict[str, Any]'
 ```
 
-Create or update the graph's Task Manager task; `None` keeps the registered interval.
+Create or update the graph's Task Manager task; `None` keeps the registered interval. A `task_id` that names another task (not this graph's sync task in this namespace: after a restore into another instance, say) raises `FHIRGraphError` naming it, with nothing changed (4.7.0; that task was rewritten).
 
 #### `fhir_graph_status`
 

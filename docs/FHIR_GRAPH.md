@@ -287,7 +287,10 @@ and a second caller gets `{"status": "busy"}` without touching anything.
 `fhir_graph_schedule` creates or updates one `Graph.KG.FHIRGraphSyncTask` per graph in
 the namespace. Task Manager counts minutes, so the interval rounds up:
 `max(1, ceil(interval_s / 60))`. `fhir_graph_status` reports the counts, the pending
-changes, the last sync and rebuild, the last error and the task ID.
+changes, the last sync and rebuild, the last error and the task ID. `fhir_graph_schedule` and
+`fhir_graph_unschedule` act only on the graph's own task: when the stored task ID names another task (after a
+snapshot restore into another instance, say), they raise `FHIRGraphError` naming it and change nothing; the
+[Admin Guide](ADMIN_GUIDE.md) says how to clear it (4.7.0).
 
 A sync of 500 changed resources took 1.15 s the first time and 0.44 s and 0.48 s the next two, against a 10 s budget.
 Each round PUT 250 Patients and 250 Observations referencing them through the FHIR server, then ran one

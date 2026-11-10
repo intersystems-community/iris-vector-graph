@@ -1000,9 +1000,10 @@ restore elsewhere does not bring: check that each `sql_table` and `via_table` ex
 instance the snapshot came from. After a restore into another instance, or once that task is deleted, `task_id` names
 a task that does not exist there, or another one. Check in `%SYS` with
 `SELECT ID, Name, NameSpace FROM %SYS.Task WHERE ID = <task_id>`: the graph's task is named `IVG FHIR sync <graph>`
-in this namespace. If it is not, clear the column first (`UPDATE Graph_KG.fhir_graphs SET task_id = NULL WHERE
-graph_id = '<graph>'`), then run `fhir_graph_schedule(graph)`, which creates a new task. Don't call
-`fhir_graph_schedule` or `fhir_graph_unschedule` before clearing it: they update or delete whichever task has that ID.
+in this namespace. If it is not, clear the column (`UPDATE Graph_KG.fhir_graphs SET task_id = NULL WHERE
+graph_id = '<graph>'`), then run `fhir_graph_schedule(graph)`, which creates a new task. Until then
+`fhir_graph_schedule` and `fhir_graph_unschedule` raise `FHIRGraphError` naming the task and change nothing (4.7.0;
+before, they rewrote or deleted whichever task had that ID).
 
 A snapshot made through the HTTP server goes to `IVG_SNAPSHOT_DIR`, the temporary directory unless you set it
 ([known issue](KNOWN_ISSUES.md#snapshots-made-through-the-rest-api-land-in-the-temporary-directory)).

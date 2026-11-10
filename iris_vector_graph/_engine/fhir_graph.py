@@ -290,7 +290,9 @@ class FhirGraphMixin:
 
     def fhir_graph_schedule(self, graph: str, interval_s: Optional[int] = None) -> Dict[str, Any]:
         """Create or update the graph's Task Manager task; ``None`` keeps the
-        registered interval."""
+        registered interval. A ``task_id`` that names another task (not this graph's sync task in this namespace:
+        after a restore into another instance, say) raises ``FHIRGraphError`` naming it, with nothing changed
+        (4.7.0; that task was rewritten)."""
         if interval_s is not None and (not isinstance(interval_s, int) or interval_s < 60):
             raise ValueError(
                 f"interval_s must be at least 60 (Task Manager counts minutes), got {interval_s!r}"
@@ -301,7 +303,9 @@ class FhirGraphMixin:
         """Delete the graph's Task Manager task, if it has one, and clear its ``task_id``.
 
         Returns ``{"status": "unscheduled", "graph_id", "task_id", "removed"}``; ``removed`` is ``False``
-        when there was no task. The graph stays registered and ``fhir_graph_sync`` still works.
+        when there was no task. The graph stays registered and ``fhir_graph_sync`` still works. A ``task_id`` that
+        names another task raises ``FHIRGraphError`` naming it, with nothing deleted or cleared (4.7.0; that task was
+        deleted).
         """
         return self._fhir_call("Unschedule", _fhir_graph(graph))
 

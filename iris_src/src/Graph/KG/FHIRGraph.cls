@@ -679,6 +679,8 @@ ClassMethod Schedule(pGraph As %String, pIntervalS As %Integer = 0) As %String
 		Set tTask = ""
 		If (tCtx.TaskId '= "") && ##class(%SYS.Task).%ExistsId(tCtx.TaskId) {
 			Set tTask = ##class(%SYS.Task).%OpenId(tCtx.TaskId)
+			// 4.7.0 row 26c: only the graph's own task is rewritten
+			$$$ThrowOnError(..CheckOwnTask(tTask, tCtx.TaskId, pGraph, "fhir_graph_schedule"))
 		}
 		If '$IsObject(tTask) {
 			Set tTask = ##class(%SYS.Task).%New()
@@ -718,6 +720,9 @@ ClassMethod Unschedule(pGraph As %String) As %String
 		Set tCtx = ..Open(pGraph)
 		Set tRemoved = 0
 		If (tCtx.TaskId '= "") && ##class(%SYS.Task).%ExistsId(tCtx.TaskId) {
+			// 4.7.0 row 26c: only the graph's own task is deleted
+			Set tTask = ##class(%SYS.Task).%OpenId(tCtx.TaskId)
+			$$$ThrowOnError(..CheckOwnTask(tTask, tCtx.TaskId, pGraph, "fhir_graph_unschedule"))
 			$$$ThrowOnError(##class(%SYS.Task).%DeleteId(tCtx.TaskId))
 			Set tRemoved = 1
 		}
@@ -729,6 +734,37 @@ ClassMethod Unschedule(pGraph As %String) As %String
 		Set tOut = ..Err(tEx)
 	}
 	Return tOut
+}
+
+/// An error when pTask, the task fhir_graphs.task_id names (pTaskId), is not FHIR graph pGraph's sync task in this
+/// namespace: its class Graph.KG.FHIRGraphSyncTask, its namespace $NAMESPACE, its GraphId setting pGraph. The task
+/// ID is restored with the registration (snapshots carry fhir_graphs), so after a restore into another instance, or
+/// once the graph's task was deleted and its ID reused, it names another task, which Schedule rewrote and Unschedule
+/// deleted (4.6.5). pCall names the method refused, for the message.
+ClassMethod CheckOwnTask(pTask As %SYS.Task, pTaskId As %String, pGraph As %String, pCall As %String) As %Status [ Private ]
+{
+	Set tSC = $$$OK
+	Set tWhy = ""
+	If pTask.TaskClass '= "Graph.KG.FHIRGraphSyncTask" {
+		Set tWhy = "it runs " _ pTask.TaskClass
+	} ElseIf pTask.NameSpace '= $NAMESPACE {
+		Set tWhy = "it runs in namespace " _ pTask.NameSpace
+	} Else {
+		Set tSettings = pTask.Settings
+		Set tGraph = ""
+		For tI = 1:2:$ListLength(tSettings) {
+			If $ListGet(tSettings, tI) = "GraphId" {
+				Set tGraph = $ListGet(tSettings, tI + 1)
+			}
+		}
+		If tGraph '= pGraph {
+			Set tWhy = "it syncs FHIR graph " _ tGraph
+		}
+	}
+	If tWhy '= "" {
+		Set tSC = $$$ERROR($$$GeneralError, "fhir_graphs.task_id of " _ pGraph _ " names Task Manager task " _ pTaskId _ " ('" _ pTask.Name _ "'), which is not this graph's sync task: " _ tWhy _ ". Nothing was changed. Check that task, clear the column (UPDATE Graph_KG.fhir_graphs SET task_id = NULL WHERE graph_id = '" _ pGraph _ "'), and call " _ pCall _ " again")
+	}
+	Quit tSC
 }
 
 // ===================================================================== concepts
