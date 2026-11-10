@@ -15,6 +15,8 @@ from iris_vector_graph.constants import BULK_CHUNK_SIZE as _BULK_CHUNK_SIZE
 from iris_vector_graph.constants import DEFAULT_GRAPH
 from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED_ROW
 from iris_vector_graph._write_txn import is_duplicate as _is_duplicate
+from iris_vector_graph._batch_check import check_rowcount, missing_rows, raise_if_missing
+from iris_vector_graph._widths import KEY_WIDTH, LABEL_WIDTH, NODE_ID_WIDTH, PREDICATE_WIDTH, check_width
 from iris_vector_graph._write_txn import WriteTxn, caller_transaction_level, write_txn
 from iris_vector_graph.errors import GraphWriteError, IVGError
 from iris_vector_graph.prop_values import decode_typed_text, prop_value, read_node_value
@@ -229,6 +231,10 @@ def _check_create_edges(edges: List[Any]) -> None:
                 "store; it writes source_id, predicate, target_id and graph only. Use create_edge(..., weight=..., "
                 "qualifiers=...) for an edge with properties"
             )
+        # 4.7.0 row 14: a refused row of a batch was skipped without an error (iris_vector_graph/_widths.py)
+        check_width("bulk_create_edges", "predicate", e["predicate"], PREDICATE_WIDTH, f"edge {i} ")
+        for end in ("source_id", "target_id"):
+            check_width("bulk_create_edges", end, e[end], NODE_ID_WIDTH, f"edge {i} ")
 
 
 _CREATE_NODE_SHAPE = "a dict with 'id' and optionally 'labels', 'properties' and 'graph'"
@@ -247,6 +253,13 @@ def _check_create_nodes(nodes: List[Any]) -> None:
                 f"bulk_create_nodes: node {i} has key(s) {', '.join(repr(k) for k in unknown)}, which it does not "
                 f"store; a node is {_CREATE_NODE_SHAPE}"
             )
+        # 4.7.0 row 14: a refused row of a batch was skipped without an error (iris_vector_graph/_widths.py)
+        where = f"node {i} "
+        check_width("bulk_create_nodes", "id", n["id"], NODE_ID_WIDTH, where)
+        for label in n.get("labels") or []:
+            check_width("bulk_create_nodes", "label", label, LABEL_WIDTH, where)
+        for key in n.get("properties") or {}:
+            check_width("bulk_create_nodes", "property key", key, KEY_WIDTH, where)
 
 
 def _server_loader_node(node: Dict[str, Any]) -> Dict[str, Any]:
@@ -975,14 +988,11 @@ class NodesEdgesMixin:
 
         Returns:
             True if the node was created; False if it already existed in that graph (nothing is
-            added to it: not its labels, not its properties), or if the node was not created because
-            IRIS refused its label with SQLCODE -104, which a label over 128 characters gets when
-            it is the only label (``labels=["L" * 200]``). The return value does not tell the two
-            apart; ``get_node`` does. With a second label beside the long one, the call answers
-            True, creates the node, and keeps only the labels IRIS accepted (docs/KNOWN_ISSUES.md,
-            "A label longer than 128 characters").
+            added to it: not its labels, not its properties).
 
         Raises:
+            ValueError: a label or property key over 128 characters, before anything is written (4.7.0: one long
+                label made the call answer False, and a long label beside another answered True and dropped it).
             GraphWriteError: IRIS refused the write (for example SQLCODE -99 for a user
                 without INSERT on the IVG Schema); the transaction is rolled back, so
                 nothing is written. Before 4.6.0 this answered False, like a duplicate.
@@ -993,6 +1003,11 @@ class NodesEdgesMixin:
         """
         _ledger_check(self, "create_node")
         NodeIdInput(node_id=node_id)
+        # 4.7.0 row 14: the labels and properties go in executemany, which skipped a refused row of several
+        for label in labels or []:
+            check_width("create_node", "label", label, LABEL_WIDTH)
+        for key in properties or {}:
+            check_width("create_node", "property key", key, KEY_WIDTH)
         cursor = self.conn.cursor()
         # 4.6.4: IVG's own part, nested in the caller's transaction when there is one (_write_txn)
         txn = WriteTxn(self.conn, self._ivg_schema, cursor)
@@ -1019,6 +1034,9 @@ class NodesEdgesMixin:
             _children_scoped = getattr(self, "_children_have_graph_id", True)
 
             if labels:
+                # 4.7.0 row 14: once each (a repeat was refused -119 and skipped), and every row counted: the driver's
+                # executemany skips a refused row of several without raising (iris_vector_graph/_batch_check.py)
+                labels = list(dict.fromkeys(labels))
                 if _children_scoped:
                     cursor.executemany(
                         f"INSERT INTO {self._t('rdf_labels')} (graph_id, s, label) VALUES (?, ?, ?)",
@@ -1029,6 +1047,7 @@ class NodesEdgesMixin:
                         f"INSERT INTO {self._t('rdf_labels')} (s, label) VALUES (?, ?)",
                         [[node_id, label] for label in labels],
                     )
+                check_rowcount(cursor, labels, "label", self.conn)
 
             props = dict(properties) if properties else {}
             if "id" not in props:
@@ -1059,6 +1078,7 @@ class NodesEdgesMixin:
             else:
                 prop_sql = f'INSERT INTO {self._t("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?)'
             cursor.executemany(prop_sql, prop_data)
+            check_rowcount(cursor, prop_data, "property", self.conn)  # the node is new, so the guard skips none
 
             txn.commit()
             return True
@@ -1562,6 +1582,26 @@ class NodesEdgesMixin:
         """
         return self.erase_graph(graph_id)
 
+    def _check_nodes_written(self, cursor, writer: str, nodes: List[Dict[str, Any]]) -> None:
+        """GraphWriteError naming a node, label or property row of ``nodes`` that is not in the tables (4.7.0 row 14:
+        the driver's executemany skipped a refused row of several without raising)."""
+        wanted_nodes, wanted_labels, wanted_props = [], [], []
+        for n in nodes:
+            if not n.get("id"):
+                continue
+            g = n.get("graph") or ""
+            wanted_nodes.append((g, n["id"]))
+            wanted_labels.extend((g, n["id"], label) for label in n.get("labels") or [])
+            props = {"id": n["id"], **(n.get("properties") or {})}
+            wanted_props.extend((g, n["id"], k) for k, v in props.items() if v is not None)
+        for table, columns, wanted, what in (
+            ("nodes", ("graph_id", "node_id"), wanted_nodes, "node"),
+            ("rdf_labels", ("graph_id", "s", "label"), wanted_labels, "label"),
+            ("rdf_props", ("graph_id", "s", "key"), wanted_props, "property"),
+        ):
+            missing = missing_rows(cursor, self._t(table), columns, wanted, self.conn)
+            raise_if_missing(writer, missing, what)
+
     def bulk_create_nodes(
         self,
         nodes: List[Dict[str, Any]],
@@ -1598,11 +1638,12 @@ class NodesEdgesMixin:
             The IDs of the nodes with an ``id``, in the order given, including any that already
             existed. A node whose ``id`` already exists in its graph is merged, not replaced: it
             gains the labels it lacked and the properties it lacked, keeps the value of every
-            property it has, and its ID is returned all the same. A label over 128 characters is
-            refused by IRIS and skipped without an error: the node's ID is returned and the node
-            exists without that label. Only when it is the call's one label row (one node with one
-            label) does the call raise ``DataError``, writing nothing (docs/KNOWN_ISSUES.md,
-            "A label longer than 128 characters").
+            property it has, and its ID is returned all the same.
+
+        Raises:
+            ValueError: an id over 256 characters, or a label or property key over 128, naming the node, before
+                anything is written (4.7.0: IRIS refused the row and the driver's executemany skipped it, so the
+                call returned every id with the label missing).
         """
         _ledger_check(self, "bulk_create_nodes")
         if not nodes:
@@ -1662,6 +1703,8 @@ class NodesEdgesMixin:
                             f"BulkIngestNodesSQL wrote {count} of {len(chunk)} nodes"
                         )
                     created.extend(c["id"] for c in chunk)
+                # 4.7.0 row 14: as the batch path checks (a refused label was skipped there too)
+                self._check_nodes_written(txn.cursor, "bulk_create_nodes", nodes)
                 txn.commit()
                 return created
             except Exception as e:
@@ -1761,6 +1804,11 @@ class NodesEdgesMixin:
             # Phase 3: Properties
             if all_props:
                 cursor.executemany(prop_sql, all_props)
+
+            # 4.7.0 row 14: every row the batch should have left, read back (the guarded INSERTs write nothing for a
+            # row already there, so their counts cannot tell a refusal from a duplicate)
+            if _graph_col and _children_scoped:
+                self._check_nodes_written(cursor, "bulk_create_nodes", nodes)
 
             # One transaction (4.6.4): the nodes were committed before their labels, so a failed label left them
             txn.commit()
@@ -1883,6 +1931,16 @@ class NodesEdgesMixin:
                         s, p, o = e["source_id"], e["predicate"], e["target_id"]
                         edge_params.append([s, p, o, s, p, o])
                 cursor.executemany(edge_sql, edge_params)
+
+            # 4.7.0 row 14: every edge read back; the guarded INSERT's count cannot tell a refusal from a duplicate,
+            # and the driver's executemany skips a refused row of several without raising
+            wanted_edges = [
+                (e.get("graph", graph) or "", e["source_id"], e["predicate"], e["target_id"]) for e in edges
+            ]
+            missing = missing_rows(
+                cursor, self._t("rdf_edges"), ("graph_id", "s", "p", "o_id"), wanted_edges, self.conn
+            )
+            raise_if_missing("bulk_create_edges", missing, "edge")
 
             # ADR-0009 / spec 254 FR-002: an explicit write of a triple whose row a temporal edge
             # asserted adopts that row, as create_edge does, so purging the triple's timestamps

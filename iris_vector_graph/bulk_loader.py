@@ -27,6 +27,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from iris_vector_graph._batch_check import BatchShortfall, check_rowcount
+from iris_vector_graph._widths import KEY_WIDTH, LABEL_WIDTH, NODE_ID_WIDTH, PREDICATE_WIDTH, check_width
 from iris_vector_graph._write_txn import refuse_in_caller_transaction
 from iris_vector_graph.exceptions import BulkLoadError
 from iris_vector_graph.prop_values import prop_value
@@ -107,6 +109,9 @@ class BulkLoader:
             batch = params[batch_start : batch_start + self.batch_size]
             try:
                 cursor.executemany(sql, batch)
+                # 4.7.0 row 14: the driver skips a refused row of several without raising; a short count sends the
+                # batch down the row path below, which tells a duplicate from a refusal row by row
+                check_rowcount(cursor, batch, label or "batch", self.conn)
                 if commit_per_batch:
                     self.conn.commit()
                 inserted += len(batch)
@@ -116,7 +121,7 @@ class BulkLoader:
                 err_str = str(e)
                 # `<LIST ERROR>` hides the SQLCODE (`execute_decoded`); the row path
                 # below recovers it and decides duplicate or failure row by row.
-                if not _is_duplicate(err_str) and not is_list_error(e):
+                if not _is_duplicate(err_str) and not is_list_error(e) and not isinstance(e, BatchShortfall):
                     logger.error(f"{label} batch at {batch_start} failed: {e}")
                     raise BulkLoadError(label or "Batch", inserted, len(batch), err_str)
                 for row in batch:
@@ -266,6 +271,17 @@ class BulkLoader:
         """
         self._refuse_in_caller_transaction("BulkLoader.load_nodes()")
         _check_rows("load_nodes", nodes, 2, "(node_id, attrs_dict)")
+        # 4.7.0 row 14: a refused row of a batch was skipped without an error (iris_vector_graph/_widths.py)
+        for i, (nid, attrs) in enumerate(nodes):
+            if nid in (None, ""):  # %NOCHECK skips the NOT NULL check (see load_edges)
+                raise ValueError(f"BulkLoader.load_nodes: node {i} has no id. Nothing was written")
+            check_width("BulkLoader.load_nodes", "id", nid, NODE_ID_WIDTH, f"node {i} ")
+            val = attrs.get(label_attr) if label_attr else None
+            for lbl in ([val] if isinstance(val, str) else val or []):
+                check_width("BulkLoader.load_nodes", "label", lbl, LABEL_WIDTH, f"node {i} ")
+            for key in attrs:
+                if key not in (label_attr, "namespace"):
+                    check_width("BulkLoader.load_nodes", "property key", key, KEY_WIDTH, f"node {i} ")
         cursor = self.conn.cursor()
         t0 = time.time()
         hint = " %NOINDEX %NOCHECK" if use_noindex else ""
@@ -383,6 +399,17 @@ class BulkLoader:
         """
         self._refuse_in_caller_transaction("BulkLoader.load_edges()")
         _check_rows("load_edges", edges, 4, "(source_id, predicate, target_id, qualifiers_dict)")
+        for i, (src, pred, tgt, _quals) in enumerate(edges):  # 4.7.0 row 14, as load_nodes
+            if src in (None, "") or pred in (None, "") or tgt in (None, ""):
+                # %NOCHECK skips the NOT NULL check: a NULL predicate was written, and every DELETE of rdf_edges in
+                # the namespace then failed (SQLCODE -415, <SUBSCRIPT> in the row's index entry)
+                raise ValueError(
+                    f"BulkLoader.load_edges: edge {i} {(src, pred, tgt)!r} has no source, predicate or target. "
+                    "Nothing was written"
+                )
+            check_width("BulkLoader.load_edges", "predicate", pred, PREDICATE_WIDTH, f"edge {i} ")
+            for end in (src, tgt):
+                check_width("BulkLoader.load_edges", "node id", end, NODE_ID_WIDTH, f"edge {i} ")
         cursor = self.conn.cursor()
         t0 = time.time()
         n_edges = 0

@@ -40,47 +40,6 @@ engine.execute_cypher("USE GRAPH 'trips' MATCH (:City {id: 'bos'})-[r:TRIP]->(:C
 # → [[2]]
 ```
 
-### A label longer than 128 characters is refused, and the Python writers answer it differently
-
-- **Symptom:** `Graph_KG.rdf_labels.label` holds 128 characters. IRIS refuses a longer label with SQLCODE -104 (`Field
-validation failed in INSERT`). The driver's `executemany` raises that when the statement has one row and skips the
-  refused row without raising when it has more, so what a writer does depends on how many labels it sent:
-  - `create_node(id, labels=[long])` returns **False** and writes nothing: the node is not created. False is also what
-    it returns for a node that already exists, so the return value cannot tell the two apart.
-  - `create_node(id, labels=["A", long])` (any other label with it) returns **True**, creates the node, and keeps
-    only the labels IRIS accepted: `A`. The long one is missing.
-  - `store_node(id, labels=[long])`, alone or with other labels, raises `GraphWriteError` (SQLCODE -104) and writes
-    nothing.
-  - `bulk_create_nodes([{"id": id, "labels": [long]}])`, one node, raises `DataError` and writes nothing. With two or
-    more nodes, or a node with a second label, it returns every id as if all had been written: the node exists, and
-    has no label (or only its other labels). Measured the same with the classes deployed (the server loader) and
-    without (batch SQL).
-  - Not measured: the other batch writers (`load_networkx`, `import_graph_ndjson`, `BulkLoader`).
-- **Versions:** all 4.x. A fix is planned for 4.7.0.
-- **Workaround:** keep labels to 128 characters or fewer, and check them before a write. After a batch, count the
-  labels: a node you meant to find with `MATCH (n:Label)` that is not found has lost its label.
-- **Check:** the node's labels, or a `MATCH` by the label.
-
-```python
-engine.create_node("big1", labels=["L" * 200])
-# → False
-engine.create_node("big2", labels=["A", "L" * 130])
-# → True
-engine.get_node("big2")["labels"]
-# → ['A']
-engine.bulk_create_nodes([{"id": "big3", "labels": ["A"]}, {"id": "big4", "labels": ["L" * 200]}])
-# → ['big3', 'big4']
-engine.get_node("big4")["labels"]
-# → []
-failure = None
-try:
-    engine.bulk_create_nodes([{"id": "big5", "labels": ["L" * 200]}])
-except Exception as exc:
-    failure = type(exc).__name__
-failure
-# → 'DataError'
-```
-
 ### A query over every graph cannot say which graph a row came from
 
 - **Symptom:** without `USE GRAPH` a query reads every graph, and the same ID in two graphs is two nodes, but no
