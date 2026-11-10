@@ -134,7 +134,8 @@ class TestNamedPathsE2E:
         if isinstance(ns, str):
             ns = json.loads(ns)
         assert isinstance(ns, list)
-        assert self.nodes[0] in ns
+        # each node itself, as RETURN [a, b] spells it (4.7.0 row 20: the ids)
+        assert ns[0]["_id"] == self.nodes[0] and all(set(n) == {"_id", "_labels", "_props"} for n in ns)
 
     def test_relationships_p(self):
         """T027"""
@@ -163,7 +164,7 @@ class TestNamedPathsE2E:
             ns = row["ns"]
             if isinstance(ns, str):
                 ns = json.loads(ns)
-            assert node0 in ns
+            assert node0 in [n["_id"] for n in ns]  # the nodes themselves since 4.7.0 (row 20)
 
     def test_no_match_returns_empty(self):
         """T029"""
