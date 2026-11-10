@@ -4,7 +4,7 @@ Integration tests targeting uncovered paths in _engine/schema.py.
 Covers:
   - run_inference rdfs + owl rules (L603-726)
   - retract_inference (L732-748)
-  - reify_edge exception path (L792-795)
+  - reify_edge failure inside its WriteTxn (4.7.0)
   - get_reifications exception path (L818-820)
   - delete_reification exception path (L843-846)
   - rebuild_kg / rebuild_nkg deprecation warnings (L531-550)
@@ -119,28 +119,51 @@ class TestReifyEdgeException:
         result = sc_eng.reify_edge(edge_id, props={"confidence": "0.8"})
         assert result is not None
 
-    def test_reify_edge_exception_path(self, sc_eng):
-        # Force exception in reify_edge to hit L792-795
+    @staticmethod
+    def _left(eng, reifier):
+        cur = eng.conn.cursor()
+        counts = []
+        for sql in (
+            "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = ?",
+            "SELECT COUNT(*) FROM Graph_KG.rdf_labels WHERE s = ?",
+            "SELECT COUNT(*) FROM Graph_KG.rdf_props WHERE s = ?",
+            "SELECT COUNT(*) FROM Graph_KG.rdf_reifications WHERE reifier_id = ?",
+        ):
+            cur.execute(sql, [reifier])
+            counts.append(int(cur.fetchone()[0]))
+        return counts
+
+    @pytest.mark.parametrize("failure", ("commit", "refused_property"))
+    def test_reify_edge_exception_path(self, sc_eng, failure):
+        """4.7.0: reify_edge writes in one WriteTxn (it called conn.commit(), which the old version of this test
+        patched; that path is gone, so the test exercised nothing). A failure inside it, its commit or a property row
+        IRIS refuses after the reifier node, labels and link are written, raises GraphWriteError and leaves none of
+        them."""
+        from iris_vector_graph._write_txn import WriteTxn
+        from iris_vector_graph.errors import GraphWriteError
+
         cursor = sc_eng.conn.cursor()
-        cursor.execute(
-            "SELECT edge_id FROM Graph_KG.rdf_edges WHERE s='sc_0' LIMIT 1"
-        )
-        row = cursor.fetchone()
-        if not row:
-            pytest.skip("No edge available")
-        edge_id = row[0]
-        # Patch conn.commit to raise after insert
-        original_commit = sc_eng.conn.commit
-        call_count = [0]
-        def bad_commit():
-            call_count[0] += 1
-            if call_count[0] == 1:
-                raise RuntimeError("forced commit fail")
-            return original_commit()
-        with patch.object(sc_eng.conn, "commit", side_effect=bad_commit):
-            result = sc_eng.reify_edge(edge_id, props={"k": "v"})
-        # None expected when exception hits
-        assert result is None or isinstance(result, str)
+        cursor.execute("SELECT edge_id FROM Graph_KG.rdf_edges WHERE s = 'sc_0' AND p = 'SC_REL'")
+        edge_id = int(cursor.fetchone()[0])
+        reifier = f"sc_reifier_{failure}"
+        assert self._left(sc_eng, reifier) == [0, 0, 0, 0]
+        if failure == "commit":
+            real_commit = WriteTxn.commit
+
+            def commit(txn):
+                # reify_edge's own commit: the one that runs once its link row is written (create_node's runs first)
+                if self._left(sc_eng, reifier)[3]:
+                    raise RuntimeError("forced commit failure")
+                return real_commit(txn)
+
+            with patch.object(WriteTxn, "commit", autospec=True, side_effect=commit):
+                with pytest.raises(GraphWriteError, match="reify_edge failed.*forced commit failure"):
+                    sc_eng.reify_edge(edge_id, reifier_id=reifier, props={"k": "v"})
+        else:
+            with pytest.raises(GraphWriteError, match="reify_edge failed"):
+                sc_eng.reify_edge(edge_id, reifier_id=reifier, props={"k": "v", "K" * 129: "v"})
+        assert self._left(sc_eng, reifier) == [0, 0, 0, 0], "a refused reify_edge left rows behind"
+        assert sc_eng.reify_edge(edge_id, reifier_id=reifier, props={"k": "v"}) == reifier  # nothing in the way
 
     def test_reify_nonexistent(self, sc_eng):
         result = sc_eng.reify_edge(999999999)
