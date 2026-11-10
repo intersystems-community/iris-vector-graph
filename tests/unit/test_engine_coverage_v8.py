@@ -183,14 +183,14 @@ class TestLoadNetworkx:
         call_args = eng.create_node.call_args
         assert call_args[1]["labels"] == ["GO"]
 
-    def test_long_property_value_truncated(self):
-        """Values >60000 chars are truncated before create_node."""
+    def test_long_property_value_stored_whole(self):
+        """4.7.0 row 3d: a value up to the column's 64000 characters reaches create_node whole (it was cut to 60000)."""
         eng = self._engine_with_stubs()
-        big_val = "x" * 70000
+        big_val = "x" * 62000
         G = FakeNxGraph([("n1", {"type": "Thing", "desc": big_val})], [])
         eng.load_networkx(G, auto_sync=False)
         _, kwargs = eng.create_node.call_args
-        assert len(kwargs["properties"]["desc"]) == 60000
+        assert kwargs["properties"]["desc"] == big_val
 
     def test_auto_sync_called_when_nodes_added(self):
         eng = self._engine_with_stubs()

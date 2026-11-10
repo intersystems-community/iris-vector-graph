@@ -64,17 +64,23 @@ class TestLoadNetworkxProgressCallback:
                                         progress_callback=lambda d, t: calls.append((d, t)))
         assert isinstance(result, dict)
 
-    def test_load_networkx_long_prop_truncated(self, snap_eng):
+    def test_load_networkx_long_prop_stored_whole(self, snap_eng):
+        """4.7.0 row 3d: whole up to rdf_props.val's 64000 characters (it was cut to 60000), refused beyond."""
         try:
             import networkx as nx
         except ImportError:
             pytest.skip("networkx not installed")
 
         G = nx.DiGraph()
-        huge_str = "x" * 70000
+        huge_str = "x" * 62000
         G.add_node("trunc_node", namespace="TR", huge=huge_str)
-        result = snap_eng.load_networkx(G, label_attr="namespace")
-        assert isinstance(result, dict)
+        assert snap_eng.load_networkx(G, label_attr="namespace")["nodes"] == 1
+        cur = snap_eng.conn.cursor()
+        cur.execute("SELECT val FROM Graph_KG.rdf_props WHERE s = 'trunc_node' AND \"key\" = 'huge'")
+        assert cur.fetchone()[0] == huge_str
+        G.add_node("trunc_node_2", namespace="TR", huge="x" * 64001)
+        with pytest.raises(ValueError, match="trunc_node_2.*64001 characters"):
+            snap_eng.load_networkx(G, label_attr="namespace")
 
     def test_load_networkx_auto_sync_false(self, snap_eng):
         try:

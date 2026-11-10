@@ -230,3 +230,61 @@ def test_bulk_loader_refuses_a_value_wider_than_the_column(conn):
     with pytest.raises(ValueError, match=r"BulkLoader.load_nodes: node 1 property 'doc' value .*64001 characters.* 64000"):
         BulkLoader(conn).load_nodes([(f"{u}a", {"namespace": "T470D"}), (f"{u}b", {"doc": "v" * 64001})])
     assert _nodes(conn, u) == 0
+
+
+def _engine_sql(conn):
+    from iris_vector_graph import IRISGraphEngine
+
+    return IRISGraphEngine(conn, embedding_dimension=rr.DIM)
+
+
+def test_load_networkx_stores_a_long_value_whole(conn):
+    """The engine's load_networkx cut every text value to 60000 characters without a word (row 3d)."""
+    import networkx as nx
+
+    u = _uid()
+    g = nx.DiGraph()
+    g.add_node(f"{u}a", type="T470D", doc="v" * 62000)
+    _engine_sql(conn).load_networkx(g, auto_sync=False)
+    assert _val(conn, f"{u}a", "doc") == "v" * 62000
+
+
+def test_load_networkx_refuses_a_value_wider_than_the_column_and_writes_nothing(conn):
+    import networkx as nx
+
+    u = _uid()
+    g = nx.DiGraph()
+    g.add_node(f"{u}a", type="T470D", doc="ok")
+    g.add_node(f"{u}b", type="T470D", doc="v" * 64001)
+    with pytest.raises(ValueError, match=r"load_networkx: node .*property 'doc' value .*64001 characters.* 64000"):
+        _engine_sql(conn).load_networkx(g, auto_sync=False)
+    assert _nodes(conn, u) == 0
+
+
+def _rdf(u, literal_len) -> str:
+    from pathlib import Path
+
+    scratch = Path.home() / ".cache" / "ivg-bench" / "rel-470" / "txn-scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    path = scratch / f"{u}.nt"
+    path.write_text(
+        f'<urn:{u}:a> <urn:p:name> "A" .\n'
+        f"<urn:{u}:a> <urn:p:R470D> <urn:{u}:b> .\n"
+        f'<urn:{u}:b> <http://example.org/p/doc> "{"v" * literal_len}" .\n'
+    )
+    return str(path)
+
+
+def test_import_rdf_stores_a_long_literal_whole(conn):
+    """import_rdf cut every literal to 64000 characters without a word; one that fits is stored whole."""
+    u = _uid()
+    _engine_sql(conn).import_rdf(_rdf(u, 62000), format="nt")
+    assert _val(conn, f"urn:{u}:b", "doc") == "v" * 62000
+
+
+def test_import_rdf_refuses_a_literal_wider_than_the_column_and_writes_nothing(conn):
+    """On 4.6.5 the 64001-character literal was stored as its first 64000, and the call reported it written."""
+    u = _uid()
+    with pytest.raises(ValueError, match=r"import_rdf: .*'http://example.org/p/doc' literal .*64001 characters.* 64000"):
+        _engine_sql(conn).import_rdf(_rdf(u, 64001), format="nt")
+    assert _count(conn, "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id %STARTSWITH ?", [f"urn:{u}:"]) == 0

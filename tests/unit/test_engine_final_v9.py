@@ -1931,8 +1931,8 @@ class TestLoadNetworkxProgressModulo:
         assert stats["skipped_edges"] == 2
         assert stats["edges"] == 0
 
-    def test_long_prop_truncated(self):
-        """Property values > 60000 chars are truncated (line 51-52)."""
+    def test_long_prop_stored_whole(self):
+        """4.7.0 row 3d: a value up to the column's 64000 characters is passed whole (it was cut to 60000)."""
         eng, conn, cur = make_engine()
         eng.create_node = MagicMock(return_value=True)
         eng.create_edge = MagicMock(return_value=False)
@@ -1942,16 +1942,14 @@ class TestLoadNetworkxProgressModulo:
         G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
         G.number_of_edges.return_value = 0
-        long_value = "x" * 70000
+        long_value = "x" * 62000
         G.nodes.return_value = [("n0", {"type": "Gene", "desc": long_value})]
         G.edges.return_value = []
 
         eng.load_networkx(G, auto_sync=False)
         call_kw = eng.create_node.call_args.kwargs
         props = call_kw.get("properties", {})
-        # desc should be truncated to 60000
-        assert "desc" in props
-        assert len(props["desc"]) == 60000
+        assert props["desc"] == long_value
 
     def test_none_prop_value_skipped(self):
         """Property with None value is skipped (line 48)."""

@@ -85,8 +85,8 @@ def make_snapshot_zip(
 # load_networkx: progress callback and long-prop truncation (lines 52, 60-64)
 # ---------------------------------------------------------------------------
 
-def test_load_networkx_long_property_truncated():
-    """Properties > 60000 chars are truncated."""
+def test_load_networkx_long_property_stored_whole():
+    """4.7.0 row 3d: a value up to the column's 64000 characters is passed whole (it was cut to 60000)."""
     eng, cur = make_engine()
     eng.create_node = MagicMock(return_value=True)
     eng.create_edge = MagicMock(return_value=True)
@@ -94,10 +94,25 @@ def test_load_networkx_long_property_truncated():
 
     import networkx as nx
     G = nx.DiGraph()
-    G.add_node("n1", bigprop="x" * 70000)
+    G.add_node("n1", bigprop="x" * 62000)
     eng.load_networkx(G, auto_sync=False)
     call_kwargs = eng.create_node.call_args[1]
-    assert len(call_kwargs["properties"]["bigprop"]) == 60000
+    assert call_kwargs["properties"]["bigprop"] == "x" * 62000
+
+
+def test_load_networkx_refuses_a_value_wider_than_the_column_before_any_node():
+    """The check runs over every node first: a too-wide value on the second node leaves the first unwritten."""
+    eng, cur = make_engine()
+    eng.create_node = MagicMock(return_value=True)
+    eng.sync = MagicMock()
+
+    import networkx as nx
+    G = nx.DiGraph()
+    G.add_node("n1", doc="ok")
+    G.add_node("n2", doc="x" * 64001)
+    with pytest.raises(ValueError, match=r"load_networkx: node 'n2' property 'doc' value .*64001 characters"):
+        eng.load_networkx(G, auto_sync=False)
+    eng.create_node.assert_not_called()
 
 
 def test_load_networkx_progress_callback_called():

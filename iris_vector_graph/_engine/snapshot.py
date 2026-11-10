@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from iris_vector_graph._engine._rdf_utils import graph_id_of_iri
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
+from iris_vector_graph._widths import VALUE_WIDTH, check_width
+from iris_vector_graph.prop_values import prop_value
 from iris_vector_graph.schema_name import runs_in_ivg_schema, schema_package
 from iris_vector_graph.security import vector_text
 
@@ -436,8 +438,10 @@ class SnapshotMixin:
 
         A node's labels come from ``label_attr`` (a string or a list), else its ``namespace`` attribute; its
         other attributes become properties, stored as ``create_node`` stores them (4.6.4: a number as the number, a
-        list or map as its JSON; they were their ``str()``), a value of another type as its ``str()``, text cut to 60000
-        characters. An edge's predicate is its
+        list or map as its JSON; they were their ``str()``), a value of another type as its ``str()``. A value is
+        stored whole; one whose stored text is longer than ``rdf_props.val`` (64000 characters) raises ``ValueError``
+        naming the node and property, before anything is written (4.7.0: text was cut to 60000 characters without a
+        word). An edge's predicate is its
         ``predicate``, ``label`` or ``key`` attribute, else a multigraph's string edge key (where obonet keeps an OBO
         relationship's type), else ``is_a``; the rest become qualifiers.
         Returns ``nodes``, ``edges``, ``skipped_nodes`` and ``skipped_edges`` (calls that returned
@@ -460,13 +464,8 @@ class SnapshotMixin:
         skipped_edges = 0
         total_nodes = G.number_of_nodes()
         total_edges = G.number_of_edges()
-        for node_id, data in G.nodes(data=True):
-            labels = []
-            if label_attr and label_attr in data:
-                val = data[label_attr]
-                labels = [val] if isinstance(val, str) else list(val)
-            elif "namespace" in data:
-                labels = [data["namespace"]]
+
+        def _node_props(data):
             props = {}
             for k, v in data.items():
                 if k in (label_attr, "namespace") or v is None:
@@ -474,10 +473,21 @@ class SnapshotMixin:
                 # 4.6.4: a number, boolean, string, list or map goes to create_node as it is, which stores it as a
                 # Cypher write does; str() stored 30 as '30', True as 'True' and a list as its Python repr
                 passed = isinstance(v, (str, list, dict, numbers.Real)) or type(v).__name__ in ("bool_", "bool")
-                s = v if passed else str(v)
-                if isinstance(s, str) and len(s) > 60000:
-                    s = s[:60000]
-                props[k] = s
+                props[k] = v if passed else str(v)
+            return props
+
+        # 4.7.0 row 3d: every value is checked before the first node is written, as create_node writes one at a time
+        for node_id, data in G.nodes(data=True):
+            for k, v in _node_props(data).items():
+                check_width("load_networkx", f"property {k!r} value", prop_value(v), VALUE_WIDTH, f"node {node_id!r} ")
+        for node_id, data in G.nodes(data=True):
+            labels = []
+            if label_attr and label_attr in data:
+                val = data[label_attr]
+                labels = [val] if isinstance(val, str) else list(val)
+            elif "namespace" in data:
+                labels = [data["namespace"]]
+            props = _node_props(data)
             if self.create_node(node_id=str(node_id), labels=labels, properties=props):
                 added_nodes += 1
             else:
@@ -541,7 +551,9 @@ class SnapshotMixin:
         a quad's own graph name wins. ``^KG`` is rebuilt afterwards, and ``infer`` (``True`` or a rule set
         name) runs ``materialize_inference``. Returns ``triples``, ``nodes``, ``edges`` and ``properties``
         (statements that succeeded, rows already present included), and ``inferred`` with ``infer``; a row
-        that fails is logged and skipped. Needs ``rdflib``.
+        that fails is logged and skipped. A literal is stored whole; one longer than ``rdf_props.val`` (64000
+        characters) raises ``ValueError`` naming its subject and predicate, before anything is written (4.7.0: it
+        was cut to 64000 and counted as written). Needs ``rdflib``.
         """
         _ledger_check(self, "import_rdf")
         try:
@@ -575,6 +587,10 @@ class SnapshotMixin:
         else:
             g = Graph()
         g.parse(path, format=format)
+        # 4.7.0 row 3d: checked before the first batch is written, as the batches commit one by one
+        for s, p, o, *_ in g.quads() if is_quads else g:
+            if not isinstance(o, (URIRef, BNode)):
+                check_width("import_rdf", "literal", o, VALUE_WIDTH, f"subject {str(s)!r} predicate {str(p)!r} ")
 
         from iris_vector_graph._write_txn import caller_transaction_level, refuse_in_caller_transaction, write_txn
 
@@ -661,7 +677,7 @@ class SnapshotMixin:
                     cursor.execute(
                         f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
                         f"VALUES (?, ?, ?, ?)",
-                        [prop_graph or "", s, k, v[:64000]],
+                        [prop_graph or "", s, k, v],
                     )
                     props_inserted += 1
                 except Exception as e:
@@ -722,7 +738,7 @@ class SnapshotMixin:
                 batch_edges.append((s_id, p_str, o_id, effective_graph))
             else:
                 batch_props.append(
-                    (s_id, p_str[:128], str(o)[:64000], effective_graph)
+                    (s_id, p_str[:128], str(o), effective_graph)
                 )
 
             if triple_count % batch_size == 0:

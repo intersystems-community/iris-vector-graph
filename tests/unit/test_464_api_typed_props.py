@@ -244,7 +244,7 @@ def test_bulk_loader_load_nodes_keeps_long_text_whole():
 def test_engine_load_networkx_passes_values_through():
     nx = pytest.importorskip("networkx")
     G = nx.DiGraph()
-    G.add_node("n464", type="P", **VALUES, long="x" * 70000, other=(1, 2))
+    G.add_node("n464", type="P", **VALUES, long="x" * 62000, other=(1, 2))
     engine, _ = _engine()
     got = {}
 
@@ -255,6 +255,7 @@ def test_engine_load_networkx_passes_values_through():
     with patch.object(engine, "create_node", side_effect=create_node), patch.object(engine, "sync"):
         engine.load_networkx(G)
     # create_node binds them (above); load_networkx no longer turns each into str() first, which stored a list as
-    # Python's repr "[1, 'a', 2.5]" and a bool as 'True'. A value of another type is still its str(), long text cut.
+    # Python's repr "[1, 'a', 2.5]" and a bool as 'True'. A value of another type is still its str(); long text is
+    # whole up to the column's 64000 characters (4.7.0 row 3d: it was cut to 60000).
     assert {k: got[k] for k in VALUES} == VALUES
-    assert (len(got["long"]), got["other"]) == (60000, "(1, 2)")
+    assert (len(got["long"]), got["other"]) == (62000, "(1, 2)")

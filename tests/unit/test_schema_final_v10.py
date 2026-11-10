@@ -1487,9 +1487,9 @@ class TestLoadNetworkx:
             eng.load_networkx(G, label_attr="type")
         assert captured.get("labels") == ["Protein"]
 
-    def test_long_prop_truncated(self):
+    def test_long_prop_stored_whole(self):
         eng, conn, cur = make_engine()
-        long_val = "x" * 70000
+        long_val = "x" * 62000  # 4.7.0 row 3d: whole up to the column's 64000 (it was cut to 60000)
         G = MagicMock()
         G.is_multigraph.return_value = False  # edges() yields (src, dst, data)
         G.number_of_nodes.return_value = 1
@@ -1503,7 +1503,7 @@ class TestLoadNetworkx:
         with patch.object(eng, "create_node", side_effect=fake_create_node), \
              patch.object(eng, "sync", return_value=True):
             eng.load_networkx(G)
-        assert len(captured["props"]["bigprop"]) == 60000
+        assert captured["props"]["bigprop"] == long_val
 
 
 # ---------------------------------------------------------------------------
