@@ -79,8 +79,10 @@ class TestAssertNodeExists:
         cursor_mock.execute.side_effect = RuntimeError("db error")
         cursor_mock.close = MagicMock()
         cursor_mock.fetchone.return_value = None
+        # 4.6.0 R276: it passed, so the write went ahead on a node it never found; it raises, naming the node
         with patch.object(ne_graph.conn, "cursor", return_value=cursor_mock):
-            ne_graph._assert_node_exists("ne_0")  # Must not raise
+            with pytest.raises(RuntimeError, match=r"could not check that node 'ne_0' exists.*db error"):
+                ne_graph._assert_node_exists("ne_0")
 
 
 # ---------------------------------------------------------------------------
@@ -103,9 +105,10 @@ class TestCountNodesException:
         cursor_mock = MagicMock()
         cursor_mock.execute.side_effect = RuntimeError("count fail")
         cursor_mock.close = MagicMock()
+        # count_nodes' docstring: "A failed query raises (4.6.0; it answered 0)"
         with patch.object(ne_graph.conn, "cursor", return_value=cursor_mock):
-            result = ne_graph.count_nodes()
-        assert result == 0
+            with pytest.raises(RuntimeError, match="count fail"):
+                ne_graph.count_nodes()
 
 
 # ---------------------------------------------------------------------------
@@ -186,13 +189,13 @@ class TestSetEdgeWeightException:
         conn.cursor.side_effect = lambda: _UpdateFails(real.cursor())
         # `conn` is a property since spec 262 (schema_name.guarded_connection), kept as `_conn`: patching the
         # property on the instance cannot be undone (mock deletes it on exit; a property has no deleter).
-        with patch.object(ne_graph, "_conn", conn), caplog.at_level("WARNING"):
-            result = ne_graph.set_edge_weight("ne_0", "NE_REL", "ne_1", 3.0)
-        assert result is False
-        # the exception branch, not the no-such-edge False
-        assert "set_edge_weight failed, no row changed: weight fail" in caplog.text
-        # the write is one START TRANSACTION .. COMMIT on the cursor, rolled back there (4.5.0 on)
-        assert sent.count("ROLLBACK") == 1, sent
+        # 4.6.0 R203: a refused write raises GraphWriteError (it answered False, the no-such-edge answer); the
+        # transaction is IVG's own (4.6.4, _write_txn), so the row is as it was
+        from iris_vector_graph.errors import GraphWriteError
+
+        with patch.object(ne_graph, "_conn", conn):
+            with pytest.raises(GraphWriteError, match="set_edge_weight failed.*weight fail"):
+                ne_graph.set_edge_weight("ne_0", "NE_REL", "ne_1", 3.0)
         cur = real.cursor()
         try:
             cur.execute(

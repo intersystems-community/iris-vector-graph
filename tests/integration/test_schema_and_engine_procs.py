@@ -260,15 +260,17 @@ class TestDijkstraExceptionPath:
 
     def test_dijkstra_no_source(self, sproc_eng):
         # No args — hits the no source_id/target_id early return
-        result = sproc_eng.execute_cypher(
-            "CALL ivg.shortestPath.weighted() YIELD path, totalCost RETURN path, totalCost"
-        )
-        assert result is not None
+        # 4.6.0: a call it cannot answer raises, naming what it needs
+        with pytest.raises(ValueError, match="requires at least 2 arguments: from, to"):
+            sproc_eng.execute_cypher(
+                "CALL ivg.shortestPath.weighted() YIELD path, totalCost RETURN path, totalCost"
+            )
 
     def test_dijkstra_both_vars(self, sproc_eng):
-        result = sproc_eng.execute_cypher(
-            "CALL ivg.shortestPath.weighted($src, $tgt, 'w', 999) "
-            "YIELD path, totalCost RETURN path, totalCost",
-            parameters={"src": "sp_0", "tgt": "sp_2"}
-        )
-        assert result is not None
+        # 4.6.0: weights come from the adjacency index's 'weight' only; another weightProp is refused
+        with pytest.raises(ValueError, match="weightProp 'w' is not supported"):
+            sproc_eng.execute_cypher(
+                "CALL ivg.shortestPath.weighted($src, $tgt, 'w', 999) "
+                "YIELD path, totalCost RETURN path, totalCost",
+                parameters={"src": "sp_0", "tgt": "sp_2"}
+            )

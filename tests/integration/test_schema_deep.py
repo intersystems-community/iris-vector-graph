@@ -159,9 +159,10 @@ class TestGetReificationsException:
         cursor_mock.execute.side_effect = RuntimeError("cursor fail")
         cursor_mock.__enter__ = MagicMock(return_value=cursor_mock)
         cursor_mock.__exit__ = MagicMock(return_value=False)
+        # get_reifications' docstring: "a failed query raises (4.6.0; it answered [])"
         with patch.object(sc_eng.conn, "cursor", return_value=cursor_mock):
-            result = sc_eng.get_reifications(12345)
-        assert result == []
+            with pytest.raises(RuntimeError, match="cursor fail"):
+                sc_eng.get_reifications(12345)
 
     def test_get_reifications_normal(self, sc_eng):
         result = sc_eng.get_reifications(999999)
@@ -178,9 +179,12 @@ class TestDeleteReificationException:
         cursor_mock = MagicMock()
         cursor_mock.execute.side_effect = RuntimeError("delete fail")
         cursor_mock.close = MagicMock()
+        # 4.6.0 R203: a refused delete raises GraphWriteError (it answered False)
+        from iris_vector_graph.errors import GraphWriteError
+
         with patch.object(sc_eng.conn, "cursor", return_value=cursor_mock):
-            result = sc_eng.delete_reification("fake_reif_id")
-        assert result is False
+            with pytest.raises(GraphWriteError, match="delete_reification failed"):
+                sc_eng.delete_reification("fake_reif_id")
 
     def test_delete_reification_nonexistent(self, sc_eng):
         result = sc_eng.delete_reification("definitely_not_there_12345")
@@ -230,9 +234,10 @@ class TestSyncNKG:
         assert isinstance(result, bool)
 
     def test_sync_nkg_iris_obj_raises(self, sc_eng):
+        # 4.6.0 R135: a failed rebuild raises (it answered False, and sync() went on)
         with patch.object(sc_eng, "_iris_obj", side_effect=RuntimeError("no iris")):
-            result = sc_eng._sync_nkg()
-        assert result is False
+            with pytest.raises(RuntimeError, match="no iris"):
+                sc_eng._sync_nkg()
 
     def test_sync_nkg_with_arno_rust_callout(self, sc_eng):
         # Simulate arno capabilities with rust_callout
