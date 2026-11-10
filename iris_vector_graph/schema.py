@@ -2513,14 +2513,15 @@ CREATE OR REPLACE FUNCTION {table_schema}.kg_PPR(
   maxIterations INT DEFAULT 100,
   bidirectional INT DEFAULT 0,
   reverseEdgeWeight DOUBLE DEFAULT 1.0,
-  graphId VARCHAR(256) DEFAULT ''
+  graphId VARCHAR(256) DEFAULT '',
+  rowLimit INT DEFAULT 1000
 )
 RETURNS VARCHAR(8000)
 LANGUAGE OBJECTSCRIPT
 {{
     do ##class(Graph.KG.SqlPrivilege).RequireSelect("{table_schema}.rdf_edges")
-    set result = ##class(Graph.KG.PageRank).RunJson(seedEntities, dampingFactor, maxIterations, bidirectional, reverseEdgeWeight, graphId)
-    set result = ##class(Graph.KG.PageRank).WithUnscored(result, "{table_schema}", graphId, 1000)
+    set result = ##class(Graph.KG.PageRank).RunJson(seedEntities, dampingFactor, maxIterations, bidirectional, reverseEdgeWeight, graphId, "", rowLimit)
+    set result = ##class(Graph.KG.PageRank).WithUnscored(result, "{table_schema}", graphId, rowLimit)
     quit result
 }}
 """,

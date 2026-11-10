@@ -3067,6 +3067,9 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
 
     seed_json = json.dumps(seeds)
     ppr_fn = _fn("kg_PPR")
+    # the rows the query reads of the answer, when a LIMIT after the CALL says (4.7.0 row 9; _ppr_row_limit)
+    row_limit = getattr(context, "ppr_row_limit", None)
+    limit_arg = "" if row_limit is None else f", {int(row_limit)}"
 
     # Inline, for the reason given in `_translate_bm25_search`: a `?` inside
     # `JSON_TABLE`'s source argument is not a parameter marker to IRIS, so the driver
@@ -3077,7 +3080,7 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
         f"SELECT j.node_id AS node, j.node_id, j.score, {_sql_arg(g)} AS graph_id\n"
         f"FROM JSON_TABLE(\n"
         f"  {ppr_fn}({_sql_arg(seed_json)}, {_sql_arg(alpha)}, {_sql_arg(max_iter)}, 0, 1.0, "
-        f"{_sql_arg(g)}),\n"
+        f"{_sql_arg(g)}{limit_arg}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
         f"    score DOUBLE PATH '$.score'\n"
@@ -4851,10 +4854,49 @@ def _run_unwind_dml_rows(
     return last_iter_aliases
 
 
+def _ppr_row_limit(cypher_query, context) -> Optional[int]:
+    """The rows the query can read of ``CALL ivg.ppr``'s answer, or None for all of them (its 1000).
+
+    4.7.0 row 9: the answer holds every node, the ones the walk never reaches at 0.0, so without a LIMIT reaching it
+    kg_PPR answered 1000 rows where the walk reached 21, and JSON_TABLE reading them cost 136 ms of a 146 ms CALL. A
+    count is handed down only when nothing between the CALL and the LIMIT can filter, join, aggregate or reorder the
+    rows other than by the score highest first, the order kg_PPR answers in: the CALL is the whole read (no MATCH,
+    WITH or WHERE after it, no UNION), RETURN projects the yielded columns or their properties (no DISTINCT, no
+    function), ORDER BY is absent or the yielded score descending alone, and LIMIT (and SKIP) are whole numbers.
+    Then the query's rows are among kg_PPR's first SKIP + LIMIT, capped at its 1000."""
+    proc = cypher_query.procedure_call
+    if (proc is None or _IVG_PROCEDURE_SPELLINGS.get(proc.procedure_name, proc.procedure_name) != "ivg.ppr"
+            or cypher_query.query_parts or cypher_query.union_queries or proc.yield_star):
+        return None
+    ret = cypher_query.return_clause
+    if ret is None or ret.distinct or not all(
+            isinstance(item.expression, (ast.Variable, ast.PropertyReference)) for item in ret.items):
+        return None
+
+    def whole(value, least):
+        if isinstance(value, ast.Variable):
+            value = context.input_params.get(value.name)
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= least else None
+
+    limit = whole(cypher_query.limit, 1)
+    skip = 0 if cypher_query.skip is None else whole(cypher_query.skip, 0)
+    if limit is None or skip is None:
+        return None
+    order = cypher_query.order_by_clause
+    if order is not None:
+        score = next((y[1] if isinstance(y, tuple) else y for y in proc.yield_items
+                      if (y[0] if isinstance(y, tuple) else y) == "score"), None)
+        if (len(order.items) != 1 or order.items[0].ascending or not isinstance(order.items[0].expression, ast.Variable)
+                or order.items[0].expression.name != score):
+            return None
+    return min(limit + skip, 1000)
+
+
 def _tts_process_parts(cypher_query, context, metadata):
     """Handle procedure_call + iterate query_parts. Returns is_transactional."""
     is_transactional = False
     if cypher_query.procedure_call is not None:
+        context.ppr_row_limit = _ppr_row_limit(cypher_query, context)
         translate_procedure_call(cypher_query.procedure_call, context)
         if context.system_procedure_call is not None:
             return SQLQuery(

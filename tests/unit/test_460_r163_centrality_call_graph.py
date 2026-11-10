@@ -93,6 +93,7 @@ def test_kg_degree_centrality_takes_the_graph_and_hands_it_to_the_class_method()
 
 
 def test_kg_ppr_hands_its_graph_to_runjson():
-    assert "RunJson(seedEntities, dampingFactor, maxIterations, bidirectional, reverseEdgeWeight, graphId)" in _ddl(
+    # 4.7.0 row 9: then no exclusion and the rows the query reads (rowLimit, 1000 by default)
+    assert 'RunJson(seedEntities, dampingFactor, maxIterations, bidirectional, reverseEdgeWeight, graphId, "", rowLimit)' in _ddl(
         "kg_PPR"
     )

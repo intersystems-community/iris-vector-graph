@@ -196,3 +196,59 @@ def test_leiden_communities_cuts_every_route_at_top_k_rows(top_k, n):
     assert eng._store.asked == top_k
     assert [r["id"] for r in out] == ([f"k0_{i}" for i in range(4)] + [f"k1_{i}" for i in range(3)]
                                       + [f"k2_{i}" for i in range(2)])[:n]
+
+
+# ------------------------------------------------------------------------------------- row 9: LIMIT pushdown
+
+
+def _ppr_row_limit(query, params=None):
+    """The row limit the translation hands kg_PPR: its seventh argument, or None when it passes six."""
+    import re
+
+    sql = translate_to_sql(parse_query(query), params or {}).sql
+    sql = sql if isinstance(sql, str) else "\n".join(sql)
+    args = re.search(r"kg_PPR\(([^)]*)\)", sql).group(1).split(", ")
+    return int(args[6]) if len(args) > 6 else None
+
+
+CALL = "CALL ivg.ppr(['a'], 0.85, 20) YIELD node, score "
+
+
+@pytest.mark.parametrize("tail, params, limit", [
+    ("RETURN node, score ORDER BY score DESC LIMIT 20", None, 20),
+    ("RETURN node.node_id AS id, score ORDER BY score DESC LIMIT 1", None, 1),
+    ("RETURN node.node_id AS id, score LIMIT 5", None, 5),
+    ("RETURN node, score ORDER BY score DESC SKIP 2 LIMIT 3", None, 5),
+    ("RETURN node, score ORDER BY score DESC LIMIT $k", {"k": 7}, 7),
+    ("RETURN node, score ORDER BY score DESC LIMIT 5000", None, 1000),
+])
+def test_a_limit_after_the_call_reaches_kg_ppr(tail, params, limit):
+    """CALL ivg.ppr ... RETURN ... [ORDER BY score DESC] LIMIT k: the walk's answer is cut at k (+ SKIP), so the
+    zeros stop there; at most the 1000 it answers without a LIMIT."""
+    assert _ppr_row_limit(CALL + tail, params) == limit
+
+
+@pytest.mark.parametrize("tail", [
+    "RETURN node, score",  # no LIMIT
+    "RETURN node, score LIMIT 0",
+    "RETURN node, score ORDER BY score LIMIT 3",  # ascending: the zeros come first
+    "RETURN node, score ORDER BY node LIMIT 3",
+    "RETURN node.node_id AS id, score ORDER BY id LIMIT 3",
+    "RETURN node, score ORDER BY score DESC, node LIMIT 3",
+    "RETURN DISTINCT score LIMIT 3",
+    "RETURN count(*) AS n LIMIT 3",
+    "RETURN collect(node) AS ns LIMIT 3",
+    "RETURN node, score * 2 AS s ORDER BY s DESC LIMIT 3",
+    "WITH node, score WHERE score > 0 RETURN node LIMIT 3",
+    "WITH node, score ORDER BY score DESC LIMIT 2 RETURN node",
+    "MATCH (node)-->(m) RETURN m LIMIT 3",
+])
+def test_any_other_shape_keeps_the_full_answer(tail):
+    """Between the CALL and the LIMIT nothing may filter, reorder (other than by score, highest first), aggregate
+    or join, or the first k rows of the walk are not the first k rows of the query: kg_PPR answers its 1000."""
+    assert _ppr_row_limit(CALL + tail, {}) is None
+
+
+def test_a_yield_alias_is_the_score():
+    q = "CALL ivg.ppr(['a']) YIELD node, score AS rank RETURN node, rank ORDER BY rank DESC LIMIT 4"
+    assert _ppr_row_limit(q) == 4
