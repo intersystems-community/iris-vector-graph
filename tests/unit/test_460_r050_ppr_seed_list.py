@@ -86,5 +86,8 @@ def test_the_store_answer_is_used_for_a_list_of_seeds():
     cur.fetchall.return_value = [("a",), ("b",), ("c",)]
     assert engine.ppr(["a", "c"])["scores"] == [{"id": "a", "score": 0.7}, {"id": "c", "score": 0.3},
                                                 {"id": "b", "score": 0.0}]
-    assert cur.execute.call_args.args == ("SELECT node_id FROM Graph_KG.nodes WHERE graph_id = ?", [""])
+    # ppr()'s top_k 20 plus the 2 scored nodes, in index order (4.7.0 row 9: a bounded read)
+    assert cur.execute.call_args.args == (
+        "SELECT TOP 22 node_id FROM Graph_KG.nodes WHERE graph_id = ? ORDER BY node_id", [""]
+    )
     assert store.execute_ppr.call_args.args[0] == ["a", "c"]

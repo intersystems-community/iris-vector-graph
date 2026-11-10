@@ -88,6 +88,70 @@ def test_alpha_must_be_a_number(value):
         AlgorithmsMixin.ppr(_NoDatabase(), "a", alpha=value)
 
 
+# ------------------------------------------------------------------------------------------------ row 9
+
+
+class _NodeTable:
+    """A connection whose node table holds ``ids`` in index order; records each statement it is sent."""
+
+    def __init__(self, ids):
+        self.ids, self.sent = ids, []
+
+    def cursor(self):
+        return self
+
+    def execute(self, sql, params):
+        self.sent.append((sql, params))
+        top = sql.split("TOP ", 1)[1].split()[0] if "TOP " in sql else None
+        self.rows = [(v,) for v in self.ids[: int(top) if top else None]]
+
+    def fetchall(self):
+        return self.rows
+
+    def close(self):
+        pass
+
+
+class _EveryNodeEngine(AlgorithmsMixin):
+    def __init__(self, ids):
+        self.conn = _NodeTable(ids)
+
+    def _t(self, name):
+        return f"Graph_KG.{name}"
+
+
+#: a million-node graph's first IDs in index order; the walk scored x and n3
+IDS = [f"n{i}" for i in range(10)]
+
+
+def test_a_limit_reads_only_the_rows_it_can_use():
+    """top_k 3, 2 scored: at most 3 + 2 IDs are read, in index order, and the zeros are the first unscored ones."""
+    eng = _EveryNodeEngine(IDS)
+    out = eng._ppr_every_node({"x": 0.6, "n3": 0.4}, "", 3, None)
+    assert out == {"x": 0.6, "n3": 0.4, "n0": 0.0}
+    assert eng.conn.sent == [("SELECT TOP 5 node_id FROM Graph_KG.nodes WHERE graph_id = ? ORDER BY node_id", [""])]
+
+
+def test_the_cap_bounds_the_read_without_top_k():
+    eng = _EveryNodeEngine(IDS)
+    out = eng._ppr_every_node({"n0": 1.0}, "g", None, 4)
+    assert out == {"n0": 1.0, "n1": 0.0, "n2": 0.0, "n3": 0.0}
+    assert eng.conn.sent == [("SELECT TOP 5 node_id FROM Graph_KG.nodes WHERE graph_id = ? ORDER BY node_id", ["g"])]
+
+
+def test_no_limit_reads_every_node():
+    eng = _EveryNodeEngine(IDS)
+    out = eng._ppr_every_node({"n9": 1.0}, "", None, None)
+    assert out == {"n9": 1.0, **{f"n{i}": 0.0 for i in range(9)}}
+    assert eng.conn.sent == [("SELECT node_id FROM Graph_KG.nodes WHERE graph_id = ? ORDER BY node_id", [""])]
+
+
+def test_a_full_answer_reads_nothing():
+    eng = _EveryNodeEngine(IDS)
+    assert eng._ppr_every_node({"a": 0.5, "b": 0.5}, "", 2, None) == {"a": 0.5, "b": 0.5}
+    assert eng.conn.sent == []
+
+
 # ------------------------------------------------------------------------------------------------ row 28
 
 

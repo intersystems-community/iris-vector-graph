@@ -5,7 +5,7 @@ import numbers
 import re
 from typing import Dict, Any, List, Optional, Sequence, Tuple, Callable, Union
 
-from iris_vector_graph._collation import collation_key, rank_key
+from iris_vector_graph._collation import rank_key
 from iris_vector_graph.errors import GraphWriteError, IVGError
 
 
@@ -394,15 +394,22 @@ class AlgorithmsMixin:
         ``graph`` it did not score, as networkx's ``pagerank(G, personalization=...)`` answers every node of G (4.7.0
         row 9: a node the walk never reached, one with no edge too, had no entry). Cut to ``top_k`` rows, or without
         one to ``cap``, the route's own row cap (RunJson's 1000), whose answer already ran to it when it holds that
-        many: then there is no room for a zero, and the node table is not read."""
+        many: then there is no room for a zero, and the node table is not read.
+
+        With a limit only the first ``limit`` node IDs plus one per scored node are read, in the order of the node
+        table's ``(graph_id, node_id)`` index, ``%EXACT``: IRIS collation, which ``collation_key`` is (canonical
+        numbers first by value, then text by code point), so the read stops at the rows it can use rather than reading
+        every node of the graph. Every node is read only without a limit, when every node is the answer."""
         ranked = sorted(scores.items(), key=lambda x: rank_key(x[0], x[1]))
         limit = top_k if top_k is not None and top_k > 0 else (cap or 0)
         if limit and len(ranked) >= limit:
             return dict(ranked[:limit])
+        top = f"TOP {int(limit) + len(ranked)} " if limit else ""
         cursor = self.conn.cursor()
         try:
-            cursor.execute(f"SELECT node_id FROM {self._t('nodes')} WHERE graph_id = ?", [graph or ""])
-            unscored = sorted({str(r[0]) for r in cursor.fetchall()} - set(scores), key=collation_key)
+            cursor.execute(f"SELECT {top}node_id FROM {self._t('nodes')} WHERE graph_id = ? ORDER BY node_id",
+                           [graph or ""])
+            unscored = [v for v in (str(r[0]) for r in cursor.fetchall()) if v not in scores]
         finally:
             cursor.close()
         if limit:

@@ -88,8 +88,10 @@ ClassMethod CheckArgs(alpha As %String, maxIter As %String)
 /// and in collation order, to pLimit rows in all (0: every node). networkx's pagerank(G, personalization=...) answers
 /// every node of G, 0.0 for one the walk never reaches (4.7.0 row 9: such a node, one with no edge too, had no row).
 /// pSchema is the IVG schema holding the nodes table. An answer with no row (no seeds) or of pLimit rows already is
-/// returned as it is, without reading the table. The kg_PPR SQL function behind CALL ivg.ppr calls it; the Python
-/// methods add the same rows themselves (AlgorithmsMixin._ppr_every_node).
+/// returned as it is, without reading the table. With pLimit the read stops once the zeros fill it: the nodes come in
+/// the order of the table's (graph_id, node_id) index, %EXACT, which is collation order, so it reads at most pLimit
+/// IDs plus one per scored node, not every node of the graph. The kg_PPR SQL function behind CALL ivg.ppr calls it;
+/// the Python methods add the same rows themselves (AlgorithmsMixin._ppr_every_node).
 ClassMethod WithUnscored(pJson As %String, pSchema As %String = "Graph_KG", pGraph As %String = "", pLimit As %Integer = 1000) As %String
 {
 	Set tIn = ##class(%DynamicArray).%FromJSON(pJson)
@@ -100,28 +102,24 @@ ClassMethod WithUnscored(pJson As %String, pSchema As %String = "Graph_KG", pGra
 		Set tHave(tRow.id) = ""
 	}
 	If pGraph = $Char(0) Set pGraph = ""
-	// an empty host variable binds as NULL, hence the COALESCE on both sides
-	Set tSQL = "SELECT node_id FROM "_pSchema_".nodes WHERE COALESCE(graph_id, '') = COALESCE(?, '')"
+	// an empty host variable binds as NULL, hence COALESCE(?, ''); graph_id itself is NOT NULL, and left bare so the
+	// read walks the (graph_id, node_id) index in node_id order and stops when the rows are full
+	Set tSQL = "SELECT node_id FROM "_pSchema_".nodes WHERE graph_id = COALESCE(?, '') ORDER BY node_id"
 	Set tRS = ##class(%SQL.Statement).%ExecDirect(, tSQL, pGraph)
 	If tRS.%SQLCODE < 0 {
 		Throw ##class(%Exception.SQL).CreateFromSQLCODE(tRS.%SQLCODE, tRS.%Message)
 	}
 	While tRS.%Next() {
-		Set tId = tRS.%Get("node_id")
-		Set:'$Data(tHave(tId)) tZero(tId) = ""
-	}
-	If tRS.%SQLCODE < 0 {
-		Throw ##class(%Exception.SQL).CreateFromSQLCODE(tRS.%SQLCODE, tRS.%Message)
-	}
-	Set tId = ""
-	For {
-		Set tId = $Order(tZero(tId))
-		Quit:tId=""
 		Quit:(pLimit>0)&&(tIn.%Size()>=pLimit)
+		Set tId = tRS.%Get("node_id")
+		Continue:$Data(tHave(tId))
 		Set tRow = ##class(%DynamicObject).%New()
 		Do tRow.%Set("id", tId, "string")
 		Do tRow.%Set("score", 0, "number")
 		Do tIn.%Push(tRow)
+	}
+	If tRS.%SQLCODE < 0 {
+		Throw ##class(%Exception.SQL).CreateFromSQLCODE(tRS.%SQLCODE, tRS.%Message)
 	}
 	Return tIn.%ToJSON()
 }
