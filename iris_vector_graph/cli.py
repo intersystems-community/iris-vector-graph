@@ -203,16 +203,30 @@ if _HAS_CLICK:
     @click.option(
         "--embedding-dim", default=DEFAULT_EMBEDDING_DIMENSION, show_default=True
     )
+    @click.option(
+        "--rewidth",
+        is_flag=True,
+        help="Re-declare empty vector tables at --embedding-dim (a table that holds vectors is never re-declared)",
+    )
     @click.pass_context
-    def schema_init(ctx, embedding_dim):
+    def schema_init(ctx, embedding_dim, rewidth):
         c = _client(ctx.obj["url"], ctx.obj["api_key"])
         try:
             import httpx
             resp = httpx.post(
                 f"{ctx.obj['url']}/admin/schema/init",
-                json={"embedding_dimension": embedding_dim},
+                json={"embedding_dimension": embedding_dim, "rewidth": rewidth},
                 headers=client_headers(ctx.obj["api_key"]),
             )
+            if resp.status_code == 409:
+                # 4.7.0 row 25: the vector tables are declared at another width
+                detail = resp.json().get("detail")
+                print(f"Schema init refused (409): {detail}", file=sys.stderr)
+                print(
+                    "To re-declare the empty vector tables at --embedding-dim, run it again with --rewidth.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             resp.raise_for_status()
             print(json.dumps(resp.json(), indent=2))
         except Exception as e:

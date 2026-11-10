@@ -222,14 +222,16 @@ Each answers `{"status": "ok", ...}`, or `500` with the error in `detail`.
 
 ### `POST /admin/schema/init`
 
-Runs `initialize_schema(auto_deploy_objectscript=...)` on the server's engine and returns its result under `result`.
-The body's `embedding_dimension` is accepted and not used: the server's engine is built with the default width (768).
-To set up a namespace at another width, run `initialize_schema()` from Python.
+Runs `initialize_schema(auto_deploy_objectscript=..., rewidth=...)` on the server's engine, at the body's
+`embedding_dimension` (default 768), and returns its result under `result`. A vector table declared at another width
+answers `409 Conflict` with the `EmbeddingIdentityConflict` message in `detail`, and nothing is changed (4.7.0; it
+was re-declared without a word when empty). `"rewidth": true` re-declares an empty one at `embedding_dimension`; a
+table that holds vectors still answers 409. `ivg schema init --embedding-dim N [--rewidth]` sends the same request.
 
 ```bash
 curl -X POST http://localhost:8200/admin/schema/init \
   -H "Content-Type: application/json" \
-  -d '{"auto_deploy_objectscript": true}'
+  -d '{"auto_deploy_objectscript": true, "embedding_dimension": 384, "rewidth": true}'
 ```
 
 ### `POST /admin/indexes/rebuild`

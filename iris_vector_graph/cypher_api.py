@@ -39,6 +39,7 @@ from iris_vector_graph.api_auth import (
 from iris_vector_graph.constants import DEFAULT_EMBEDDING_DIMENSION
 from iris_vector_graph.cypher.read_only import writes_cypher
 from iris_vector_graph.engine import IRISGraphEngine
+from iris_vector_graph.exceptions import EmbeddingIdentityConflict
 
 _logger = logging.getLogger(__name__)
 
@@ -570,6 +571,8 @@ def get_stats():
 class AdminSchemaRequest(BaseModel):
     embedding_dimension: int = DEFAULT_EMBEDDING_DIMENSION
     auto_deploy_objectscript: bool = False
+    # 4.7.0 row 25: re-declare an empty vector column at embedding_dimension (initialize_schema(rewidth=True))
+    rewidth: bool = False
 
 
 @app.post("/admin/schema/init")
@@ -580,9 +583,13 @@ def admin_schema_init(req: AdminSchemaRequest):
             # vector column at the one the request names (4.6.0 R102: it was never read).
             eng.embedding_dimension = req.embedding_dimension
             result = eng.initialize_schema(
-                auto_deploy_objectscript=req.auto_deploy_objectscript
+                auto_deploy_objectscript=req.auto_deploy_objectscript,
+                rewidth=req.rewidth,
             )
         return {"status": "ok", "result": result}
+    except EmbeddingIdentityConflict as e:
+        # the namespace's vector columns disagree with the request: the caller's state, not a server fault (4.7.0)
+        raise HTTPException(status_code=409, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

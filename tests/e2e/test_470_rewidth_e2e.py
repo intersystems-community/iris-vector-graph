@@ -152,3 +152,52 @@ def test_rewidth_true_refuses_a_column_that_holds_vectors(conn):
     assert int(cur.fetchone()[0]) == 1, "the vector was lost"
     a.delete_node(nid)
 
+
+# ------------------------------------------------------------------------------- the HTTP API and the ivg CLI
+
+
+@pytest.fixture
+def api(conn, monkeypatch):
+    """The app's shared engine on this namespace; ``POST /admin/schema/init`` sets its width from the body."""
+    from fastapi.testclient import TestClient
+
+    from iris_vector_graph import cypher_api
+
+    monkeypatch.delenv("IVG_API_KEY", raising=False)
+    monkeypatch.delenv("IVG_READ_ONLY", raising=False)
+    monkeypatch.setattr(cypher_api, "_engine_cache", _engine(_connect(), None))
+    yield TestClient(cypher_api.app)
+    cypher_api._engine_cache.conn.close()
+
+
+def test_the_http_api_answers_409_and_takes_rewidth(conn, api):
+    """4.7.0 row 25: the refusal is the caller's state, not a server fault (it was 500), and the body's ``rewidth``
+    is the way through."""
+    _engine(conn, 768).initialize_schema()
+    resp = api.post("/admin/schema/init", json={"embedding_dimension": 384})
+    assert resp.status_code == 409, resp.text
+    assert "rewidth" in resp.json()["detail"] and "384" in resp.json()["detail"], resp.text
+    assert _widths(conn)["kg_NodeEmbeddings"] == 768
+    resp = api.post("/admin/schema/init", json={"embedding_dimension": 384, "rewidth": True})
+    assert resp.status_code == 200, resp.text
+    assert _widths(conn) == {t: 384 for t in VECTOR_TABLES}
+
+
+def test_the_cli_says_why_and_takes_rewidth(conn, api, monkeypatch):
+    """`ivg schema init` posts to the API; its requests go to the test client here."""
+    import httpx
+    from click.testing import CliRunner
+
+    from iris_vector_graph.cli import cli
+
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: api.post(url.split("8200", 1)[1], **kw))
+    _engine(conn, 768).initialize_schema()
+    runner = CliRunner()
+    refused = runner.invoke(cli, ["--url", "http://localhost:8200", "schema", "init", "--embedding-dim", "384"])
+    assert refused.exit_code == 1, refused.output
+    assert "409" in refused.output and "--rewidth" in refused.output, refused.output
+    assert _widths(conn)["kg_NodeEmbeddings"] == 768
+    done = runner.invoke(
+        cli, ["--url", "http://localhost:8200", "schema", "init", "--embedding-dim", "384", "--rewidth"])
+    assert done.exit_code == 0, done.output
+    assert _widths(conn) == {t: 384 for t in VECTOR_TABLES}
