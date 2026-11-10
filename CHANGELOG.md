@@ -2,7 +2,7 @@
 
 # Changelog
 
-### v4.6.5 (unreleased)
+### v4.6.5 (2026-11-09)
 
 **Fixed: Cypher writes**
 

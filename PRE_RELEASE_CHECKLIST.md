@@ -246,6 +246,56 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.6.5 — the round 8 to 10 walkthrough fixes: Cypher write literals, procedure arguments, the HTTP API's lock (2026-11-09)
+
+Patch release from the round 8 walkthroughs of the 4.6.4 wheel and the rounds after. Branch `release-4.6.5` from main
+`933f7b4a`. Four groups, each in the CHANGELOG:
+
+- Cypher writes: a `$param` in a list or map literal is stored as its value (it raised `KeyError` or `TypeError`);
+  `0.0 / 0.0` and `1.0 / 0.0` store NaN and infinity, as SET does; a failing value names its cause.
+- Procedures: the options-map procedures take only what their method takes (`ivg.closeness({formula: 'classic'})`
+  answered harmonic scores); the procedures read by position refuse a map (`CALL ivg.ppr(['a'], {alpha: 0.5})`
+  answered alpha 0.85's scores, and `ivg.shortestPath.weighted` without from and to answered no rows and no error).
+- Errors: a write on a namespace older than 4.6.4 raises `IVGSchemaError`; a refused write's message carries only its
+  own failure.
+- The HTTP API: every `cypher_api` endpoint takes the engine lock (only the Cypher ones did; the driver's
+  `threadsafety` is 1). Reported from a 4.2.2 deployment on IRIS 2026.3.0AI.154 (147 of 250 queries empty under a
+  `/health` probe every 0.2 s); two threads on one 4.6.5 engine did not reproduce it on AI.113 with drivers 5.4.0 and
+  5.4.1.
+
+Walkthroughs (Sonnet, each on a wheel built from a `git archive` of the commit):
+
+- Round 9 (`e8e16f4a`): Python 0 blocker, 2 wrong, 3 papercut; expert 1 blocker, 1 wrong, 5 papercut. On review one
+  finding held: `ivg.ppr`'s messages named `seed_ids` and `max_iter`, which led to the options-map fix above. The rest
+  quoted docs that say otherwise (KNOWN_ISSUES:383 on NaN, USER_GUIDE:776 on `gds.*` and ORDER BY, ADMIN_GUIDE:869 on
+  `status()`), or asserted columns (`Sub`, `Pred`) that do not exist; the missing column list became an ADMIN_GUIDE
+  passage.
+- Round 10 (`d29ec2be`), with a rule sheet (quote file:line, paste output, every task): Python 0 / 0 / 0, every task
+  done; expert 1 blocker, which was IRIS administration (`Config.Namespaces.Create()` through the Native API); ADMIN_GUIDE
+  §1 now shows the `%SYS` lines (`686c3a47`), checked on ivg-iris-enterprise.
+- Round 10b (`38cc273b`), the expert's unfinished tasks: 0 blocker, 0 wrong, 1 papercut (the docs do not say how to
+  build a pre-4.6.4 namespace; `test_465_write_schema_error_e2e` covers that case).
+
+| Gate                                                                   | Commit     | Result                                                                                                                                                                                                                                        |
+| ---------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit suite (laptop)                                                    | `2f654e02` | 23,704 passed, 0 failed                                                                                                                                                                                                                       |
+| Full E2E, two shards and driver 5.4.1 (dpgenai1)                       | `c2f2f191` | 3,927 + 11,135 + 191 passed; 1 failed, the demo browser's fraud card on `net::ERR_NETWORK_CHANGED` (the host's network), 11 / 11 on a rerun of the file; 2 errors, `test_embedded_wgproto_e2e` TestEmbeddedCommunityIRIS needs `ivg-gate-com` |
+| Affected E2E: 44 files (laptop, ivg-iris-enterprise, driver 5.4.0)     | `2f654e02` | 8,347 passed, 0 failed: every file calling a procedure read by position or the HTTP API; with the other three 4.6.5 E2E files, 106 passed                                                                                                     |
+| R314 CALL-yield E2E (laptop, a width-8 namespace)                      | `2f654e02` | 211 passed, 0 failed (the gate kit's own setup, which the affected run lacks)                                                                                                                                                                 |
+| TCK, enterprise 2026.3, drivers 5.4.0 and 5.4.1 (dpgenai1)             | `c2f2f191` | 3895 / 3896 each; only Temporal2 [6], environment-dependent. The commits after it change `CALL ivg.*` arguments and `cypher_api`; no TCK scenario calls an `ivg.*` or `gds.*` procedure                                                       |
+| `scripts/ci-parity.sh` (dpgenai1)                                      | `2f654e02` | exit 0 (the commits after it, `4fa524d6`, change only the CHANGELOG and a test docstring)                                                                                                                                                     |
+| Speed: Cypher writes, 300 each, 3 interleaved rounds, medians (laptop) | 4.6.5      | 4.6.4 / 4.6.5: `CREATE` 0.75 s / 0.67 s; `MERGE … SET` 1.13 s / 1.23 s (4.6.5's range 1.05 to 1.25); `CREATE` of a list literal 0.60 s / 0.61 s; `MATCH … SET` 0.96 s / 0.97 s. After `TUNE TABLE` on 2,000 seeded nodes                      |
+
+Not run: the Community TCK, and the full E2E after `c2f2f191` (the code after it is the procedure-argument checks and
+`cypher_api`'s lock, whose callers the affected rows run). A first speed run read 4.6.5's `MERGE` as 40 times slower:
+the same SQL, in a namespace whose statistics IRIS had gathered with the tables nearly empty; after `TUNE TABLE` the
+statement took 5 ms.
+
+Found during 4.6.5 and listed for 4.7.0: `ivg.ppr` and `ppr()` take any `alpha` and `maxIter` (2.0 and -1 run);
+`scripts/dev/make_scratch_namespace.py --drop` leaves an empty database directory; a variable-length
+`RETURN DISTINCT b.id AS dst` reported empty on 4.2.2 against a 305-edge node did not reproduce on a small graph on
+4.6.5 (the reporter reruns it on 4.6.5); the 4.6.4 list above.
+
 ### 4.6.4 — Python-API numbers keep their type; IVG writes stay inside the caller's transaction (2026-11-09)
 
 Patch release (Tom 2026-11-08: "Ship 4.6.3, then 4.6.4", for the two python-devx defects). Branch `release-4.6.4` from
