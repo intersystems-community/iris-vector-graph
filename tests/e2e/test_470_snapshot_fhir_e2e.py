@@ -50,6 +50,33 @@ def _connect():
     return iris.connect("localhost", rr.PORT, NS, "_SYSTEM", "SYS")
 
 
+def _existing_fhir_tables(conn) -> set:
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'Graph_KG' AND TABLE_NAME IN "
+        f"({', '.join('?' * len(LAZY_FHIR_TABLES))})", list(LAZY_FHIR_TABLES),
+    )
+    return {str(r[0]) for r in cur.fetchall()}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def leave_the_namespace_as_found():
+    """The rows these tests write, and the lazy FHIR tables they create, are gone after them: a namespace with
+    fhir_graphs rows and no FHIR repository fails test_235_lazy_fhir_tables_e2e."""
+    conn = _connect()
+    before = _existing_fhir_tables(conn)
+    yield
+    cur = conn.cursor()
+    cur.execute("DELETE FROM Graph_KG.code_crosswalk WHERE target_node_id %STARTSWITH 't470f'")
+    if "fhir_graphs" in _existing_fhir_tables(conn):
+        cur.execute("DELETE FROM Graph_KG.fhir_graphs WHERE graph_id %STARTSWITH 'fhir:T470:'")
+    conn.commit()
+    for t in sorted(_existing_fhir_tables(conn) - before):
+        cur.execute(f"DROP TABLE Graph_KG.{t}")
+    conn.commit()
+    conn.close()
+
+
 @pytest.fixture
 def eng():
     from iris_vector_graph import IRISGraphEngine
