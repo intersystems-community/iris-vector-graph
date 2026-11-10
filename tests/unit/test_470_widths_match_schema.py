@@ -33,6 +33,7 @@ def _declared(table: str, column: str) -> int:
         ("nodes", "node_id", _widths.NODE_ID_WIDTH),
         ("rdf_edges", "s", _widths.NODE_ID_WIDTH),
         ("rdf_edges", "o_id", _widths.NODE_ID_WIDTH),
+        ("rdf_props", "val", _widths.VALUE_WIDTH),
     ],
 )
 def test_the_checked_width_is_the_declared_one(table, column, width):

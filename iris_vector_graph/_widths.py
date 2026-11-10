@@ -17,6 +17,8 @@ KEY_WIDTH = 128
 PREDICATE_WIDTH = 128
 #: nodes.node_id, and rdf_edges.s / o_id
 NODE_ID_WIDTH = 256
+#: rdf_props.val (4.7.0 row 3d: BulkLoader cut every value to 60000 characters without a word)
+VALUE_WIDTH = 64000
 
 
 def check_width(writer: str, what: str, value: Any, width: int, where: str = "") -> None:

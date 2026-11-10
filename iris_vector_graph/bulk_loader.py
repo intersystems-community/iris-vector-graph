@@ -28,7 +28,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from iris_vector_graph._batch_check import BatchShortfall, check_rowcount
-from iris_vector_graph._widths import KEY_WIDTH, LABEL_WIDTH, NODE_ID_WIDTH, PREDICATE_WIDTH, check_width
+from iris_vector_graph._widths import KEY_WIDTH, LABEL_WIDTH, NODE_ID_WIDTH, PREDICATE_WIDTH, VALUE_WIDTH, check_width
 from iris_vector_graph._write_txn import refuse_in_caller_transaction
 from iris_vector_graph.exceptions import BulkLoadError
 from iris_vector_graph.prop_values import prop_value
@@ -279,9 +279,13 @@ class BulkLoader:
             val = attrs.get(label_attr) if label_attr else None
             for lbl in ([val] if isinstance(val, str) else val or []):
                 check_width("BulkLoader.load_nodes", "label", lbl, LABEL_WIDTH, f"node {i} ")
-            for key in attrs:
+            for key, v in attrs.items():
                 if key not in (label_attr, "namespace"):
                     check_width("BulkLoader.load_nodes", "property key", key, KEY_WIDTH, f"node {i} ")
+                    if v is not None:
+                        # 4.7.0 row 3d: stored whole up to the column's width; it was cut to 60000 without a word
+                        check_width("BulkLoader.load_nodes", f"property {key!r} value", prop_value(v), VALUE_WIDTH,
+                                    f"node {i} ")
         cursor = self.conn.cursor()
         t0 = time.time()
         hint = " %NOINDEX %NOCHECK" if use_noindex else ""
@@ -336,10 +340,7 @@ class BulkLoader:
                     if k in (label_attr, "namespace") or v is None:
                         continue
                     # 4.6.4: as create_node binds it, a number as the number (it was str(), read back as text)
-                    s = prop_value(v)
-                    if isinstance(s, str) and len(s) > 60000:
-                        s = s[:60000]
-                    props[k] = s
+                    props[k] = prop_value(v)  # whole: a value wider than rdf_props.val was refused above
                 for k, v in props.items():
                     prop_params.append([self.graph, nid, k, v])
 

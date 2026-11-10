@@ -150,7 +150,8 @@ def test_bulk_loader_refuses_a_too_wide_predicate(conn):
 @pytest.mark.parametrize(
     "table, column, width_name",
     [("rdf_labels", "label", "LABEL_WIDTH"), ("rdf_props", "key", "KEY_WIDTH"), ("rdf_edges", "p", "PREDICATE_WIDTH"),
-     ("nodes", "node_id", "NODE_ID_WIDTH"), ("rdf_edges", "s", "NODE_ID_WIDTH"), ("rdf_edges", "o_id", "NODE_ID_WIDTH")],
+     ("nodes", "node_id", "NODE_ID_WIDTH"), ("rdf_edges", "s", "NODE_ID_WIDTH"), ("rdf_edges", "o_id", "NODE_ID_WIDTH"),
+     ("rdf_props", "val", "VALUE_WIDTH")],
 )
 def test_the_checked_widths_are_the_namespaces(conn, table, column, width_name):
     from iris_vector_graph import _widths
@@ -198,3 +199,34 @@ def test_bulk_loader_refuses_a_null_predicate_under_nocheck(conn):
     with pytest.raises(ValueError, match=r"BulkLoader.load_edges: edge 1 .*no source, predicate or target"):
         BulkLoader(conn).load_edges([(f"{u}a", "R", f"{u}b", None), (f"{u}c", None, f"{u}d", None)])
     assert _count(conn, "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s %STARTSWITH ?", [u]) == 0
+
+
+# ------------------------------------------------------------------------------- row 3d: BulkLoader's long values
+
+
+def _val(conn, nid, key):
+    cur = conn.cursor()
+    cur.execute('SELECT val FROM Graph_KG.rdf_props WHERE s = ? AND "key" = ?', [nid, key])
+    row = cur.fetchone()
+    return None if row is None else row[0]
+
+
+def test_bulk_loader_stores_a_long_value_whole(conn):
+    """rdf_props.val holds 64000 characters; BulkLoader cut every value to 60000 without a word (row 3d)."""
+    from iris_vector_graph.bulk_loader import BulkLoader
+
+    u = _uid()
+    text = "v" * 62000
+    loader = BulkLoader(conn)
+    loader.load_nodes([(f"{u}a", {"namespace": "T470D", "doc": text})])
+    loader.rebuild_all_indices()  # the %NOINDEX load leaves the lookups by s to the rebuild
+    assert _val(conn, f"{u}a", "doc") == text
+
+
+def test_bulk_loader_refuses_a_value_wider_than_the_column(conn):
+    from iris_vector_graph.bulk_loader import BulkLoader
+
+    u = _uid()
+    with pytest.raises(ValueError, match=r"BulkLoader.load_nodes: node 1 property 'doc' value .*64001 characters.* 64000"):
+        BulkLoader(conn).load_nodes([(f"{u}a", {"namespace": "T470D"}), (f"{u}b", {"doc": "v" * 64001})])
+    assert _nodes(conn, u) == 0

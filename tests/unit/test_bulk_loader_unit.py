@@ -147,10 +147,11 @@ class TestLoadNodes:
         # Only n2 should be new
         assert isinstance(stats, dict)
 
-    def test_props_longer_than_60000_truncated(self):
+    def test_props_up_to_the_column_width_are_kept_whole(self):
+        """4.7.0 row 3d: whole up to rdf_props.val's 64000 characters (they were cut to 60000)."""
         loader, conn, cursor = _make_loader()
         cursor.fetchall.return_value = []
-        long_val = "x" * 70000
+        long_val = "x" * 63000
         nodes = [("n1", {"bio": long_val})]
         captured = []
         def mock_batch(cursor, sql, params, label):
@@ -161,7 +162,7 @@ class TestLoadNodes:
         # Find the prop param for "bio"
         prop_rows = [p for p in captured if isinstance(p, list) and len(p) == 3 and p[1] == "bio"]
         if prop_rows:
-            assert len(prop_rows[0][2]) == 60000
+            assert len(prop_rows[0][2]) == 63000
 
     def test_none_values_excluded_from_props(self):
         loader, conn, cursor = _make_loader()

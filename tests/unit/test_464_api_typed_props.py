@@ -225,16 +225,20 @@ def test_bulk_loader_load_nodes_binds_numbers():
     assert _typed(_prop_rows(cursor, "n464")) == _expect(id="n464")
 
 
-def test_bulk_loader_load_nodes_cuts_only_long_text():
+def test_bulk_loader_load_nodes_keeps_long_text_whole():
+    """4.7.0 row 3d: text up to rdf_props.val's 64000 characters is stored whole (it was cut to 60000); wider is
+    refused before anything is written (tests/e2e/test_470_batch_widths_e2e.py)."""
     from iris_vector_graph.bulk_loader import BulkLoader
 
     conn = MagicMock()
     cursor = MagicMock()
     conn.cursor.return_value = cursor
     cursor.fetchall.return_value = []
-    BulkLoader(conn).load_nodes([("n464", {"t": "x" * 70000, "i": 10**12})], use_noindex=False)
+    BulkLoader(conn).load_nodes([("n464", {"t": "x" * 63000, "i": 10**12})], use_noindex=False)
     got = _prop_rows(cursor, "n464")
-    assert (len(got["t"]), got["i"], type(got["i"])) == (60000, 10**12, int)
+    assert (len(got["t"]), got["i"], type(got["i"])) == (63000, 10**12, int)
+    with pytest.raises(ValueError, match="70000 characters; the column holds 64000"):
+        BulkLoader(conn).load_nodes([("n465", {"t": "x" * 70000})], use_noindex=False)
 
 
 def test_engine_load_networkx_passes_values_through():
