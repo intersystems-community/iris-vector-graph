@@ -69,6 +69,9 @@ class Group:
     #: graph_kg (make + install_ivg), rag (make + initialize_schema RAG), split (make --split), empty (make, nothing
     #: installed: `--no-install`), name (nothing)
     kind: str
+    #: Its files' namespace may be no other group's (`GateNamespaces.check` refuses a caller who names it so): they do
+    #: something to the whole namespace that breaks another file's statements there.
+    exclusive: bool = False
 
 
 GROUPS: Dict[str, Group] = {
@@ -84,7 +87,11 @@ GROUPS: Dict[str, Group] = {
     # fixed namespaces, one of them another agent's live one (IVG460FXOC); outside the gate they are '' and the file
     # skips. graph_kg: the file needs IVG installed (the differential and the value matrix also need an IVG460FX* name,
     # which these are); name: the file makes (or replays a release into) and drops its own.
-    "r308": Group("IVG_NS_IVG460FXOC", "OC", "graph_kg"),
+    # exclusive (4.7.0): the four r308 files call %SYSTEM.SQL.Purge before each case, and a statement another file
+    # prepares in that namespace meanwhile loses its cached-query class (-30 '%SQLCQ_<ns>.CLS6_CQ' not found, or -400
+    # <LIST>LoadTableFunction, at Prepare: test_460_r228 beside the crosstype family, tests/unit/
+    # test_470_gate_r308_exclusive.py)
+    "r308": Group("IVG_NS_IVG460FXOC", "OC", "graph_kg", exclusive=True),
     "r307": Group("IVG_NS_IVG460FXOV", "OV", "graph_kg"),
     "r314": Group("IVG_NS_IVG460FXGV", "GV", "graph_kg"),
     "fhirless": Group("IVG_FHIRLESS_NAMESPACE", "NOF", "graph_kg"),
@@ -392,11 +399,33 @@ class GateNamespaces:
                 except Exception as exc:  # recorded and raised for each test that needs it
                     self._made[g] = exc
 
+    def _in_effect(self, g: str) -> Optional[str]:
+        """The namespace group `g`'s variable names for this run: the caller's, else the one this run made."""
+        if g in self._caller or (GROUPS[g].var == "IVG_NAMESPACE" and self._environ.get("IVG_NAMESPACE")):
+            return self._environ.get(GROUPS[g].var) or None
+        return self.names()[g] if g in self._made else None
+
+    def _refuse_shared(self, g: str) -> None:
+        """An exclusive group's namespace that another group's variable names too: raise with the reason."""
+        mine = self._in_effect(g) or self.names()[g]
+        for other, grp in GROUPS.items():
+            if other == g or grp.var == GROUPS[g].var or self._in_effect(other) != mine:
+                continue
+            raise RuntimeError(
+                f"R309 gate: {GROUPS[g].var} names {mine}, as {grp.var} does: the {g} files purge their namespace's "
+                f"cached queries (%SYSTEM.SQL.Purge) before each case, which fails another file's statements there "
+                f"mid-Prepare; give {GROUPS[g].var} a namespace of its own, or leave it unset for this run's"
+            )
+
     def check(self, groups: Iterable[str]) -> None:
-        """Raise for a test whose namespace failed, or was not made at session start; never make one."""
+        """Raise for a test whose namespace failed, or was not made at session start; never make one. An exclusive
+        group's tests raise when its namespace is another group's too (4.7.0)."""
         groups = set(groups)
         if not groups or not self.on():
             return
+        for g in _in_order(groups):
+            if GROUPS[g].exclusive:
+                self._refuse_shared(g)
         names = self.names()
         for g in _in_order(groups - self._caller):
             if g not in self._made:
