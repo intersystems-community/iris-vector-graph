@@ -32,7 +32,10 @@ pytestmark = pytest.mark.skipif(
     reason="SKIP_IRIS_TESTS is set",
 )
 
-_ORPHAN = ROUTE_TABLE_PREFIX + "0rphan7e57c0de"
+# A routed table's own shape, kg_emb_ and 16 hex characters (routing.route_table_name): the Eraser empties only
+# tables of that shape (4.6.0: a name pasted into its DELETE is a route's or nothing), so "0rphan7e57c0de", not hex,
+# was another program's table, whose foreign key rightly refused the erase (SQLCODE -124)
+_ORPHAN = ROUTE_TABLE_PREFIX + "0bad0c0de7e57c0d"
 _GRAPH = "orphan-route-graph"
 
 

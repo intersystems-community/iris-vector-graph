@@ -244,8 +244,25 @@ def test_every_projected_procedure_comes_from_the_schemas_forwarder(world):
     assert projected == EXPECTED_SQL_NAMES
 
 
+def test_the_txn_procedures_open_and_close_ivgs_levels(world):
+    """4.6.4's Txn_Begin / Txn_End / Txn_Undo (Graph.KG.Txn), each answering $TLEVEL after: Begin opens one level
+    (two with pHold at level 0), Undo(n) and End(n) close level n and those above it, never one below. A
+    connection of its own, so the world's is left at level 0."""
+    ns = [n for n, s in PROC_NAMESPACES if s == world["schema"]][0]
+    conn = ns262.connect(ns)
+    try:
+        def level(call):
+            return int(ns262.rows(conn, f"SELECT {world['schema']}.{call}")[0][0])
+
+        assert [level("Txn_Begin()"), level("Txn_Begin()"), level("Txn_Undo(2)"), level("Txn_End(1)")] == [1, 2, 1, 0]
+        assert [level("Txn_Begin(1)"), level("Txn_End(1)"), level("Txn_End(0)")] == [2, 0, 0]
+    finally:
+        conn.close()
+
+
 def test_this_module_answers_every_projected_procedure():
     covered = {c.split("(")[0] for c, _ in PURE} | {
         "CypherFn_IVGNEWID", "CypherFn_IVGRAND", "CypherFn_IVGTYPEERROR", "MatchEdges", "MatchEdgesAllGraphs",
-        "DijkstraPath", "kg_BM25", "kg_IVF", "backfill_temporal_rows", "ledger_records", "rebuild_edge_indices"}
+        "DijkstraPath", "kg_BM25", "kg_IVF", "backfill_temporal_rows", "ledger_records", "rebuild_edge_indices",
+        "Txn_Begin", "Txn_End", "Txn_Undo"}  # 4.6.4: test_the_txn_procedures_open_and_close_ivgs_levels
     assert covered == EXPECTED_SQL_NAMES

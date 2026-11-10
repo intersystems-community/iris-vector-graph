@@ -489,12 +489,17 @@ class TestStoreWritePaths:
         except Exception:
             pass
 
-    def test_bulk_ingest_with_qualifiers(self, eng, iris_connection):
-        """bulk_ingest_edges with qualifiers field."""
+    def test_bulk_ingest_refuses_qualifiers(self, eng, iris_connection):
+        """bulk_ingest_edges stores no qualifiers, and says so (R213, its docstring: a dict key outside its list
+        raises ValueError naming the edge, before anything is written); this test called it with one and
+        accepted any count."""
         eng.create_node("biq_a"); eng.create_node("biq_b")
         edges = [{"s": "biq_a", "p": "R", "o": "biq_b", "qualifiers": {"confidence": "0.9"}}]
-        n = eng.bulk_ingest_edges(edges, auto_sync=False)
-        assert n >= 0
+        with pytest.raises(ValueError, match=r"edge 0 has key\(s\) 'qualifiers'"):
+            eng.bulk_ingest_edges(edges, auto_sync=False)
+        cur = iris_connection.cursor()
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s = 'biq_a' AND p = 'R' AND o_id = 'biq_b'")
+        assert int(cur.fetchone()[0]) == 0
 
     def test_temporal_bulk_create(self, eng):
         """bulk_create_edges_temporal"""
