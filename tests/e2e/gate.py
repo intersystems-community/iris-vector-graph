@@ -18,6 +18,9 @@
     split      IVG_SPLIT_NAMESPACE: `make_scratch_namespace.py --split` (globals and routines apart)
     s236       IVG_NS_IVG236, the spec 236 scratch (no default, R287), for the modules that read it or use the
                `ivg_236_scratch` fixture: IVG installed for `Graph_KG` (the fixture deploys again over it)
+    load470, setup470
+               IVG_LOAD_NS, IVG_SETUP_NS: `make_scratch_namespace.py --no-install`, nothing installed (4.7.0 rows 2
+               and 5 time and inspect the first setup)
     dry_run, r299a, r299b
                IVG_DRY_RUN_NS, IVG_NS_IVG460FX299A, IVG_NS_IVG460FX299B: a name only; those files make and drop the
                namespace themselves, and the name is this run's, so two runs never share one (R191)
@@ -63,7 +66,8 @@ NAME_PREFIX = "IVG460FXG"
 class Group:
     var: str
     suffix: str
-    #: graph_kg (make + install_ivg), rag (make + initialize_schema RAG), split (make --split), name (nothing)
+    #: graph_kg (make + install_ivg), rag (make + initialize_schema RAG), split (make --split), empty (make, nothing
+    #: installed: `--no-install`), name (nothing)
     kind: str
 
 
@@ -139,6 +143,11 @@ GROUPS: Dict[str, Group] = {
     # them back); test_465_stale_error_text_e2e makes a user holding the reading role there and runs failing writes.
     "r465legacy": Group("IVG_R465_LEGACY_NS", "465L", "name"),
     "r465role": Group("IVG_R465_ROLE_NS", "465R", "graph_kg"),
+    # 4.7.0 rows 2 and 5: test_470_node_load_new_namespace_e2e times the first load into a namespace and
+    # test_470_setup_compiles_every_class_e2e checks what the first initialize_schema() compiles, so each needs one
+    # with nothing installed yet.
+    "load470": Group("IVG_LOAD_NS", "470LD", "empty"),
+    "setup470": Group("IVG_SETUP_NS", "470SU", "empty"),
 }
 #: Namespace variables an E2E module cannot be given per run, and why (tests/unit/test_460_gate_namespace_vars.py).
 SESSION_NAMESPACES: Dict[str, str] = {
@@ -163,20 +172,13 @@ SESSION_NAMESPACES: Dict[str, str] = {
         "release's namespaces, so whoever runs the file sets one up; unset, the file skips"
     ),
     "IVG_ISSUE13_NS": (
-        "a namespace on a throwaway IRIS Community 2026.1 container (IVG_ISSUE13_PORT), the build GitHub #13 failed "
-        "on (tests/e2e/test_470_issue13_count_distinct_limit_e2e.py), which the gate cannot make; or an IVG470* "
-        "scratch namespace on the enterprise container; unset, the file skips"
-    ),
-    "IVG_LOAD_NS": (
-        "a new namespace with no IVG data (`make_scratch_namespace.py --no-install`): "
-        "tests/e2e/test_470_node_load_new_namespace_e2e.py times the first load into it, which a namespace the gate "
-        "set up and other modules wrote to cannot show; unset, the file skips"
-    ),
-    "IVG_SETUP_NS": (
-        "a namespace holding no IVG classes yet (tests/e2e/test_470_setup_compiles_every_class_e2e.py, which asserts "
-        "what a first initialize_schema() compiles), on a throwaway container (IVG_SETUP_PORT) or made with "
-        "`make_scratch_namespace.py --no-install`; the gate's namespaces come with IVG installed; unset, the file "
-        "skips"
+        "USER on a throwaway IRIS Community 2026.1 container, the build GitHub #13 failed on "
+        "(tests/e2e/test_470_issue13_count_distinct_limit_e2e.py), which the gate cannot make. On a free port P: "
+        "`docker run -d --name ivg-c261 -p P:1972 containers.intersystems.com/intersystems/iris-community:2026.1`; "
+        "once healthy, `docker exec -i ivg-c261 iris session IRIS -U %SYS` and "
+        "`Do ##class(Security.Users).UnExpireUserPasswords(\"*\")` (the password stays SYS); then IVG_ISSUE13_NS=USER "
+        "IVG_ISSUE13_PORT=P and IVG_GATE_NAMESPACES=0, one connection at a time (Community), and `docker rm -f "
+        "ivg-c261` after. On the enterprise container it runs in an IVG470* scratch namespace; unset, the file skips"
     ),
 }
 #: The variables read only by the files they name, so a module that reads one needs that group.
@@ -295,6 +297,8 @@ def default_setup(kind: str, ns: str) -> None:
         subprocess.run([argv[0], "-c", _RAG_SETUP, str(REPO), ns, str(msn.PORT)], check=True, env=env, cwd=cwd)
     elif kind == "split":
         msn.make(ns, split=True)
+    elif kind == "empty":
+        msn.make(ns)
     elif kind != "name":
         raise ValueError(f"unknown namespace kind {kind!r}")
 

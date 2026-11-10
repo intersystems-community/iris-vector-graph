@@ -15,9 +15,10 @@ Also measured on 9995d0d7: on 2026.3 enterprise, whose probe finds FETCH FIRST s
 SKIP with LIMIT as `FETCH FIRST n ROWS ONLY OFFSET k`, which IRIS refuses (SQLCODE -25, "Input encountered after end
 of query"): every SKIP + LIMIT query failed on such an engine. OFFSET goes before FETCH.
 
-Where: the IRIS of `IVG_ISSUE13_PORT` (default 31972), namespace `IVG_ISSUE13_NS` (an IVG470* scratch namespace, or
-USER on a throwaway container), user `IVG_ISSUE13_USER` / password `IVG_ISSUE13_PASSWORD`. Run it on 2026.1 Community
-and on 2026.3 enterprise.
+Where: the IRIS of `IVG_ISSUE13_PORT` (default 31972), namespace `IVG_ISSUE13_NS`, else `IVG_NAMESPACE` (an IVG470*
+scratch namespace, the E2E gate's primary one, or USER on a throwaway container: tests/e2e/gate.py's
+SESSION_NAMESPACES says how to make the 2026.1 one), user `IVG_ISSUE13_USER` / password `IVG_ISSUE13_PASSWORD`.
+Run it on 2026.1 Community and on 2026.3 enterprise.
 """
 
 from __future__ import annotations
@@ -33,9 +34,10 @@ PASSWORD = os.environ.get("IVG_ISSUE13_PASSWORD", "SYS")
 
 pytestmark = [
     pytest.mark.e2e,
-    pytest.mark.skipif(not (NS.startswith("IVG470") or (NS == "USER" and "IVG_ISSUE13_PORT" in os.environ)),
-                       reason="IVG_ISSUE13_NS must name an IVG470* scratch namespace, or USER on a throwaway "
-                              "container given by IVG_ISSUE13_PORT"),
+    pytest.mark.skipif(not (NS.startswith(("IVG470", "IVG460FXG"))
+                            or (NS == "USER" and "IVG_ISSUE13_PORT" in os.environ)),
+                       reason="IVG_ISSUE13_NS must name an IVG470* scratch namespace (the gate's IVG460FXG* one), or "
+                              "USER on a throwaway container given by IVG_ISSUE13_PORT"),
 ]
 
 NODES = [("Q948399", "Organization", "InterSystems"), ("Q7185789", "Person", "Phillip Ragon"),
