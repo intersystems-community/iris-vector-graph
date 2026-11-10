@@ -1321,9 +1321,10 @@ def properties_map_subquery(node_expr: str) -> str:
     node/relationship *value*'s internal `_props` field. Built by CY_PROPS_MAP
     (ObjectScript, not a SQL aggregate — IRIS SQL has no string-concatenating
     aggregate to build a JSON object across rows from a subquery), which also
-    gives each value the same typing a bare property fetch already gets from
-    the driver (int text -> a JSON number, not a quoted string): 'true'/'false'
-    -> boolean, text that reads as a number -> a number, else a string.
+    gives each value the typing `RETURN n.p` gives it: a stored number -> a JSON
+    number, 'true'/'false' -> boolean, a list or map's text -> that list or map,
+    else a string, the text '30' too (4.7.0 row 10: text that reads as a number
+    was a number here).
 
     The third argument is the node's graph, NULL here: the graph-scope passes fill it as they scope the other
     property sub-SELECTs (`_props_map_graph`), with the `USE GRAPH` literal or the node row's `graph_id`. Without it

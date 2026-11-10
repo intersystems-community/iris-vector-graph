@@ -42,14 +42,15 @@ def test_cy_str_size_counts_a_surrogate_pair_once():
     assert "'" not in body and "?" not in body and not re.search(r":\d", body)
 
 
-def test_properties_map_reads_only_canonical_number_text():
-    """4.6.0 R307: properties(n) (CY_PROPS_MAP) read '1.0' as 1 and '1e3' as the integer 1000 (+v): text a number only
-    as JSON spells one (R121) is put in the map as written, so JSON reads 1.0 and 1e3 as floats."""
+def test_properties_map_reads_no_text_as_a_number():
+    """4.6.0 R307: properties(n) (CY_PROPS_MAP) read '1.0' as 1 and '1e3' as the integer 1000 (+v). 4.7.0 row 10: it
+    reads no text as a number at all, as `n.p` does not (a string '30' was 30 in the map); a stored number is
+    CY_JSON_NUM's. The answers are in tests/e2e/test_470_properties_map_types_e2e.py."""
     from pathlib import Path
 
     src = (Path(__file__).resolve().parents[2] / "iris_vector_graph" / "schema.py").read_text()
     body = next(x for x in src.splitlines() if "FUNCTION Graph_KG.CY_PROPS_MAP(" in x).split("LANGUAGE OBJECTSCRIPT", 1)[1]
-    assert '$Match(v, "-{0,1}(0|[1-9][0-9]*)([.][0-9]+){0,1}([eE][-+]{0,1}[0-9]+){0,1}") { Set j = v }' in body
+    assert "$Match(v" not in body and "$IsValidNum" not in body and "CYJSONNUM(v)" in body
     assert "+v" not in body and "?" not in body and "'" not in body
 
 

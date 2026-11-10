@@ -87,12 +87,12 @@ def test_spellings_of_a_whole_number_float():
     assert number_spellings(5.0) == ["5", "5.0"]
 
 
-def test_properties_of_a_node_retype_only_json_shaped_number_text():
-    """`properties(n)` (CY_PROPS_MAP): `$IsValidNum` alone turned the string ".95" into 0.95. Text is a number only
-    when spelled as JSON spells one; other values keep the type they were stored with (`%Set` with no type)."""
+def test_properties_of_a_node_retype_no_text():
+    """`properties(n)` (CY_PROPS_MAP): `$IsValidNum` alone turned the string ".95" into 0.95; from 4.6.0 R121 text
+    spelled as JSON spells a number still became one, so the string '30' was 30 (4.7.0 row 10). Now every value keeps
+    the type it was stored with, as `n.p` reads it."""
     from iris_vector_graph.schema import GraphSchema
 
     ddl = next(s for s in GraphSchema.get_procedures_sql_list() if "CY_PROPS_MAP(nid" in s)
-    # 4.6.0 R307: the text as JSON spells the number, so its point is kept (+v made '1.0' the integer 1)
-    assert '$Match(v, "-{0,1}(0|[1-9][0-9]*)([.][0-9]+){0,1}([eE][-+]{0,1}[0-9]+){0,1}") { Set j = v }' in ddl
+    assert "$Match(v" not in ddl
     assert "ElseIf $IsValidNum(v) {" not in ddl

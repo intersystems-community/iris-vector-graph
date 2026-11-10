@@ -228,8 +228,10 @@ The sensor and its three readings have no edges left, so all four go.
     number as a Cypher `CREATE` or `SET` does, and it reads as the float 0.95. Before 4.6.0 the SQL path and
     `get_node()` read the Cypher-written one as IRIS's text, `'.94999999999999995559'`, with intersystems-irispython
     5.4.1 or later. A whole node (`RETURN n`, `collect(n)`, a node in a map, a variable-length path's target) carries each property as
-    `RETURN n.score` reads it; before 4.6.0 it carried every value as text. `properties(n)` reads both as 0.95, and
-    reads the string `"0.95"` as 0.95 too.
+    `RETURN n.score` reads it; before 4.6.0 it carried every value as text. From 4.7.0 `properties(n)` reads each
+    value as `RETURN n.score` does too: the earlier release's text and the string `"0.95"` as the string `'0.95'`,
+    the stored number as 0.95. Before 4.7.0 it read any text that spells a number as the number, so a string `'30'`
+    was 30 in `properties(n)` and `'30'` in `n.s`.
 - **Cause:** neither store records a type the readers can rely on. A node property is the text column `rdf_props.val`:
   before 4.6.4 the Python API wrote a number as the text `0.95`, the same text as the string `"0.95"`, and a Cypher
   write (and from 4.6.4 the API) stores the float as an IRIS double. A relationship property is a leaf of the `qualifiers` JSON: `create_edge` writes a JSON number,
