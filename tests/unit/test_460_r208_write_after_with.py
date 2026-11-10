@@ -108,7 +108,7 @@ def test_the_pin_binds_the_stage_parameters_and_later_statements_do_not():
     stmts = _stmts("MATCH (n:X {k: 1}) SET n.k = 2 WITH n SET n.q = 3")
     pin = next((s, p) for s, p in stmts if s.startswith(_PIN))
     assert pin[1] == ["X", "k"], pin
-    upd = next((s, p) for s, p in stmts if "SET val = ?" in s and "Stage1" in s)
+    upd = next((s, p) for s, p in stmts if "SET val = Graph_KG.Prop_Set(%ID, val, ?)" in s and "Stage1" in s)
     assert upd[1] == [3, "q"], upd
 
 

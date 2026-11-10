@@ -42,7 +42,7 @@ def _props(q, params=None):
 
 def _set_values(q, params=None):
     """The values the UPDATE statements of a SET bind."""
-    return [p[0] for s, p in _statements(q, params) if s.startswith("UPDATE Graph_KG.rdf_props SET val = ?")]
+    return [p[0] for s, p in _statements(q, params) if s.startswith("UPDATE Graph_KG.rdf_props SET val = Graph_KG.Prop_Set(%ID, val, ?)")]
 
 
 # ── 1. a $param inside a list literal ────────────────────────────────────────
@@ -81,7 +81,7 @@ def test_merge_action_set_stores_a_list_as_set_does(action, value, params):
     parameter in it or not."""
     bound = [
         p[0] for s, p in _statements(f"MERGE (n:WT {{id:'m1'}}) {action} SET n.l = {value}", params)
-        if s.startswith("UPDATE Graph_KG.rdf_props SET val = ?")
+        if s.startswith("UPDATE Graph_KG.rdf_props SET val = Graph_KG.Prop_Set(%ID, val, ?)")
     ]
     assert bound == ["[1, 2]"]
 
@@ -258,6 +258,6 @@ def test_merge_action_set_stores_the_float_that_set_and_the_param_store(action, 
     sets = [
         p
         for s, p in _statements(f"MERGE (n:WT {{id:'m1'}}) {action} SET n.v = {expr}")
-        if s.startswith("UPDATE Graph_KG.rdf_props SET val = ?")
+        if s.startswith("UPDATE Graph_KG.rdf_props SET val = Graph_KG.Prop_Set(%ID, val, ?)")
     ]
     assert len(sets) == 1 and type(sets[0][0]) is float and check(sets[0][0]), sets

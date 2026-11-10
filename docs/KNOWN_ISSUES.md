@@ -223,9 +223,11 @@ The sensor and its three readings have no edges left, so all four go.
   a relationship's float as Python spells it, so one Python spells with an exponent (`1e-07`, `1e+20`) reads back as
   that string, and so does NaN or an infinity written by any Cypher write (`'nan'`, `'inf'`). To retype a node
   property an earlier release's Python writer stored, when you know it is numeric, read it and write the number back
-  with `store_node` (pass `graph=` for a named graph). In 4.6.4 a Cypher `SET n.age = toInteger(n.age)` does not do
-  it: it fails with SQLCODE -23, and `WITH n, toInteger(n.age) AS a SET n.age = a` leaves the text, which it finds
-  equal to the number.
+  with `store_node` (pass `graph=` for a named graph), or from 4.7.0 with a Cypher `SET n.age = toInteger(n.age)`
+  (`toFloat` for a float), which stores the number. Before 4.7.0 that SET failed with SQLCODE -23, and a Cypher write
+  of a value with the stored text and another type left the string: `SET n.age = 30` over the string `'30'`, or
+  `WITH n, toInteger(n.age) AS a SET n.age = a`. IRIS writes no new value whose text equals the old one's; IVG now
+  writes such a value into the row itself (`Graph_KG.Prop_Set`).
 - **Check:** return the property next to the filter's answer and look at the types.
 
 ```python

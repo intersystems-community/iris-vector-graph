@@ -61,6 +61,7 @@
     "Graph.KG.PLAIDSearch.1",
     "Graph.KG.PageRank.1",
     "Graph.KG.PageRankEmbedded.1",
+    "Graph.KG.PropWrite.1",
     "Graph.KG.PyOps.1",
     "Graph.KG.SQL.1",
     "Graph.KG.Service.1",

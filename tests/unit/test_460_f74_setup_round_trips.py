@@ -331,8 +331,9 @@ def _fresh_setup(monkeypatch, grants_per_object=0):
 #: or routines moves this by 4 a class and about 1 a routine: measure again and say so here. 516 since be6cd07c (one
 #: more %Dictionary.CompiledClass %ExistsId, the MCPToolSet DependsOn change). 517 since 1a534f2e (R316: the UPDATE
 #: recording kg_EdgeEmbeddings' registry row as an edge route); 518 with R315's routine, CY_LIST_HAS. 522 in 4.6.4:
-#: one more class, Graph.KG.Txn (its three Txn_* SqlProcs project from Graph.KG.SqlProcs, already loaded).
-FRESH_SETUP_ROUND_TRIPS = 522
+#: one more class, Graph.KG.Txn (its three Txn_* SqlProcs project from Graph.KG.SqlProcs, already loaded). 526 in
+#: 4.7.0: one more class, Graph.KG.PropWrite (its Prop_Set projects from Graph.KG.SqlProcs).
+FRESH_SETUP_ROUND_TRIPS = 526
 
 
 def test_a_fresh_setup_makes_a_fixed_number_of_round_trips(monkeypatch):

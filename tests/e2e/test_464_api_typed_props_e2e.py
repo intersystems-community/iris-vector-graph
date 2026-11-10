@@ -175,8 +175,8 @@ def test_text_a_4_6_3_write_left_reads_as_text_until_rewritten(engines):
     """4.6.3's create_node stored 30 and 0.5 as the strings '30' and '0.5', the same row a string written on purpose
     makes, so nothing can retype it: it reads as the string. The documented repair (KNOWN_ISSUES, migration notes), for
     a property the caller knows is numeric: read it and write the number back with store_node. (A Cypher
-    `SET n.age = toInteger(n.age)` fails with SQLCODE -23, and the WITH form writes nothing, its value being equal to
-    the stored text: open defects, measured on 4.6.3 too.)"""
+    `SET n.age = toInteger(n.age)` failed with SQLCODE -23, and the WITH form wrote nothing, its value being equal to
+    the stored text, until 4.7.0, which writes the number through Prop_Set: tests/e2e/test_470_prop_retype_e2e.py.)"""
     e = engines["default"]
     nid = "t464:old"
     try:

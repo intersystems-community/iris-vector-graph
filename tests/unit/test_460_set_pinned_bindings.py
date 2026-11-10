@@ -80,7 +80,7 @@ def test_the_capture_reads_the_match():
     assert re.search(r"\nSELECT n0\.node_id\b", cap[0]) and "rdf_labels l1" in cap[0], cap
     assert cap[1] == ["X", "k"], cap
     # the values bind as before: 2 for k, 3 for q
-    vals = [p for s, p in _writes(stmts) if s.startswith("UPDATE rdf_props SET val = ?")]
+    vals = [p for s, p in _writes(stmts) if s.startswith("UPDATE rdf_props SET val = Graph_KG.Prop_Set(%ID, val, ?)")]
     assert vals == [[2, "k"], [3, "q"]], vals
 
 

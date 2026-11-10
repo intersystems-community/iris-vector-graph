@@ -1706,6 +1706,28 @@ class IRISGraphEngine(
     @capabilities.setter
     def capabilities(self, value: Optional[IRISCapabilities]) -> None:
         self._capabilities = value
+        self.__dict__.pop("_prop_set_ok", None)  # setup may have deployed Prop_Set: ask again
+
+    @property
+    def _prop_set_deployed(self) -> bool:
+        """Whether the IVG Schema has Prop_Set (Graph.KG.PropWrite, 4.7.0), which every Cypher UPDATE of a node
+        property calls; asked once and kept until the capabilities are set again (initialize_schema). When the
+        dictionary cannot be read the answer is True: a missing function then fails the write (SQLCODE -359), where
+        False would silently leave a retyped value its old type."""
+        ok = self.__dict__.get("_prop_set_ok")
+        if ok is None:
+            from iris_vector_graph._dictionary import compiled_method_exists
+            from iris_vector_graph.schema_name import FORWARDER_CLASS, schema_package
+
+            try:
+                ok = compiled_method_exists(
+                    self.conn, f"{schema_package(self._ivg_schema)}.{FORWARDER_CLASS}", "PropSet"
+                )
+            except Exception as exc:
+                logger.debug("Prop_Set detection could not read the dictionary (%s): taken as deployed", exc)
+                ok = True
+            self.__dict__["_prop_set_ok"] = ok
+        return ok
 
     @property
     def _known_capabilities(self) -> IRISCapabilities:

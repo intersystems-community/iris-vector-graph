@@ -93,8 +93,8 @@ def test_the_docs_state_counts_this_test_reads():
 
 
 #: Routines a release after 4.6.0 added, by count: the CHANGELOG's 4.6.0 section states 4.6.0's counts, and the
-#: current docs the current ones. 4.6.4: Txn_Begin, Txn_End and Txn_Undo (Graph.KG.SqlProcs).
-ADDED_SINCE_460 = {"projected": 3, "catalog": 3}
+#: current docs the current ones. 4.6.4: Txn_Begin, Txn_End and Txn_Undo (Graph.KG.SqlProcs). 4.7.0: Prop_Set.
+ADDED_SINCE_460 = {"projected": 4, "catalog": 4}
 
 
 @pytest.mark.parametrize("doc, what, number, context", _stated(), ids=lambda v: v if isinstance(v, str) else None)

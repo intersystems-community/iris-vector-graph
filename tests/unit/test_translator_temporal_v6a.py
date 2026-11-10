@@ -415,7 +415,7 @@ def test_set_date_from_with_variable():
     pairs = [s for s in stmts if s.startswith("__capture_pairs__ ")]
     assert len(pairs) == 1 and "SELECT n0.node_id, Graph_KG.CY_TYPED(Stage1.d)" in pairs[0], stmts  # R285
     key = pairs[0].split("\n", 1)[0].split()[1]
-    assert any(s.startswith("UPDATE ") and f"SET val = __PAIR_{key}__[" in s for s in stmts), stmts
+    assert any(s.startswith("UPDATE ") and f"SET val = Graph_KG.Prop_Set(%ID, val, __PAIR_{key}__[" in s for s in stmts), stmts
 
 
 def test_merge_with_datetime():

@@ -31,6 +31,7 @@ EXPECTED_SQL_NAMES = {
     "JSON_KEYS", "Percentile_PDISC", "Percentile_PCONT", "kg_BM25", "kg_IVF", "MatchEdges", "MatchEdgesAllGraphs",
     "DijkstraPath", "backfill_temporal_rows", "rebuild_edge_indices", "ledger_records",
     "Txn_Begin", "Txn_End", "Txn_Undo",  # 4.6.4: IVG's own part of a write (Graph.KG.Txn)
+    "Prop_Set",  # 4.7.0: a node property's typed write (Graph.KG.PropWrite)
 }
 
 _KEYWORDS_WITH_SQLPROC = re.compile(r"^(?:ClassMethod|Query) \w+\(.*\)[^\n]*\[[^\]\n]*\bSqlProc\b", re.M)

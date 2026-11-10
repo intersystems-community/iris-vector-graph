@@ -41,6 +41,9 @@ _schema_prefix: str = ""
 #: The IVG Schema of the translation in progress (its engine's), or None outside one. A context variable, not a module
 #: value: set and reset around each translate_to_sql() call, so it is one call's, in one thread or task.
 _translation_schema: contextvars.ContextVar = contextvars.ContextVar("ivg_translation_schema", default=None)
+#: False while translating for an engine whose namespace has no Prop_Set (its classes predate 4.7.0): a property UPDATE
+#: then sets the value as 4.6.x did (`_prop_set`). True outside a translation and for an engine that cannot tell.
+_translation_prop_set: contextvars.ContextVar = contextvars.ContextVar("ivg_translation_prop_set", default=True)
 #: Set (to a list) by the engine's 2026.3 long-list fallback: an UNWIND of a stage's list is read by position, and each
 #: rewrite appends its alias to the list (4.6.0 R310, see _unwind_by_position).
 _unwind_by_index: contextvars.ContextVar = contextvars.ContextVar("ivg_unwind_by_index", default=None)
@@ -6860,13 +6863,14 @@ def translate_to_sql(
     """The SQL for ``cypher_query``, every IVG name in it qualified with ``engine``'s IVG Schema (the module default
     prefix when there is no engine, or the engine has none)."""
     schema = getattr(engine, "_schema_prefix", None)
-    if not isinstance(schema, str) or not schema:
-        return _translate_to_sql(cypher_query, params, engine, procedures)
-    token = _translation_schema.set(schema)
+    prop_set = _translation_prop_set.set(getattr(engine, "_prop_set_deployed", True) is not False)
+    schema_token = _translation_schema.set(schema) if isinstance(schema, str) and schema else None
     try:
         return _translate_to_sql(cypher_query, params, engine, procedures)
     finally:
-        _translation_schema.reset(token)
+        if schema_token is not None:
+            _translation_schema.reset(schema_token)
+        _translation_prop_set.reset(prop_set)
 
 
 def _match_vars(clause) -> set:
@@ -10730,7 +10734,8 @@ def _merge_keyed_action(context, ids, item, k_value_sql) -> bool:
             context.add_dml(f'DELETE FROM {_table("rdf_props")} WHERE s IN ({ids}) AND "key" = ?', [k])
             return True
         context.add_dml(
-            f'UPDATE {_table("rdf_props")} SET val = {vsql} WHERE s IN ({ids}) AND "key" = ?', list(vparams) + [k]
+            f'UPDATE {_table("rdf_props")} SET val = {_prop_set(vsql)} WHERE s IN ({ids}) AND "key" = ?',
+            list(vparams) + [k],
         )
         context.add_dml(
             f'INSERT INTO {_table("rdf_props")} (s, "key", val) SELECT node_id, ?, {vsql} FROM {_table("nodes")} '
@@ -11468,7 +11473,7 @@ def translate_merge_clause(merge, context, metadata):
                                 )
                                 # UPDATE existing property row
                                 context.add_dml(
-                                    f'UPDATE {_table("rdf_props")} SET val = {_vsql} '
+                                    f'UPDATE {_table("rdf_props")} SET val = {_prop_set(_vsql)} '
                                     f'WHERE s IN ({_on_ids}) AND "key" = ?',
                                     _vparams + [k],
                                 )
@@ -11484,7 +11489,7 @@ def translate_merge_clause(merge, context, metadata):
                             else:
                                 # No pattern constraints — update all nodes (degenerate MERGE (a)).
                                 context.add_dml(
-                                    f'UPDATE {_table("rdf_props")} SET val = {_vsql} WHERE "key" = ?',
+                                    f'UPDATE {_table("rdf_props")} SET val = {_prop_set(_vsql)} WHERE "key" = ?',
                                     _vparams + [k],
                                 )
                         else:
@@ -11505,13 +11510,13 @@ def translate_merge_clause(merge, context, metadata):
                                     join_params_parts + where_params_parts,
                                 )
                                 context.add_dml(
-                                    f'UPDATE {_table("rdf_props")} SET val = ? '
+                                    f'UPDATE {_table("rdf_props")} SET val = {_prop_set("?")} '
                                     f'WHERE s IN ({_bound_ids}) AND "key" = ?',
                                     [val, k],
                                 )
                             else:
                                 context.add_dml(
-                                    f'UPDATE {_table("rdf_props")} SET val = ? '
+                                    f'UPDATE {_table("rdf_props")} SET val = {_prop_set("?")} '
                                     f'WHERE s IN (SELECT node_id FROM {_table("nodes")} WHERE node_id = ?) AND "key" = ?',
                                     [val, sql_alias, k],
                                 )
@@ -12004,6 +12009,25 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             inner_sql, inner_params = _translate_expr_for_update(e.arguments[0], node_var)
             return f"(-{inner_sql})", inner_params
 
+        conversion = _set_conversion(e)
+        if conversion is not None:
+            # `SET n.p = toInteger(n.p)`: the RETURN translation below reads n.p through the MATCH's alias n0, which
+            # the UPDATE of rdf_props does not have (SQLCODE -23, nothing written; 4.7.0 row 35). The conversion is
+            # RETURN's (_scalar_string), over the property as it is stored (a CAST to NUMERIC read 'x' as 0).
+            a = e.arguments[0]
+            if isinstance(a, ast.PropertyReference):
+                safe = a.property_name.replace("'", "''")
+                arg_sql = (
+                    f"(SELECT _upd.val FROM {_table('rdf_props')} _upd WHERE _upd.s = {_row(a)}{_row_graph(a)} "
+                    f"AND _upd.\"key\" = '{safe}')"
+                )
+                arg_params = []
+            else:
+                arg_sql, arg_params = _translate_expr_for_update(a, node_var)
+            # the argument is written once per use the conversion makes of it, and so are its parameters
+            convert, store = conversion
+            return store(convert(arg_sql)), arg_params * convert("\0").count("\0")
+
         # Fallback: try regular translation (for string concatenation etc.)
         try:
             sql = translate_expression(e, context, segment="select")
@@ -12021,6 +12045,49 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
         sql = f"CASE WHEN ({sql}) = 1 THEN 'true' WHEN ({sql}) = 0 THEN 'false' END"
         params = params + params
     return (sql, params, True)
+
+
+#: The conversion functions a SET value is translated with (`_translate_set_value`), each as RETURN converts
+#: (`_scalar_string`, `toboolean` in `_expr_scalar_function`): fn -> (the converted value's SQL from the argument's,
+#: the stored value from the converted value's text). A number goes through CY_ARITH (`+ 0`, `+ '0.0'` for a float),
+#: which answers an ObjectScript number: a SQL CAST's result is stored as its text ('30'), which reads back as a
+#: string. A boolean is stored as the text 'true' / 'false', as a Cypher `SET n.b = true` stores it.
+_SET_CONVERSIONS = {
+    "tointeger": (
+        lambda a: f"CASE WHEN ISNUMERIC({a}) = 1 THEN CAST({a} AS INTEGER) ELSE NULL END",
+        lambda t: f"{_fn('CY_ARITH')}({t}, '+', 0)",
+    ),
+    "tofloat": (
+        lambda a: f"CASE WHEN ISNUMERIC({a}) = 1 THEN CAST({a} AS DOUBLE) ELSE NULL END",
+        lambda t: f"{_fn('CY_ARITH')}({t}, '+', '0.0')",
+    ),
+    "tostring": (lambda a: f"{_fn('CY_TOSTRING')}({a})", lambda t: t),
+    "toboolean": (
+        lambda a: (
+            f"CASE WHEN LOWER(CAST({a} AS VARCHAR(3641144))) IN ('true','1','yes','y') THEN 'true' "
+            f"WHEN LOWER(CAST({a} AS VARCHAR(3641144))) IN ('false','0','no','n') THEN 'false' ELSE NULL END"
+        ),
+        lambda t: t,
+    ),
+}
+
+
+def _prop_set(value_sql: str) -> str:
+    """The SET of an UPDATE of rdf_props.val to `value_sql`, through Prop_Set (Graph.KG.PropWrite): IRIS's filer writes
+    no value whose text equals the stored one, so `SET n.p = 30` or `SET n.p = toInteger(n.p)` over the string '30'
+    left the string (4.7.0 row 35). Prop_Set writes that value into the row itself, once, and answers it. On a
+    namespace whose classes predate 4.7.0 (no Prop_Set) the value is set as before, and such a write leaves the
+    string until initialize_schema() deploys it."""
+    if not _translation_prop_set.get():
+        return value_sql
+    return f"{_fn('Prop_Set')}(%ID, val, {value_sql})"
+
+
+def _set_conversion(v):
+    """The `_SET_CONVERSIONS` entry of SET value `v` when it is one conversion call, else None."""
+    if isinstance(v, ast.FunctionCall) and len(v.arguments) == 1:
+        return _SET_CONVERSIONS.get(v.function_name.lower())
+    return None
 
 
 # Transient rdf_props key pinning the nodes a `SET n = {map}` replaces; the
@@ -12641,9 +12708,11 @@ def _set_node_prop_dml(context, k, v, cte, subquery, subparams, var=None, alias=
     if is_expr:
         # Expression value: inline SQL in UPDATE SET clause.
         # val_sql uses `val` for same-property refs (safe in UPDATE context).
+        update_sql = val_sql.replace(_SET_ROW, _table("rdf_props") + ".s").replace(
+            _SET_GRAPH, _table("rdf_props") + ".graph_id"
+        )
         context.add_dml(
-            f'{cte}UPDATE {_table("rdf_props")} SET val = '
-            f'{val_sql.replace(_SET_ROW, _table("rdf_props") + ".s").replace(_SET_GRAPH, _table("rdf_props") + ".graph_id")} '
+            f'{cte}UPDATE {_table("rdf_props")} SET val = {_prop_set(update_sql)} '
             f'WHERE s IN ({subquery}) AND "key" = ?',
             _lead_cte(context, cte, val_params, subparams) + [k],
         )
@@ -12691,11 +12760,17 @@ def _set_node_prop_dml(context, k, v, cte, subquery, subparams, var=None, alias=
             context.add_dml(
                 f'DELETE FROM {_table("rdf_props")} WHERE s IN ({subquery}) AND "key" = ? AND val IS NULL', [k]
             )
+        elif _set_conversion(v) is not None:
+            # a conversion's null (`toInteger('x')`, a node without the property) removes it (4.7.0 row 35)
+            context.add_dml(
+                f'{cte}DELETE FROM {_table("rdf_props")} WHERE s IN ({subquery}) AND "key" = ? AND val IS NULL',
+                _lead_cte(context, cte, [], subparams) + [k],
+            )
     else:
         # Literal / parameter value
         val = val_params[0] if val_params else None
         context.add_dml(
-            f'{cte}UPDATE {_table("rdf_props")} SET val = ? WHERE s IN ({subquery}) AND "key" = ?',
+            f'{cte}UPDATE {_table("rdf_props")} SET val = {_prop_set("?")} WHERE s IN ({subquery}) AND "key" = ?',
             _lead_cte(context, cte, [val], subparams) + [k],
         )
         context.add_dml(

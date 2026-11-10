@@ -180,6 +180,15 @@ ClassMethod TxnUndo(pLevel As %Integer = 0) As %Integer [ SqlName = Txn_Undo, Sq
     Quit ##class(Graph.KG.Txn).Undo(pLevel)
 }
 
+// ---------------------------------------------------------------- Graph.KG.PropWrite: a node property's typed write (4.7.0)
+
+/// The SET of each UPDATE of rdf_props.val a Cypher write makes: pNew, written into the row first when it has pOld's
+/// text and another type, which the UPDATE alone does not write (Graph.KG.PropWrite).
+ClassMethod PropSet(pId As %RawString = "", pOld As %RawString = "", pNew As %RawString = "") As %RawString [ SqlName = Prop_Set, SqlProc ]
+{
+    Quit ##class(Graph.KG.PropWrite).SetVal(pId, pOld, pNew)
+}
+
 // ---------------------------------------------------------------- admin and the ledger
 
 ClassMethod backfilltemporalrows() As %Integer [ SqlName = backfill_temporal_rows, SqlProc ]

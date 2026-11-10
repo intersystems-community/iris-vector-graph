@@ -306,6 +306,16 @@
       "backup": "no: setup re-creates them"
     },
     {
+      "kind": "function",
+      "names": [
+        "Prop_Set"
+      ],
+      "present": "setup",
+      "purpose": "the SET of each Cypher UPDATE of a node property: writes a value with the stored text and another type, which the UPDATE alone leaves as it was (4.7.0)",
+      "optional": "no",
+      "backup": "no: setup re-creates them"
+    },
+    {
       "kind": "procedure",
       "names": [
         "kg_KNN_VEC",
