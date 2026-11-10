@@ -176,14 +176,16 @@ def _procedure_options(proc, context):
     return _validate.validate_procedure_options(name, getattr(_validate, model_name), values, fields)
 
 
-def _refuse_positional_options_map(proc, *arg_names: str):
-    """A positional-argument procedure refuses an options map, naming its arguments as USER_GUIDE does (4.6.5 round 9).
+#: ``ivg.shortestPath.weighted``'s arguments as USER_GUIDE names them; the engine answers it and the translator checks it
+_WEIGHTED_PATH_ARGUMENTS = ("from", "to", "weightProp", "maxCost", "maxHops", "direction", "types")
 
-    ``CALL ivg.ppr({seeds: ['a']})`` read ``proc.options`` as ``{seeds: ['a']}``, which ``_translate_ppr`` never checked,
-    so it answered no rows and ``result.error`` said "requires at least 1 argument (seed_ids)", that name was never
-    documented. A newcomer who tried ``CALL ivg.ppr(['a'], {alpha: 0.5})`` got silent wrong answers: the map went into
-    ``proc.options``, which was ignored, so alpha kept its default. Now these procedures refuse a map where
-    ``_procedure_options`` refuses positional arguments, naming the documented positional-argument list.
+
+def _refuse_positional_options_map(proc, *arg_names: str):
+    """A procedure read by position refuses an options map, naming its arguments as USER_GUIDE does (4.6.5).
+
+    The parser puts a map into ``proc.options``, which these procedures never read: ``CALL ivg.ppr(['a'], {alpha: 0.5})``
+    answered the scores of alpha 0.85, and ``CALL ivg.ppr({seeds: ['a']})`` said it needed ``seed_ids``, a name the docs
+    never use. ``_procedure_options`` is the mirror: it refuses positional arguments to the procedures read by map.
     """
     name = proc.procedure_name
     if proc.options:
@@ -3407,7 +3409,7 @@ def _translate_weighted_shortest_path(
     procedure CTEs' are, and read as the handler reads them.
     """
     name = "ivg.shortestPath.weighted"
-    _refuse_positional_options_map(proc, "from", "to", "weightProp", "maxCost", "maxHops", "direction", "types")
+    _refuse_positional_options_map(proc, *_WEIGHTED_PATH_ARGUMENTS)
     args = proc.arguments
     if len(args) < 2:
         raise ValueError(f"{name} requires at least 2 arguments: from, to")

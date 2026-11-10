@@ -41,16 +41,16 @@ InvalidArgumentType: * needs two numbers and got a value that is not one`. The P
   query vector); `ivg.retrieve`, `ivg.ppr`, `ivg.neighbors`, `ivg.shortestPath.weighted`, `gds.pageRank.stream` and
   `gds.betweenness.stream` name an argument of the wrong type, where `int()` truncated `2.5` and Python said "invalid
   literal". **What to do:** a call that passed one of these values and read the answer raises now; correct the value.
-- **A positional-argument procedure refuses an options map, naming its positional arguments.** `CALL ivg.ppr({seeds:
-['alice']})` answered no rows and `result.error` said "requires at least 1 argument (seed_ids)", which is not in
-  USER_GUIDE. `CALL ivg.ppr(['alice'], {alpha: 0.5})` (positional seeds plus an options map that looks like a second
-  argument) got silent wrong answers: `alpha` kept its default of 0.85. The positional-argument procedures now refuse an
-  options map with `ValueError` naming the procedure and the positional arguments USER_GUIDE documents:
-  `ivg.ppr takes positional arguments (seeds, alpha, maxIter), not an options map`. This holds for `ivg.ppr`,
-  `ivg.shortestPath.weighted`, `ivg.bm25.search`, `ivg.ivf.search`, `ivg.retrieve` and `ivg.neighbors`. The error
-  messages for the first argument also use the USER_GUIDE names now (`ivg.ppr: requires at least 1 argument (seeds)`,
-  not `seed_ids`). **What to do:** if you wrote `CALL ivg.ppr({seeds: ...})`, pass the seeds as the first positional
-  argument instead: `CALL ivg.ppr([...], 0.85, 20)`.
+- **A procedure read by position refuses an options map.** `CALL ivg.ppr(['a'], {alpha: 0.5})` answered the scores of
+  alpha 0.85 (0.4522 for the seed of `a -> b, a -> c, b -> c`, where alpha 0.5 answers 0.6154): the map was never read.
+  `CALL ivg.shortestPath.weighted('a', 'c', {maxCost: 0.5})` answered the path of cost 1.0, which `('a', 'c', 'weight',
+0.5)` does not, and `CALL ivg.shortestPath.weighted({from: 'a', to: 'c'})` answered no rows and no error. `ivg.ppr`,
+  `ivg.shortestPath.weighted`, `ivg.bm25.search`, `ivg.ivf.search`, `ivg.retrieve` and `ivg.neighbors` now raise
+  `ValueError` for a map, naming their arguments as USER_GUIDE does (`ivg.ppr takes positional arguments (seeds, alpha,
+maxIter), not an options map`), and `ivg.shortestPath.weighted` raises without `from` and `to`. `ivg.ppr`'s messages
+  name `seeds` and `maxIter`, and `ivg.retrieve`'s `query`, where they said `seed_ids`, `max_iter` and `query_text`.
+  **What to do:** pass these procedures' values by position, as USER_GUIDE's table lists them: `CALL ivg.ppr(['a'], 0.5,
+20)`.
 - **A write refused for an old namespace raises the `IVGSchemaError` the docs name.** On a namespace whose classes
   predate 4.6.4, `create_edge` (or any write method) inside your open transaction raised `GraphWriteError`
   ("Graph_KG.Txn_Begin is not in this namespace ..."), not the `IVGSchemaError` that the USER_GUIDE and the v4.6.4 entry

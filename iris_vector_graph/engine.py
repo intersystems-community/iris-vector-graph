@@ -1156,19 +1156,22 @@ class IRISGraphEngine(
         running totals, which `gds.shortestPath.dijkstra.stream`'s `costs` are) and `totalCost` their sum, all floats:
         a -1.0-> b -2.5-> c answers `costs [1.0, 2.5]`, `totalCost 3.5`. Before 4.6.3 a whole-number weight read as an
         integer there (`[1, 1]`, `2` for weights of 1.0; Graph.KG.TraversalPaths.PathJson)."""
-        # Refuse an options map and fewer than 2 positional arguments (4.6.5 round 9 review)
+        from iris_vector_graph.cypher import ast as cypher_ast
+        from iris_vector_graph.cypher.translator import (
+            _WEIGHTED_PATH_ARGUMENTS,
+            _int_argument,
+            _number_argument,
+            _procedure_direction,
+            _refuse_positional_options_map,
+            _weighted_path_weight_prop,
+        )
+
+        # 4.6.5: a map, or a call without from and to, answered no rows and no error
         name = "ivg.shortestPath.weighted"
-        if proc.options:
-            args_list = "from, to, weightProp, maxCost, maxHops, direction, types"
-            raise ValueError(f"{name} takes positional arguments ({args_list}), not an options map")
+        _refuse_positional_options_map(proc, *_WEIGHTED_PATH_ARGUMENTS)
         args = proc.arguments
         if len(args) < 2:
             raise ValueError(f"{name} requires at least 2 arguments: from, to")
-
-        from iris_vector_graph.cypher import ast as cypher_ast
-        from iris_vector_graph.cypher.translator import (
-            _int_argument, _number_argument, _procedure_direction, _weighted_path_weight_prop,
-        )
 
         def _arg_raw(a, params=None):
             """The value a literal or a supplied $parameter holds, as it is (``_arg_str`` makes text of it)."""
@@ -1190,9 +1193,9 @@ class IRISGraphEngine(
             return str(a)
 
         source_id = _arg_str(args[0], parameters)
-        target_id = _arg_str(args[1], parameters)
         if not source_id:
             raise ValueError(f"{name}: from parameter not supplied")
+        target_id = _arg_str(args[1], parameters)
         if not target_id:
             raise ValueError(f"{name}: to parameter not supplied")
         weight_prop = _weighted_path_weight_prop(_arg_str(args[2], parameters) if len(args) > 2 else "weight")
