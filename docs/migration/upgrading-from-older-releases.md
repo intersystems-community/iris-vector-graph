@@ -116,8 +116,8 @@ migrated the namespace, run `initialize_schema()` again on 4.1.1 or later to res
 
 Check call sites for the behaviour changes: `store.delete_nodes` and `delete_edges` and `kg_PERSONALIZED_PAGERANK` stay
 in one graph, new boolean writes store `'true'` and `'false'`, and `properties(n)` returns a Cypher map. A snapshot
-holds neither `fhir_graphs` nor `code_crosswalk`
-([known issue](../KNOWN_ISSUES.md#a-snapshot-restore-does-not-bring-back-a-fhir-graphs-registration-or-crosswalk)).
+made before 4.7.0 holds neither `fhir_graphs` nor `code_crosswalk`: after restoring one elsewhere, register the FHIR
+graph again (`fhir_graph_register`, then `fhir_graph_rebuild`) and reload the crosswalk.
 Details: the [4.1.0 release note](../releases/v4.1.0.md#upgrading-from-400).
 
 ## To 4.0.0: graph-scoped embeddings and nodes

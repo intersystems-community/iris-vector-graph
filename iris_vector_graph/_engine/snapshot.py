@@ -227,6 +227,9 @@ RESTORE_TABLE_ORDER = [
     "Graph_KG_fhir_unresolved.ndjson",
     "Graph_KG_fhir_definitions.ndjson",
     "Graph_KG_fhir_canonical_refs.ndjson",
+    "Graph_KG_fhir_graphs.ndjson",
+    # No FK: a code may map to a node of a graph the archive does not hold.
+    "Graph_KG_code_crosswalk.ndjson",
 ]
 
 #: The plain tables `save_snapshot` exports with `SELECT *`. A table that does not
@@ -247,6 +250,8 @@ SQL_TABLES_EXPORT = [
     "Graph_KG.fhir_unresolved",
     "Graph_KG.fhir_definitions",
     "Graph_KG.fhir_canonical_refs",
+    "Graph_KG.fhir_graphs",
+    "Graph_KG.code_crosswalk",
 ]
 
 #: Tables with no single identifying first column. A merge restore skips a row that
@@ -255,6 +260,24 @@ SQL_TABLES_EXPORT = [
 FHIR_TABLES = frozenset(
     ("Graph_KG.fhir_unresolved", "Graph_KG.fhir_definitions", "Graph_KG.fhir_canonical_refs")
 )
+
+#: The tables `GraphSchema.get_fhir_graph_schema_sql` creates on a namespace's first FHIR registration. A namespace
+#: with none exports no file for them, and a restore of an archive holding one creates them first.
+LAZY_FHIR_TABLES = FHIR_TABLES | {"Graph_KG.fhir_graphs"}
+
+#: Configuration the archive carries beside the content, with each table's primary key: a FHIR graph's registration
+#: (its repository, schemas and the watermarks of the last sync) and the code crosswalk that maps codes onto nodes.
+#: Neither is derived from the archive's rows, and until 4.7.0 neither was archived: a restore elsewhere left the
+#: graph unregistered and every concept lookup empty (row 26). They are not in `STORE_PLAN`, which is
+#: `Graph.KG.GraphStores.Inventory()`'s graph content, because no erase removes them: a registration outlives an
+#: erase (its watermarks reset), and the crosswalk is no graph's. A replacing restore writes the archive's row over
+#: the one there (the restored edges are the archive's, and so are the watermarks that account for them); a merge
+#: keeps the row there. Both match on the key: `code_system_uri`, the first column, is shared by every code of a
+#: system, so the generic merge guard would skip all but one.
+CONFIGURATION_TABLES = {
+    "Graph_KG.fhir_graphs": ("graph_id",),
+    "Graph_KG.code_crosswalk": ("target_graph", "target_node_id", "code_system_uri", "code"),
+}
 
 
 def routed_export_plan(registry_rows) -> Dict[str, Dict[str, Any]]:
@@ -840,7 +863,8 @@ class SnapshotMixin:
                     # The FHIR tables exist only once a FHIR graph was set up; a namespace
                     # without them has nothing to archive there, and the restore creates
                     # them only for an archive that holds their files.
-                    if table in FHIR_TABLES and _table_missing(e):
+                    # `code_crosswalk` is missing from a namespace initialised before 4.1.0.
+                    if (table in LAZY_FHIR_TABLES or table in CONFIGURATION_TABLES) and _table_missing(e):
                         continue
                     raise _unreadable(table, e) from e
 
@@ -1151,7 +1175,7 @@ class SnapshotMixin:
                 ) from e
 
         if any(
-            f"sql/{t.replace('Graph_KG.', 'Graph_KG_')}.ndjson" in sql_files for t in FHIR_TABLES
+            f"sql/{t.replace('Graph_KG.', 'Graph_KG_')}.ndjson" in sql_files for t in LAZY_FHIR_TABLES
         ):
             from iris_vector_graph.schema import GraphSchema
             from iris_vector_graph.utils import _split_sql_statements
@@ -1197,7 +1221,18 @@ class SnapshotMixin:
                     vals = list(row.values())
                     placeholders = ", ".join(["?"] * len(cols))
                     col_list = ", ".join(cols)
-                    if merge and table_name in FHIR_TABLES:
+                    keys = CONFIGURATION_TABLES.get(table_name)
+                    if keys and not merge:
+                        cursor.execute(
+                            f"INSERT OR UPDATE INTO {table_name} ({col_list}) VALUES ({placeholders})", vals
+                        )
+                    elif keys:
+                        cursor.execute(
+                            f"INSERT INTO {table_name} ({col_list}) SELECT {placeholders} WHERE NOT EXISTS "
+                            f"(SELECT 1 FROM {table_name} WHERE {' AND '.join(f'{k} = ?' for k in keys)})",
+                            vals + [row[k] for k in keys],
+                        )
+                    elif merge and table_name in FHIR_TABLES:
                         keyed = [c for c in cols if row[c] is not None]
                         guard = " AND ".join(
                             [f"{c} = ?" for c in keyed]

@@ -133,14 +133,16 @@ def test_the_registry_is_restored_after_the_nodes_it_describes():
 
 
 def test_every_restored_table_is_a_planned_sql_store():
-    """A file the restore loads that the export never writes is a dead branch."""
+    """A file the restore loads that the export never writes is a dead branch. A configuration table (4.7.0) is
+    exported and restored without being graph content."""
+    restored = [
+        (fname, fname.replace("Graph_KG_", "Graph_KG.").replace(".ndjson", ""))
+        for fname in snapshot_mod.RESTORE_TABLE_ORDER
+    ]
     unplanned = [
         fname
-        for fname in snapshot_mod.RESTORE_TABLE_ORDER
-        if snapshot_mod.STORE_PLAN.get(
-            fname.replace("Graph_KG_", "Graph_KG.").replace(".ndjson", "")
-        )
-        != "sql"
+        for fname, table in restored
+        if snapshot_mod.STORE_PLAN.get(table) != "sql" and table not in snapshot_mod.CONFIGURATION_TABLES
     ]
     assert not unplanned, f"the restore loads tables the plan does not name: {unplanned}"
 
@@ -366,6 +368,17 @@ def test_the_fhir_bookkeeping_is_exported_and_restored(table):
     assert snapshot_mod.SQL_TABLES_EXPORT.count(table) == 1
     fname = table.replace("Graph_KG.", "Graph_KG_") + ".ndjson"
     assert fname in snapshot_mod.RESTORE_TABLE_ORDER
+
+
+@pytest.mark.parametrize("table", ("Graph_KG.fhir_graphs", "Graph_KG.code_crosswalk"))
+def test_the_fhir_configuration_is_exported_and_restored(table):
+    """4.7.0 (row 26): a FHIR graph's registration and the code crosswalk were in no export, so a restore elsewhere
+    left the graph unregistered and every concept lookup empty. They are configuration, not graph content (no erase
+    removes them, and `Graph.KG.GraphStores.Inventory()` does not list them), so they are not in the plan."""
+    assert table not in snapshot_mod.STORE_PLAN
+    assert table in snapshot_mod.CONFIGURATION_TABLES
+    assert snapshot_mod.SQL_TABLES_EXPORT.count(table) == 1
+    assert table.replace("Graph_KG.", "Graph_KG_") + ".ndjson" in snapshot_mod.RESTORE_TABLE_ORDER
 
 
 def _restore_recording(tmp_path, files: dict, merge: bool) -> list:

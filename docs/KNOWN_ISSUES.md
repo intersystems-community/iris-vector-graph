@@ -642,16 +642,6 @@ graph_id FROM Graph_KG.rdf_edges__ivg400unplaced`, and drop the table (migration
 - **Workaround:** set `IVG_SNAPSHOT_DIR` to a durable directory for the API process.
 - **Check:** the `path` in the response.
 
-### A snapshot restore does not bring back a FHIR graph's registration or crosswalk
-
-- **Symptom:** restoring a snapshot brings back a FHIR graph's nodes and edges but not its `fhir_graphs` registration or
-  its `code_crosswalk` rows.
-- **Versions:** 4.1.0 and later.
-- **Workaround:** after a restore, run `engine.fhir_graph_register()` and `engine.fhir_graph_rebuild(graph)`, and
-  re-load the crosswalk; keep the crosswalk source under version control.
-- **Check:** `SELECT COUNT(*) FROM Graph_KG.fhir_graphs` and `SELECT COUNT(*) FROM Graph_KG.code_crosswalk` before and
-  after the restore.
-
 ### On IRIS 2026.3, grouping over an `UNWIND` of a long list reads the list once per element
 
 - **Symptom:** a read that groups over an `UNWIND` of a list a `WITH` holds, such as
