@@ -22,35 +22,6 @@ engine.initialize_schema()
 
 ## For application developers
 
-### `CALL ... YIELD ... WHERE` is a parse error
-
-- **Symptom:** `CALL ivg.betweenness({}) YIELD node, score WHERE score > 0 RETURN ...` raises `CypherParseError`
-  (`Expected EOF, got WHERE`). openCypher and Neo4j accept a `WHERE` straight after `YIELD`.
-- **Versions:** 4.6.0.
-- **Workaround:** pass the yielded names through a `WITH` and filter there:
-  `YIELD node, score WITH node, score WHERE score > 0 RETURN ...`.
-- **Check:** the error names `WHERE`.
-
-On a ring `r1 -> r2 -> r3 -> r1`, every node lies on one shortest path between the other two, so each scores 1:
-
-```python
-for s, o in (("r1", "r2"), ("r2", "r3"), ("r3", "r1")):
-    engine.create_edge(s, "NEXT", o)
-engine.sync()
-# → True
-try:
-    engine.execute_cypher("CALL ivg.betweenness({}) YIELD node, score WHERE score > 0 RETURN node.node_id AS id")
-except Exception as e:
-    message = str(e)
-"got WHERE" in message
-# → True
-engine.execute_cypher(
-    "CALL ivg.betweenness({}) YIELD node, score WITH node, score WHERE score > 0 "
-    "RETURN node.node_id AS id, score ORDER BY id"
-)["rows"]
-# → [['r1', 1.0], ['r2', 1.0], ['r3', 1.0]]
-```
-
 ### A Cypher `CREATE` of a relationship that already exists adds nothing
 
 - **Symptom:** outside multigraph mode, `CREATE (a)-[:R]->(b)` between a pair that already has an `R` relationship

@@ -799,10 +799,14 @@ row.
 | `gds.shortestPath.dijkstra.stream` | `graphName` (not read)                                                                                             | `sourceNode`, `targetNode` (both needed), `relationshipWeightProperty` (none: unweighted), `relationshipTypes` | `index`, `sourceNode`, `targetNode`, `totalCost`, `nodeIds`, `costs` |
 
 `gds.pageRank.stream` is the global PageRank of `kg_PAGERANK()`, and `gds.betweenness.stream` that of
-`betweenness_centrality()`. A `gds.*` call answers `YIELD` and an optional `RETURN` of the yielded names, and nothing
-after: sort or cut its rows in Python. An `ivg.*` call takes no `WHERE` straight after `YIELD`; filter in a `WITH`
-(`YIELD node, score WITH node, score WHERE score > 5 RETURN ...`), as
-[Known issues](KNOWN_ISSUES.md#call--yield--where-is-a-parse-error) shows. The out-degrees here, from the default graph (`USE GRAPH ''`; without it, the
+`betweenness_centrality()`. A `gds.*` call answers `YIELD`, an optional `WHERE` and an optional `RETURN` of the
+yielded names, and nothing after: sort or cut its rows in Python. From 4.7.0 any call takes a `WHERE`
+straight after `YIELD` (`YIELD node, score WHERE score > 5 RETURN ...`; before, filter in a `WITH`). A `db.*`,
+`dbms.*` or `apoc.*` call is answered outside SQL too, and takes after its `YIELD` only a `WHERE`, one `WITH` of
+yielded names with a `WHERE`, a `RETURN` of yielded names, `ORDER BY`, `SKIP` and `LIMIT`; another clause raises,
+naming it (before 4.7.0 a `WITH` or `MATCH` there was dropped). Over any of these calls the `WHERE` reads the yielded names, literals and
+parameters with comparisons, `IN` a literal list, `IS NULL`, `AND`, `OR`, `XOR` and `NOT`, and raises for anything
+else (a function, arithmetic, `STARTS WITH`). The out-degrees here, from the default graph (`USE GRAPH ''`; without it, the
 `staging` graph of section 4 adds rows of its own):
 
 ```python

@@ -436,6 +436,9 @@ class CypherProcedureCall:
     yield_star: bool = False  # YIELD * — expand all output columns
     implicit_args: bool = False  # Called without parentheses (implicit arg passing)
     options: Dict[str, Any] = field(default_factory=dict)
+    # `YIELD a, b WHERE <cond>` (4.7.0 row 33): the filter on the yielded rows. The translator reads it as a WITH of the
+    # yielded names (translator.yield_where_as_with), an engine handler's rows go through cypher.row_where.
+    yield_where: Optional["WhereClause"] = None
 
 
 @dataclass(slots=True)

@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional, Tuple, Union
 from iris_vector_graph.cypher.native_route import NativeRoute
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.read_only import split_statements, writes_cypher
+from iris_vector_graph.cypher.row_where import handler_tail, where_rows, yield_names
 from iris_vector_graph.cypher.translator import properties_subquery, translate_to_sql, unwind_by_index
 from iris_vector_graph.cypher.merge_rows import plan_row_create, plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
@@ -1409,6 +1410,10 @@ def _handler_may_answer(parsed) -> bool:
     from iris_vector_graph.cypher import ast as _ast
 
     name = parsed.procedure_call.procedure_name.lower()
+    if name in _TRANSLATED_PROCEDURES and parsed.procedure_call.yield_where is not None:
+        # `YIELD ... WHERE`: the translator's WITH filters the rows (4.7.0 row 33); another handler's rows go through
+        # cypher.row_where (_execute_parsed)
+        return False
     if name not in _TRANSLATED_PROCEDURES and name not in GDS_ANSWERED:
         return True
     if (
@@ -1460,6 +1465,24 @@ def _project_handler_answer(result, parsed):
         raise ValueError(f"{parsed.procedure_call.procedure_name} answers {columns}, not {missing}")
     at = [columns.index(n) for n in names]
     result.columns = names
+    result.rows = [[row[i] for i in at] for row in (result.rows or [])]
+    return result
+
+
+def _project_onto_names(result, proc, names):
+    """A handler's answer as the RETURN's names, each the column its YIELD item reads (`YIELD label AS l RETURN l`),
+    in the RETURN's order (4.7.0 row 33: `YIELD name, edition RETURN edition` answered every column). A name whose
+    column the handler does not answer raises, unless there are no rows to read."""
+    columns = list(result.columns or [])
+    if names == columns:
+        return result
+    source = yield_names(proc)
+    wanted = [source.get(n, n) for n in names]
+    missing = [c for c in wanted if c not in columns]
+    if missing and result.rows:
+        raise ValueError(f"{proc.procedure_name} answers {columns}, not {missing}")
+    at = [columns.index(c) for c in wanted] if not missing else []
+    result.columns = list(names)
     result.rows = [[row[i] for i in at] for row in (result.rows or [])]
     return result
 
@@ -1961,7 +1984,15 @@ class QueryMixin:
                     graph=getattr(parsed, "graph_context", None),
                 )
                 if result is not None:
-                    return _apply_handler_tail(_project_handler_answer(result, parsed), parsed, parameters)
+                    # the clauses after the YIELD the handler's rows take, or a raise naming the one they cannot: a
+                    # WITH or MATCH there was dropped (4.7.0 row 33); a WHERE filters the rows before the RETURN
+                    # projects them
+                    conditions, names = handler_tail(parsed)
+                    result = where_rows(result, parsed.procedure_call, parameters, conditions)
+                    result = _project_handler_answer(result, parsed)
+                    if names is not None:
+                        result = _project_onto_names(result, parsed.procedure_call, names)
+                    return _apply_handler_tail(result, parsed, parameters)
             elif parsed.procedure_call.procedure_name.lower() in GDS_ANSWERED:
                 # nothing else answers a gds.* call: the translator would answer it with no rows (R174)
                 name = parsed.procedure_call.procedure_name

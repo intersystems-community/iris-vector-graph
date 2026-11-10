@@ -2199,6 +2199,45 @@ class TranslationContext:
         return result
 
 
+def yield_where_as_with(cypher_query: ast.CypherQuery) -> ast.CypherQuery:
+    """`CALL p YIELD a, b WHERE cond ...` as `CALL p YIELD a, b WITH a, b WHERE cond ...` (4.7.0 row 33), a copy.
+
+    openCypher's WHERE after YIELD filters the yielded rows; a WITH of the yielded names is that filter, and the path
+    every procedure the translator answers already takes for a WITH after YIELD. A standalone call (no RETURN, nothing
+    after the WHERE) returns the yielded names, as one without the WHERE does. An in-query call
+    (`MATCH ... CALL p YIELD x WHERE cond`) filters with `WITH *`, which keeps the names bound before the CALL.
+    The parsed query is cached and shared, so it is never changed."""
+    proc = cypher_query.procedure_call
+    parts = list(cypher_query.query_parts)
+    if proc is not None and proc.yield_where is not None:
+        with_clause = ast.WithClause(
+            items=[ast.ReturnItem(expression=ast.Variable(name)) for _, name in _yield_pairs(proc)],
+            where_clause=proc.yield_where,
+        )
+        parts = [ast.QueryPart(clauses=[], with_clause=with_clause)] + (parts or [ast.QueryPart(clauses=[])])
+        return dataclasses.replace(
+            cypher_query, procedure_call=dataclasses.replace(proc, yield_where=None), query_parts=parts
+        )
+    changed = False
+    out = []
+    for part in parts:
+        call = part.procedure_call
+        if call is None or call.yield_where is None:
+            out.append(part)
+            continue
+        changed = True
+        out.append(
+            dataclasses.replace(
+                part,
+                procedure_call=dataclasses.replace(call, yield_where=None),
+                with_clause=ast.WithClause(items=[], star=True, where_clause=call.yield_where),
+            )
+        )
+        if part.with_clause is not None:
+            out.append(ast.QueryPart(clauses=[], with_clause=part.with_clause))
+    return dataclasses.replace(cypher_query, query_parts=out) if changed else cypher_query
+
+
 def translate_procedure_call(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
     """Translate a CALL procedure into a CTE prepended to context.stages.
 
@@ -5338,13 +5377,17 @@ def _tts_finalize_context(cypher_query, context):
         elif _proc.yield_items:
             # Explicit YIELD list (possibly with renames)
             renames = getattr(context, "_tck_yield_renames", {})
+            # `YIELD node AS n WHERE ...` reads a WITH stage of the yielded names (yield_where_as_with), whose columns
+            # are the aliases, not the procedure's columns (4.7.0 row 33)
+            first = cypher_query.query_parts[0] if cypher_query.query_parts else None
+            via_with = first is not None and not first.clauses and first.with_clause is not None
             for item in _proc.yield_items:
                 if isinstance(item, tuple):
                     orig, alias = item
                 else:
                     orig, alias = item, item
                 # Use the original column name to read from CTE, alias as output name
-                context.select_items.append(f"{cte_name}.{orig} AS {alias}")
+                context.select_items.append(f"{cte_name}.{alias if via_with else orig} AS {alias}")
             context.select_params = []
         else:
             # Standalone CALL with no YIELD clause — expose all outputs
@@ -7032,6 +7075,7 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     # runs the SQL (the variable-length path) can still see it. Set once here rather
     # than at each of the five SQLQuery construction sites, where it would be
     # forgotten by the sixth (spec 227).
+    cypher_query = yield_where_as_with(cypher_query)
     cypher_query, params = _isolate_colliding_parameters(cypher_query, params)
     graph_context = getattr(cypher_query, "graph_context", None)
     _check_deleted_entity_access(cypher_query)

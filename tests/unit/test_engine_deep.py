@@ -123,8 +123,15 @@ class TestExecuteCypherProcedures:
 
     def test_apoc_meta_data_procedure(self):
         self.cursor.fetchall.return_value = [("Gene",)]
-        r = self.engine.execute_cypher("CALL apoc.meta.data() YIELD value RETURN value")
-        assert r is not None
+        r = self.engine.execute_cypher("CALL apoc.meta.data() YIELD label RETURN label")
+        assert r.columns == ["label"]
+
+    def test_apoc_meta_data_yields_no_value_column(self):
+        """apoc.meta.data has no `value` column (procedure_signatures): a RETURN of it raises, naming the columns.
+        Before 4.7.0 (row 33) the handler's seven columns came back under it."""
+        self.cursor.fetchall.return_value = [("Gene",)]
+        with pytest.raises(ValueError, match="not \\['value'\\]"):
+            self.engine.execute_cypher("CALL apoc.meta.data() YIELD value RETURN value", raise_on_error=True)
 
     def test_ivg_shortestpath_weighted_returns_result(self):
         # the handler calls the server's Dijkstra through engine._call_classmethod; it answers the path and its cost

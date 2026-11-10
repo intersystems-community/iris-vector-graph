@@ -103,7 +103,7 @@ class Parser:
         )
 
     def parse_procedure_call(self) -> ast.CypherProcedureCall:
-        """Parse CALL proc.name[(args...)] [YIELD item [AS alias], ... | *]"""
+        """Parse CALL proc.name[(args...)] [YIELD item [AS alias], ... [WHERE cond] | YIELD *]"""
         self.expect(TokenType.CALL)
 
         # Parse dotted procedure name: IDENTIFIER (DOT IDENTIFIER)*
@@ -158,6 +158,9 @@ class Parser:
                     if not self.matches(TokenType.COMMA):
                         break
 
+        # openCypher: a WHERE may follow an explicit list of YIELD items (oC_YieldItems), not `YIELD *` (4.7.0 row 33)
+        yield_where = self.parse_where_clause() if yield_items else None
+
         return ast.CypherProcedureCall(
             procedure_name=procedure_name,
             arguments=arguments,
@@ -165,6 +168,7 @@ class Parser:
             yield_star=yield_star,
             implicit_args=implicit_args,
             options=options,
+            yield_where=yield_where,
         )
 
     def parse(self) -> ast.CypherQuery:
