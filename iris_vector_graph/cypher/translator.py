@@ -12122,10 +12122,7 @@ _SET_CONVERSIONS = {
     ),
     "tostring": (lambda a: f"{_fn('CY_TOSTRING')}({a})", lambda t: t),
     "toboolean": (
-        lambda a: (
-            f"CASE WHEN LOWER(CAST({a} AS VARCHAR(3641144))) IN ('true','1','yes','y') THEN 'true' "
-            f"WHEN LOWER(CAST({a} AS VARCHAR(3641144))) IN ('false','0','no','n') THEN 'false' ELSE NULL END"
-        ),
+        lambda a: _to_boolean_sql(a, "'true'", "'false'"),
         lambda t: t,
     ),
 }
@@ -27418,9 +27415,22 @@ def _scalar_statistical(fn, args, args_exprs, context):
     return None
 
 
+def _to_boolean_sql(arg: str, true_sql: str, false_sql: str) -> str:
+    """toBoolean(arg) as SQL answering `true_sql`, `false_sql` or NULL. openCypher converts a boolean and the strings
+    'true' and 'false', in any case, and no other string (TCK TypeConversion1 [1]-[4]); 'yes', 'y' and '1' answered
+    true before 4.7.0 (row 35b). A boolean reaches SQL as the number 1 or 0, which CY_TYPED marks as a number
+    ($Char(1) 'N'), so the string '1' is not taken for it. The argument is named once, so a parameter binds once
+    (`RETURN toBoolean($s)` failed "Incorrect number of parameters")."""
+    return (
+        f"CASE LOWER(CAST({_fn('CY_TYPED')}({arg}) AS VARCHAR(3641144))) WHEN 'true' THEN {true_sql} "
+        f"WHEN 'false' THEN {false_sql} WHEN CHAR(1) || 'n1' THEN {true_sql} WHEN CHAR(1) || 'n0' THEN {false_sql} "
+        "ELSE NULL END"
+    )
+
+
 def _scalar_type_conversion(fn, args, args_exprs):
     if fn == "toboolean":
-        return f"CASE WHEN LOWER(CAST({args[0]} AS VARCHAR(3641144))) IN ('true','1','yes','y') THEN 1 WHEN LOWER(CAST({args[0]} AS VARCHAR(3641144))) IN ('false','0','no','n') THEN 0 ELSE NULL END"
+        return _to_boolean_sql(args[0], "1", "0")
     return None
 
 

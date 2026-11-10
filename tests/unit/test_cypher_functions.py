@@ -49,7 +49,8 @@ class TestCastFunctions:
         q = parse_query("MATCH (n) RETURN toBoolean(n.flag) AS b")
         r = translate_to_sql(q)
         assert "LOWER(" in r.sql
-        assert "'y'" in r.sql or "yes" in r.sql.lower()
+        # openCypher converts 'true' and 'false' only (4.7.0 row 35b: 'yes' and 'y' answered true)
+        assert "'y'" not in r.sql and "yes" not in r.sql.lower()
 
 
 class TestCountDistinct:

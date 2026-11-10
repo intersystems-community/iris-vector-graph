@@ -473,7 +473,7 @@ class TestTypeConversionFunctions:
         query = "RETURN toBoolean('true') AS r"
         result = translate_to_sql(parse_query(query))
         sql = result.sql if isinstance(result.sql, str) else "\n".join(result.sql)
-        assert "CASE WHEN" in sql
+        assert "CASE LOWER(" in sql  # a simple CASE: the argument is named once (4.7.0 row 35b)
         assert "'true'" in sql or "true" in sql.lower()
         assert "THEN 1" in sql or "THEN 1" in sql
         assert "THEN 0" in sql or "THEN 0" in sql

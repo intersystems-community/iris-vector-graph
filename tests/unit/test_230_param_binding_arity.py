@@ -81,10 +81,11 @@ class TestAStatementBindsEveryMarkerItCarries:
         )
 
     def test_the_property_key_is_not_a_parameter_in_the_case_arms(self):
-        """Both arms name the key; neither spends a parameter on it."""
+        """The key is named in the SQL and spends no parameter. From 4.7.0 (row 35b) the argument is named once (a simple
+        CASE over it), where both arms of a searched CASE named it."""
         result = _translate("MATCH (n:Drug) WHERE toBoolean(n.active) = 1 RETURN n.id")
         sql = _flat_sql(result)
-        assert sql.count("\"key\" = 'active'") == 2, sql
+        assert sql.count("\"key\" = 'active'") == 1, sql
 
     def test_toboolean_in_a_return_item_binds_its_markers(self):
         result = _translate("MATCH (n:Drug) RETURN toBoolean(n.active) AS flag")
