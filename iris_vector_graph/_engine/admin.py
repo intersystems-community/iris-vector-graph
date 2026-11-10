@@ -372,9 +372,14 @@ class AdminMixin:
         source) no IVG release shipped, such as an operator's own ``JSON_VALUE`` in SQLUser installed again after 4.5.x
         overwrote it, is listed with ``ivg_owned`` False and a ``note`` saying it is kept, and is never removed."""
         from iris_vector_graph._engine.legacy import remove_legacy_objects
+        from iris_vector_graph._write_txn import refuse_in_caller_transaction
 
         # Works on any namespace, upgraded or not: it reads and drops SQLUser and User objects by the manifest only.
         with self._schema_check_suspended():
+            if not dry_run:  # 4.7.0 (row 3b's audit): drops, revokes and a commit (legacy.py), not the caller's
+                refuse_in_caller_transaction(
+                    self.conn, "remove_legacy_objects()", "it drops SQL objects and classes and commits",
+                )
             return remove_legacy_objects(self.conn, self._iris_obj(), dry_run=dry_run)
 
     def status(self, internals: bool = False) -> "EngineStatus":

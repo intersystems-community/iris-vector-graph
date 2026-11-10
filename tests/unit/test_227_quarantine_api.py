@@ -276,7 +276,12 @@ def test_placing_a_row_moves_it_into_the_route_and_removes_it():
     assert registry.placed == [(TABLE, GRAPH, NODE)]
     assert registry.deleted == [1]
     assert registry.row_with(1) is None, "the row was placed and still sits in quarantine"
-    assert registry.commits >= 1, "the move was never committed"
+    # the INSERT and the DELETE commit together, as IVG's own transaction (4.7.0, _write_txn; here the conftest's
+    # START TRANSACTION ... COMMIT), which nests in a caller's: conn.commit() committed the caller's work
+    verbs = [sql.split()[0].upper() for sql, _ in registry.statements]
+    start, end = verbs.index("START"), len(verbs) - 1 - verbs[::-1].index("COMMIT")
+    assert start < verbs.index("INSERT") < verbs.index("DELETE") < end, verbs
+    assert "ROLLBACK" not in verbs and registry.commits == 0, verbs
 
 
 def test_the_insert_precedes_the_delete():

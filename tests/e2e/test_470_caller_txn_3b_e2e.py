@@ -179,8 +179,38 @@ def _reified(o, u) -> bool:
         and _node(o, f"{u}r") == 1
 
 
+def _identity(u):
+    from iris_vector_graph.embedding_identity import EmbeddingIdentity
+
+    return EmbeddingIdentity(mechanism="external", model_key=f"m{u}", dimension=rr.DIM)
+
+
+def _registered(o, u) -> bool:
+    return _count(o, "SELECT COUNT(*) FROM Graph_KG.embedding_registry WHERE graph_id = ? AND model_key = ?",
+                  [f"g{u}", f"m{u}"]) == 1
+
+
+def _inferred_edge(e, u):
+    cur = e.conn.cursor()
+    for n in (f"{u}a", f"{u}b"):
+        cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, ?)", [n, f"g{u}"])
+    cur.execute("INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id, qualifiers) VALUES (?, 'R470B', ?, ?, ?)",
+                [f"{u}a", f"{u}b", f"g{u}", '{"inferred": "rdfs"}'])
+
+
 JOINS = {
-    # 4.7.0 (3b): reify_edge and delete_reification called conn.commit()
+    # 4.7.0 (3b, after the audit): reify_edge, delete_reification, set_embedding_identity and retract_inference
+    # called conn.commit()
+    "set_embedding_identity": dict(
+        setup=lambda e, u: None,
+        call=lambda e, u: e.set_embedding_identity(_identity(u), "kg_NodeEmbeddings", graph_id=f"g{u}"),
+        done=lambda o, u: _registered(o, u),
+    ),
+    "retract_inference": dict(
+        setup=_inferred_edge,
+        call=lambda e, u: e.retract_inference(graph=f"g{u}"),
+        done=lambda o, u: _count(o, "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s = ?", [f"{u}a"]) == 0,
+    ),
     "reify_edge": dict(
         setup=lambda e, u: e.create_edge(f"{u}a", "R470B", f"{u}b"),
         call=lambda e, u: e.reify_edge(_edge_id(e, u), reifier_id=f"{u}r", props={"k": "v"}),
@@ -307,7 +337,29 @@ def _arno_wrappers(e, u):
     arno_bridge._ensure_zf_call_function(e.conn, schema="Graph_KG")
 
 
+def _migration(fn_path):
+    def call(e, u):
+        import importlib
+
+        mod, fn = fn_path.rsplit(".", 1)
+        return getattr(importlib.import_module(mod), fn)(e.conn)
+    return call
+
+
 REFUSALS = {
+    # 4.7.0 (3b, after the audit): each committed (or dropped and committed) on the caller's connection
+    "remove_legacy_objects": dict(setup=lambda e, u: u, call=lambda e, u: e.remove_legacy_objects(dry_run=False)),
+    "upgrade_to_4_0_0": dict(setup=lambda e, u: u, call=_migration("iris_vector_graph.migrations.upgrade_to_4_0_0")),
+    "migrate_to_graph_scoped_embeddings": dict(
+        setup=lambda e, u: u,
+        call=_migration("iris_vector_graph.migrations.graph_scoped_embeddings.migrate_to_graph_scoped_embeddings")),
+    "migrate_docs_and_edge_vectors": dict(
+        setup=lambda e, u: u,
+        call=lambda e, u: __import__("iris_vector_graph.migrations.docs_and_edge_vectors", fromlist=["x"])
+        .migrate_docs_and_edge_vectors(e.conn, rr.DIM)),
+    "rekey_kg_node_stores": dict(
+        setup=lambda e, u: u, call=_migration("iris_vector_graph.migrations.kg_node_stores.rekey_kg_node_stores")),
+
     "restore_snapshot": dict(setup=_snapshot, call=lambda e, path: e.restore_snapshot(path, merge=True)),
     "BulkLoader.load_nodes": dict(setup=lambda e, u: u,
                                   call=lambda e, u: _bulk_loader(e).load_nodes([(f"{u}n", {"namespace": "T470B"})])),

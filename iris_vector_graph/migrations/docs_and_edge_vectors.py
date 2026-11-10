@@ -49,6 +49,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
+from iris_vector_graph.migrations._commit import commit_step, refuse_caller_transaction
 from iris_vector_graph.migrations.statements import (
     DOCS_FINISH,
     DOCS_PREPARE,
@@ -493,6 +494,8 @@ def migrate_docs_and_edge_vectors(
         ``{"docs": report, "edge_vectors": report}``.
     """
     if not dry_run:
+        # 4.7.0: it committed the caller's open transaction
+        refuse_caller_transaction(conn, "migrate_docs_and_edge_vectors")
         prepare_docs(conn, schema=schema)
         prepare_edge_vectors(conn, dimension, dtype=dtype, schema=schema)
     docs = place_documents(conn, resolver=document_resolver, dry_run=dry_run, schema=schema)
@@ -665,10 +668,7 @@ def _matches(exc: Exception, needles) -> bool:
 
 
 def _commit(conn) -> None:
-    try:
-        conn.commit()
-    except Exception as e:  # pragma: no cover - autocommit connections
-        logger.debug("Commit not needed: %s", e)
+    commit_step(conn, "migrate_docs_and_edge_vectors")
 
 
 def _close(cursor) -> None:

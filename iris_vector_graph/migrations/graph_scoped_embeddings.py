@@ -39,6 +39,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from iris_vector_graph.constants import DEFAULT_GRAPH
+from iris_vector_graph.migrations._commit import commit_step, refuse_caller_transaction
 from iris_vector_graph.routing import route_table_name
 from iris_vector_graph.schema import GraphSchema
 from iris_vector_graph.schema_name import rewrite_schema_text
@@ -253,6 +254,8 @@ def migrate_to_graph_scoped_embeddings(
     Returns:
         A :class:`MigrationReport` describing the state the install is now in.
     """
+    if not dry_run:  # 4.7.0: it committed the caller's open transaction
+        refuse_caller_transaction(conn, "migrate_to_graph_scoped_embeddings")
     return _Migrator(conn, resolver=resolver, dry_run=dry_run).run()
 
 
@@ -1456,10 +1459,7 @@ class _Migrator:
         return max(present) if present else None
 
     def _commit(self) -> None:
-        try:
-            self.conn.commit()
-        except Exception as e:  # pragma: no cover - autocommit connections
-            logger.debug("Commit not needed: %s", e)
+        commit_step(self.conn, "migrate_to_graph_scoped_embeddings")
 
     @staticmethod
     def _close(cursor) -> None:

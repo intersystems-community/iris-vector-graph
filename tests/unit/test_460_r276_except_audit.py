@@ -204,10 +204,13 @@ def test_bulk_ingest_edges_without_the_classes_raises(stop_patches):
 
 
 def test_retract_inference_raises_on_a_refused_commit():
-    eng = _engine(_Cursor())
-    eng.conn.commit.side_effect = RuntimeError(LOCK)
+    # 4.7.0: the rows' commit is IVG's own transaction's (here the conftest's COMMIT on the cursor), not
+    # conn.commit(), which ended a caller's open transaction; refused, nothing is left
+    cur = _Cursor(fail=r"^COMMIT$", error=LOCK)
+    eng = _engine(cur)
     with pytest.raises(GraphWriteError, match=r"retract_inference.*SQLCODE -110"):
         eng.retract_inference()
+    assert cur.committed == [] and cur.pending == []
 
 
 # ------------------------------------------------------------------ import_rdf, temporal mirror

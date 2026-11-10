@@ -13,6 +13,7 @@ from iris_vector_graph.capabilities import IRISCapabilities
 from iris_vector_graph.constants import DEFAULT_GRAPH, VECTOR_TABLE_NAMES
 from iris_vector_graph.routing import graph_scope_predicate, route_table_name
 from iris_vector_graph._validate import validate_graph_name
+from iris_vector_graph._write_txn import write_txn
 # The record of created routines (4.6.0 R133), shared with the Arno bridge's wrappers since R153.
 from iris_vector_graph.routine_record import (  # noqa: F401 - re-exported for callers of 4.6.0's names
     ROUTINES_MARKER,
@@ -966,12 +967,13 @@ class SchemaMixin:
         measurement rather than publishing it as recorded.
         """
         try:
-            cursor.execute(
-                f"UPDATE {self._registry_table()} SET recall_measured = ?, "
-                "recall_measured_at = ? WHERE table_name = ? AND graph_id = ?",
-                [float(recall), measured_at, table_name, graph_id],
-            )
-            self.conn.commit()
+            # 4.7.0: nested in the caller's transaction when there is one (conn.commit() committed the caller's work)
+            with write_txn(self.conn, self._ivg_schema, cursor):
+                cursor.execute(
+                    f"UPDATE {self._registry_table()} SET recall_measured = ?, "
+                    "recall_measured_at = ? WHERE table_name = ? AND graph_id = ?",
+                    [float(recall), measured_at, table_name, graph_id],
+                )
             return True
         except Exception as e:
             logger.warning(
@@ -1127,93 +1129,91 @@ class SchemaMixin:
         cursor = self.conn.cursor()
 
         try:
-            if force:
-                cursor.execute(
-                    f"UPDATE {table} SET mechanism = ?, model_key = ?, declared_config = ?, "
-                    "dimension = ?, dtype = ?, set_at = CURRENT_TIMESTAMP, set_by = 'forced' "
-                    "WHERE table_name = ? AND graph_id = ?",
-                    [
-                        offered.mechanism,
-                        offered.model_key,
-                        offered.declared_config,
-                        offered.dimension,
-                        offered.dtype,
+            # 4.7.0: one transaction of IVG's, nested in the caller's when there is one (a store_embeddings that
+            # claims a declared model comes here); conn.commit() committed the caller's work
+            with write_txn(self.conn, self._ivg_schema, cursor):
+                if force:
+                    cursor.execute(
+                        f"UPDATE {table} SET mechanism = ?, model_key = ?, declared_config = ?, "
+                        "dimension = ?, dtype = ?, set_at = CURRENT_TIMESTAMP, set_by = 'forced' "
+                        "WHERE table_name = ? AND graph_id = ?",
+                        [
+                            offered.mechanism,
+                            offered.model_key,
+                            offered.declared_config,
+                            offered.dimension,
+                            offered.dtype,
+                            table_name,
+                            graph_id,
+                        ],
+                    )
+                    if self.get_embedding_identity(table_name, graph_id=graph_id) is None:
+                        self._insert_identity(cursor, table_name, graph_id, offered, "forced")
+                    logger.warning(
+                        "Forced embedding identity on %s to %s. Every vector already stored "
+                        "was produced by something else and is no longer comparable — re-embed "
+                        "the table.",
                         table_name,
-                        graph_id,
-                    ],
-                )
-                self.conn.commit()
-                if self.get_embedding_identity(table_name, graph_id=graph_id) is None:
-                    self._insert_identity(cursor, table_name, graph_id, offered, "forced")
-                logger.warning(
-                    "Forced embedding identity on %s to %s. Every vector already stored "
-                    "was produced by something else and is no longer comparable — re-embed "
-                    "the table.",
-                    table_name,
-                    offered.describe(),
-                )
-                return offered
-
-            recorded = self.get_embedding_identity(table_name, graph_id=graph_id)
-
-            if recorded is None:
-                try:
-                    self._insert_identity(
-                        cursor, table_name, graph_id, offered, "claimed"
+                        offered.describe(),
                     )
                     return offered
-                except Exception as e:
-                    # A concurrent writer won the primary key. Re-read and compare.
-                    logger.debug("Registry insert for %s lost the race: %s", table_name, e)
-                    try:
-                        self.conn.rollback()
-                    except Exception:
-                        pass
-                    recorded = self.get_embedding_identity(table_name, graph_id=graph_id)
-                    if recorded is None:
-                        raise
 
-            if recorded.is_unknown:
-                cursor.execute(
-                    f"UPDATE {table} SET mechanism = ?, model_key = ?, declared_config = ?, "
-                    "dimension = COALESCE(dimension, ?), set_at = CURRENT_TIMESTAMP, "
-                    "set_by = 'claimed' WHERE table_name = ? AND graph_id = ? "
-                    "AND model_key IS NULL AND (dimension IS NULL OR dimension = ?)",
-                    [
-                        offered.mechanism,
-                        offered.model_key,
-                        offered.declared_config,
-                        offered.dimension,
-                        table_name,
-                        graph_id,
-                        offered.dimension,
-                    ],
-                )
-                self.conn.commit()
-                # The re-read, not the rowcount, decides: drivers disagree about rowcount
-                # on UPDATE, and the winner is whoever's model_key is in the row.
                 recorded = self.get_embedding_identity(table_name, graph_id=graph_id)
-                if (
-                    recorded is not None
-                    and recorded.model_key == offered.model_key
-                    and recorded.mechanism == offered.mechanism
-                ):
-                    return recorded
-                if recorded is None:
-                    raise EmbeddingIdentityConflict(
-                        table_name,
-                        EmbeddingIdentity(mechanism=None, model_key=None),
-                        offered,
-                        "the registry row disappeared while it was being claimed",
-                        graph_id=graph_id,
-                    )
 
-            reason = conflicts(recorded, offered)
-            if reason:
-                raise EmbeddingIdentityConflict(
-                    table_name, recorded, offered, reason, graph_id=graph_id
-                )
-            return recorded
+                if recorded is None:
+                    try:
+                        self._insert_identity(
+                            cursor, table_name, graph_id, offered, "claimed"
+                        )
+                        return offered
+                    except Exception as e:
+                        # A concurrent writer won the primary key. Re-read and compare.
+                        # A refused INSERT takes back only itself (4.7.0: the rollback here took a caller's work too)
+                        logger.debug("Registry insert for %s lost the race: %s", table_name, e)
+                        recorded = self.get_embedding_identity(table_name, graph_id=graph_id)
+                        if recorded is None:
+                            raise
+
+                if recorded.is_unknown:
+                    cursor.execute(
+                        f"UPDATE {table} SET mechanism = ?, model_key = ?, declared_config = ?, "
+                        "dimension = COALESCE(dimension, ?), set_at = CURRENT_TIMESTAMP, "
+                        "set_by = 'claimed' WHERE table_name = ? AND graph_id = ? "
+                        "AND model_key IS NULL AND (dimension IS NULL OR dimension = ?)",
+                        [
+                            offered.mechanism,
+                            offered.model_key,
+                            offered.declared_config,
+                            offered.dimension,
+                            table_name,
+                            graph_id,
+                            offered.dimension,
+                        ],
+                    )
+                    # The re-read, not the rowcount, decides: drivers disagree about rowcount
+                    # on UPDATE, and the winner is whoever's model_key is in the row.
+                    recorded = self.get_embedding_identity(table_name, graph_id=graph_id)
+                    if (
+                        recorded is not None
+                        and recorded.model_key == offered.model_key
+                        and recorded.mechanism == offered.mechanism
+                    ):
+                        return recorded
+                    if recorded is None:
+                        raise EmbeddingIdentityConflict(
+                            table_name,
+                            EmbeddingIdentity(mechanism=None, model_key=None),
+                            offered,
+                            "the registry row disappeared while it was being claimed",
+                            graph_id=graph_id,
+                        )
+
+                reason = conflicts(recorded, offered)
+                if reason:
+                    raise EmbeddingIdentityConflict(
+                        table_name, recorded, offered, reason, graph_id=graph_id
+                    )
+                return recorded
         finally:
             try:
                 cursor.close()
@@ -1479,7 +1479,8 @@ class SchemaMixin:
             f"VALUES ({placeholders})",
             values,
         )
-        self.conn.commit()
+        # 4.7.0: no conn.commit(): the caller's transaction decides (set_embedding_identity's, _create_route's, or
+        # setup's autocommit); it committed a caller's open transaction
 
     def _record_configured_embedding_identity(self, cursor) -> Dict[str, str]:
         """Claim the engine's declared identity on every embedding table that exists.
@@ -1998,23 +1999,19 @@ class SchemaMixin:
 
         cursor = self.conn.cursor()
         try:
-            cursor.execute(
-                f"INSERT INTO {self._t(route.table_name)}"
-                " (graph_id, node_id, emb, metadata)"
-                " SELECT ?, node_id, emb, metadata"
-                f" FROM {self._quarantine_table()} WHERE q_rowid = ?",
-                [graph_id, q_rowid],
-            )
-            cursor.execute(
-                f"DELETE FROM {self._quarantine_table()} WHERE q_rowid = ?", [q_rowid]
-            )
-            self.conn.commit()
-        except Exception:
-            try:
-                self.conn.rollback()
-            except Exception:
-                pass
-            raise
+            # 4.7.0: one transaction of IVG's, nested in the caller's when there is one (conn.commit() committed the
+            # caller's work, and conn.rollback(), whose failure was passed over, took it back)
+            with write_txn(self.conn, self._ivg_schema, cursor):
+                cursor.execute(
+                    f"INSERT INTO {self._t(route.table_name)}"
+                    " (graph_id, node_id, emb, metadata)"
+                    " SELECT ?, node_id, emb, metadata"
+                    f" FROM {self._quarantine_table()} WHERE q_rowid = ?",
+                    [graph_id, q_rowid],
+                )
+                cursor.execute(
+                    f"DELETE FROM {self._quarantine_table()} WHERE q_rowid = ?", [q_rowid]
+                )
         finally:
             try:
                 cursor.close()
@@ -3126,7 +3123,17 @@ class SchemaMixin:
         ``graph`` None or ``""`` is the default graph, never every graph. An asserted edge for the
         same triple keeps its adjacency entry. Returns the number of ``rdf_edges`` rows deleted.
         """
+        from iris_vector_graph._write_txn import refuse_in_caller_transaction
+
         _ledger_check(self, "retract_inference")
+        # 4.7.0: the rows are deleted in IVG's own transaction, nested in the caller's (conn.commit() committed the
+        # caller's work). Without the adjacency index ^KG is deleted afterwards over the Native API, which cannot
+        # wait for the caller's commit, so there a caller's transaction is refused
+        if not self._adjacency_indexed:
+            refuse_in_caller_transaction(
+                self.conn, "retract_inference()",
+                "this namespace has no adjacency index, so ^KG is deleted outside the transaction",
+            )
         cursor = self.conn.cursor()
         # `graph is None` and `graph == ""` both mean the default graph, never "every
         # graph" — the meaning spec 214 and 223 established and `cypher/translator.py`
@@ -3145,15 +3152,17 @@ class SchemaMixin:
             scope_params,
         )
         retracted = [tuple(r) for r in cursor.fetchall()]
-        cursor.execute(
-            f"DELETE FROM {self._ivg_schema}.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
-            f"AND {scope_sql}",
-            scope_params,
-        )
-        deleted = cursor.rowcount or 0
+        txn = write_txn(self.conn, self._ivg_schema, cursor)
         try:
-            self.conn.commit()
+            cursor.execute(
+                f"DELETE FROM {self._ivg_schema}.rdf_edges WHERE qualifiers LIKE '{INFERRED_QUALIFIER_LIKE}' "
+                f"AND {scope_sql}",
+                scope_params,
+            )
+            deleted = cursor.rowcount or 0
+            txn.commit()
         except Exception as e:
+            txn.rollback()
             # It was passed over (4.6.0 R276), and the count returned for rows still there.
             from iris_vector_graph.errors import GraphWriteError
 

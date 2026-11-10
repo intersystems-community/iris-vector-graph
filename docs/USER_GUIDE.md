@@ -295,12 +295,15 @@ ledger short. `enable()` and `redact()` are not part of it: they refuse (below).
 These join your transaction as well (4.7.0; each called `conn.commit()`, which committed your work): `embed_edges`,
 the SQL table mappings (`map_sql_table`, `map_sql_relationship`, `remove_table_mapping`,
 `attach_embeddings_to_table`), `code_crosswalk_add`, `fhir_bridge_add`, `migrate_fhir_bridges_to_crosswalk`,
-`register_namespace` and `import_rdf`. Others refuse to run once your transaction holds a write (`$TLEVEL` above 0),
+`register_namespace`, `import_rdf`, `reify_edge`, `delete_reification`, `set_embedding_identity`, `place_quarantined`,
+`measure_route_recall` and `retract_inference`. Others refuse to run once your transaction holds a write (`$TLEVEL` above 0),
 before doing anything, because what they do cannot wait for your commit: `restore_snapshot` (it erases, may create
 tables and commits table by table), every `BulkLoader` method (`%NOINDEX %NOCHECK` loads committed per batch, index and
 `^KG` rebuilds), `import_rdf` on a namespace without the adjacency index (it rebuilds `^KG` on another connection), the
 first registration of a FHIR graph in a namespace (it creates the FHIR graph tables), and an Arno algorithm call that
-must first create one of its SQL functions (DDL and a class compile). Each raises `CallerTransactionOpenError`;
+must first create one of its SQL functions (DDL and a class compile), `remove_legacy_objects(dry_run=False)`, the
+migrations (`upgrade_to_4_0_0` and the steps it runs), and `retract_inference` on a namespace without the adjacency
+index. Each raises `CallerTransactionOpenError`;
 the ledger's `enable()` and `redact()` raise `LedgerTransactionOpenError`. Upgrades are not part of your transaction. A
 write that IVG sends over a Native API connection of its own (an engine made with `from_connect`: the temporal edge
 stores, `^KG` on a namespace without the adjacency index) runs in another IRIS process, outside your transaction.

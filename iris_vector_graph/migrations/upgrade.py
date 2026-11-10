@@ -36,6 +36,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence, Tuple
 
+from ._commit import commit_step, refuse_caller_transaction
 from .docs_and_edge_vectors import (
     STAGING_SUFFIX,
     AmbiguousDocument,
@@ -172,6 +173,8 @@ def upgrade_to_4_0_0(
     Raises:
         ValueError: if `steps` names something that is not an upgrade step.
     """
+    if not dry_run:  # 4.7.0: it committed the caller's open transaction
+        refuse_caller_transaction(conn, "upgrade_to_4_0_0")
     wanted = _resolve_steps(steps)
     results = []
     for name in UPGRADE_STEPS:
@@ -211,10 +214,7 @@ def _tune(conn, schema: str) -> dict:
             cursor.close()
         except Exception:
             pass
-    try:
-        conn.commit()
-    except Exception:
-        pass
+    commit_step(conn, "upgrade_to_4_0_0")  # 4.7.0: a refused commit was passed over (`except Exception: pass`)
     return status
 
 

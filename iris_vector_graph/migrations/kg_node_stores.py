@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Tuple
 
 from iris_vector_graph.host import host_for
+from iris_vector_graph.migrations._commit import commit_step, refuse_caller_transaction
 from iris_vector_graph.schema import repair_ifind_helpers
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,8 @@ def rekey_kg_node_stores(
             raised before anything is killed — a refusal after the kill would leave the
             install with neither layout.
     """
+    if not dry_run:  # 4.7.0: it committed the caller's open transaction
+        refuse_caller_transaction(conn, "rekey_kg_node_stores")
     _require_scoped_sources(conn, schema)
 
     host = host_for(conn)
@@ -419,10 +422,7 @@ def _value_at(host, path: Tuple[str, ...]):
 
 
 def _commit(conn) -> None:
-    try:
-        conn.commit()
-    except Exception as e:  # pragma: no cover - autocommit connections
-        logger.debug("Commit not needed: %s", e)
+    commit_step(conn, "rekey_kg_node_stores")
 
 
 def _close(cursor) -> None:

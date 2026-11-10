@@ -389,7 +389,12 @@ class TestRetractInference:
 
         eng, conn, cursor = _make_eng()
         cursor.rowcount = 1
-        conn.commit.side_effect = RuntimeError("commit failed")
+        # 4.7.0: the commit is IVG's own transaction's (the conftest's COMMIT on the cursor), not conn.commit()
+        def execute(sql, *args):
+            if sql == "COMMIT":
+                raise RuntimeError("commit failed")
+
+        cursor.execute.side_effect = execute
         with pytest.raises(GraphWriteError, match="retract_inference.*commit failed"):
             eng.retract_inference()
 
