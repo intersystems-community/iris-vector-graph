@@ -39,18 +39,20 @@ from typing import Dict, List, Optional
 import pytest
 
 from tests.e2e import ns262
+from tests.e2e.gate import SCRATCH_PREFIXES
 from tests.oracle import reference as ref
 from tests.oracle.compare import compare_order, compare_partition, compare_ranked, compare_values
 from tests.oracle.graphs import NAMED_GRAPH, OracleGraph, by_seed, periodic
 
 NS = os.environ.get("IVG_NAMESPACE", "")
-_RUNS_HERE = NS.startswith(("IVG460", "IVG262")) or (NS == "USER" and os.environ.get("IVG_ORACLE_USER") == "1")
+_RUNS_HERE = NS.startswith(SCRATCH_PREFIXES) or (NS == "USER" and os.environ.get("IVG_ORACLE_USER") == "1")
 
 pytestmark = [
     pytest.mark.e2e,
     ns262.requires_container,
-    pytest.mark.skipif(not _RUNS_HERE, reason="IVG_NAMESPACE must name an IVG460*/IVG262* scratch namespace "
-                                              "(or USER, with IVG_ORACLE_USER=1): every case erases its graph"),
+    pytest.mark.skipif(not _RUNS_HERE, reason=f"IVG_NAMESPACE must name a scratch namespace "
+                                              f"({'/'.join(p + '*' for p in SCRATCH_PREFIXES)}), or USER with "
+                                              "IVG_ORACLE_USER=1: every case erases its graph"),
 ]
 
 #: The generated seeds, then the periodic families (negative seeds; tests/oracle/graphs.py ``periodic``: directed

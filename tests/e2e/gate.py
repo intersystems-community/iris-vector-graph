@@ -92,6 +92,10 @@ GROUPS: Dict[str, Group] = {
     # <LIST>LoadTableFunction, at Prepare: test_460_r228 beside the crosstype family, tests/unit/
     # test_470_gate_r308_exclusive.py)
     "r308": Group("IVG_NS_IVG460FXOC", "OC", "graph_kg", exclusive=True),
+    # exclusive (4.7.0), for the same reason: test_retire_plan_stats_e2e calls %SYSTEM.SQL.Purge and sets rdf_edges'
+    # extent size and selectivity, which every plan in its namespace then reads (tests/unit/
+    # test_470_gate_purges_and_prefixes.py). It ran in the session namespace.
+    "purges": Group("IVG_PURGES_NAMESPACE", "PRG", "graph_kg", exclusive=True),
     "r307": Group("IVG_NS_IVG460FXOV", "OV", "graph_kg"),
     "r314": Group("IVG_NS_IVG460FXGV", "GV", "graph_kg"),
     "fhirless": Group("IVG_FHIRLESS_NAMESPACE", "NOF", "graph_kg"),
@@ -214,10 +218,14 @@ def _env_reads(tree: ast.AST) -> set:
 
 
 def _checks_a_scratch_prefix(tree: ast.AST) -> bool:
-    """A `.startswith(...)` whose argument is a scratch prefix or a tuple holding one."""
+    """A `.startswith(...)` whose argument is a scratch prefix, a tuple holding one, or this module's
+    SCRATCH_PREFIXES (by name or as `gate.SCRATCH_PREFIXES`)."""
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "startswith":
             for arg in node.args:
+                if (isinstance(arg, ast.Name) and arg.id == "SCRATCH_PREFIXES") or (
+                        isinstance(arg, ast.Attribute) and arg.attr == "SCRATCH_PREFIXES"):
+                    return True
                 consts = arg.elts if isinstance(arg, ast.Tuple) else [arg]
                 if any(isinstance(c, ast.Constant) and isinstance(c.value, str)
                        and c.value.startswith(SCRATCH_PREFIXES) for c in consts):

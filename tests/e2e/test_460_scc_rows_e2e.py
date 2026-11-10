@@ -15,14 +15,16 @@ import os
 import pytest
 
 from tests.e2e import ns262
+from tests.e2e.gate import SCRATCH_PREFIXES
 
 NS = os.environ.get("IVG_NAMESPACE", "")
 
 pytestmark = [
     pytest.mark.e2e,
     ns262.requires_container,
-    pytest.mark.skipif(not NS.startswith(("IVG460", "IVG262")),
-                       reason="IVG_NAMESPACE must name an IVG460*/IVG262* scratch namespace: the case erases its graph"),
+    pytest.mark.skipif(not NS.startswith(SCRATCH_PREFIXES),
+                       reason=f"IVG_NAMESPACE must name a scratch namespace "
+                              f"({'/'.join(p + '*' for p in SCRATCH_PREFIXES)}): the case erases its graph"),
 ]
 
 ODD = ['q"t', "b\\s", "sl/ash", "tab\tx", "ünï中", "10", "0.5", "-3", "x\u0001y"]

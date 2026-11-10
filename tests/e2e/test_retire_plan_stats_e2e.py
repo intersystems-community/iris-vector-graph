@@ -8,7 +8,8 @@ after ``TUNE TABLE``. A ``(graph_id, o_id)`` index gives both lookups a plan who
 optimizer takes under any statistics; a hint could fix only the ``NOT EXISTS``, never the foreign key's check.
 
 The test sets those statistics on purpose (Fixed: an extent of 10,000,000 and every field at 100%), retires bare
-nodes, and counts the global references the process made. It puts the namespace back with ``TUNE TABLE``.
+nodes, and counts the global references the process made. It puts the namespace back with ``TUNE TABLE``. The
+namespace is its own: ``IVG_PURGES_NAMESPACE`` (the gate's exclusive "purges" group), never the session's.
 """
 
 from __future__ import annotations
@@ -20,13 +21,27 @@ import iris
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.e2e import own_data_ns, scratch_vars
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
+#: the gate's "purges" group (tests/e2e/gate.py): this file purges cached queries and sets rdf_edges' statistics, which
+#: break or skew other files' statements, so its namespace is its own (4.7.0)
+NS_VAR = "IVG_PURGES_NAMESPACE"
+
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.requires_database,
     pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true"),
+    scratch_vars.requires("IVG_PURGES_NAMESPACE"),
 ]
+
+
+@pytest.fixture(scope="module")
+def iris_connection():
+    """A connection to this file's own namespace, in place of conftest's session one."""
+    conn, _ns = own_data_ns.connect(NS_VAR)
+    yield conn
+    conn.close()
 
 STATS = "%SYSTEM.SQL.Stats.Table"
 EDGES = 5000

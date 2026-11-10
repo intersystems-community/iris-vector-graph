@@ -31,7 +31,8 @@ def _plan(env=None, **kw):
 
 def test_the_r308_group_is_exclusive():
     assert gate.GROUPS["r308"].exclusive
-    assert [g for g, grp in gate.GROUPS.items() if grp.exclusive] == ["r308"]
+    # and the purges group (test_470_gate_purges_and_prefixes.py)
+    assert [g for g, grp in gate.GROUPS.items() if grp.exclusive] == ["r308", "purges"]
 
 
 def test_only_the_r308_files_read_its_namespace_and_they_read_no_other():
