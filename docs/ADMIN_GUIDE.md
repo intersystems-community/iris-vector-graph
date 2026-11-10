@@ -68,6 +68,28 @@ on and ignores a mounted `iris.key`: on a host with more (64 cores, measured) it
 InterSystems IRIS Community License` and shuts down. Pin it with `cpuset: "0-7"` on the `iris` service in a
 `compose.override.yml` ([Quickstart](setup/QUICKSTART.md), step 1), or run a licensed image.
 
+**A namespace of your own.** Several sections below use a second namespace, or one whose routines are in a database
+apart from its globals. IVG makes neither: create it as any IRIS namespace, in the Management Portal (System
+Administration > Configuration > System Configuration > Namespaces) or in a `%SYS` terminal. The `Config.*` classes
+take their properties as a local array passed by reference, which the Native API cannot pass, so run them through
+`iris session`, not from Python. For a namespace `MYGRAPH` on a database of the same name, in the compose container:
+
+<!-- doc-test: skip reason="creates a namespace and a database; run on ivg-iris-enterprise for 4.6.5" -->
+
+```bash
+docker compose exec -T iris iris session IRIS -U %SYS <<'EOF'
+do ##class(%File).CreateDirectoryChain("/usr/irissys/mgr/mygraph/")
+set db=##class(SYS.Database).%New(), db.Directory="/usr/irissys/mgr/mygraph/", sc=db.%Save() write sc,!
+kill p set p("Directory")="/usr/irissys/mgr/mygraph/" set sc=##class(Config.Databases).Create("MYGRAPH",.p) write sc,!
+kill p set p("Globals")="MYGRAPH",p("Routines")="MYGRAPH" set sc=##class(Config.Namespaces).Create("MYGRAPH",.p) write sc,!
+halt
+EOF
+```
+
+Each line writes `1`; anything else is an IRIS status to read with `$system.Status.GetErrorText(sc)`. For routines
+apart from globals, create two databases the same way and name them in `p("Routines")` and `p("Globals")`. Then
+connect to `MYGRAPH` and call `initialize_schema()` as in the README.
+
 ---
 
 ## 2. What IVG installs and where

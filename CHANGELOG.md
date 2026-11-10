@@ -87,6 +87,11 @@ maxIter), not an options map`), and `ivg.shortestPath.weighted` raises without `
   `^KG("__version")` as the write counter it is (it moves with every write, and setup leaves 2), not "its version", and
   the README says that in a namespace never set up `IsLoaded()` raises `<CLASS DOES NOT EXIST>` where `%ExistsId`
   prints `0`.
+- **ADMIN_GUIDE says how to make a namespace to try IVG in, and what the four graph tables' columns hold.** Several
+  of its sections use a second namespace, and an operator calling `Config.Namespaces.Create()` through the Native API
+  got `<SUBSCRIPT>`: those classes take a local array by reference, which the Native API cannot pass. §1 now gives the
+  `%SYS` terminal lines. §2 lists the columns of `nodes`, `rdf_labels`, `rdf_props` and `rdf_edges`, with a SELECT of
+  a node's properties.
 
 ### v4.6.4 (2026-11-09)
 
