@@ -105,14 +105,17 @@ def make(ns: str, split: bool = False) -> bool:
 
 
 def drop(ns: str) -> bool:
-    """Delete `ns` and the databases it maps (DROPPABLE only): the one wipe that leaves nothing behind, classes and
-    globals included. Only a database `make` names for `ns` is deleted (`ns`, or `--split`'s `<ns>D` and `<ns>R`, with
-    their resources), read from the namespace's configuration. False when it did not exist."""
+    """Delete `ns`, its Task Manager tasks and the databases it maps (DROPPABLE only): the one wipe that leaves nothing
+    behind, classes and globals included. Only a database `make` names for `ns` is deleted (`ns`, or `--split`'s
+    `<ns>D` and `<ns>R`, with their resources), read from the namespace's configuration. False when it did not exist."""
     if not may_drop(ns):
         raise ValueError(f"refusing to drop {ns!r}: only upper-case {'* or '.join(DROPPABLE)}* namespaces are dropped")
     out = _objectscript([
         f'if \'##class(Config.Namespaces).Exists("{ns}") write "ABSENT",! halt',
         f'kill p do ##class(Config.Namespaces).Get("{ns}",.p) set dbs=$lb(p("Globals"),p("Routines"))',
+        # a Task Manager task (IVG's EmbedQueue worker) outlives its namespace and keeps running against it
+        f'set rs=##class(%SQL.Statement).%ExecDirect(,"SELECT ID FROM %SYS.Task WHERE NameSpace = ?","{ns}") '
+        'while rs.%Next() { set sc=##class(%SYS.Task).%DeleteId(rs.%Get("ID")) if \'sc write "FAIL task ",$system.Status.GetErrorText(sc),! halt }',
         f'set sc=##class(Config.Namespaces).Delete("{ns}") if \'sc write "FAIL ns ",$system.Status.GetErrorText(sc),! halt',
         # Braces throughout: a one-line `if` would govern everything after it on the line
         f'set ok=1 for i=1:1:2 {{ set db=$li(dbs,i) continue:\'$lf($lb("{ns}","{ns}D","{ns}R"),db)  '
