@@ -281,7 +281,9 @@ retry on a dropped connection, and leaves the adjacency to `sync()` after your c
 until then). The first vector `embed_nodes` (or `store_embeddings`) stores for a named graph or a new `model_key` makes
 that route's table, which cannot wait for your commit: inside your transaction that raises `CallerTransactionOpenError`
 before anything is written, so store the first one outside it. `initialize_schema()` raises `CallerTransactionOpenError`
-inside your transaction, before doing anything: setup commits as it goes and compiles classes.
+inside your transaction, before doing anything: setup commits as it goes and compiles classes. Both refusals apply
+once your transaction holds a write (`$TLEVEL` above 0); with autocommit off and nothing written yet, setup and a new
+route run as without a transaction, since there is nothing of yours to commit.
 
 The ledger's `commit` joins your transaction too (4.7.0): your rollback leaves no revision and none of its writes (its
 `post_commit_properties` included), your commit keeps them. It used to run on the engine's Native API connection,

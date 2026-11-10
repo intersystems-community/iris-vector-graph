@@ -2084,9 +2084,10 @@ class SchemaMixin:
         setup copies the 4.5.x ledger rows from ``Graph_KG.ledger_revisions`` and ``ledger_stats`` into them
         (``ledger_history_copied``: rows per table; 4.6.0 R114).
 
-        4.7.0: with a transaction of the caller's open on the connection (``$TLEVEL`` above 0, or the driver's
-        autocommit off), setup raises ``CallerTransactionOpenError`` before doing anything, ``dry_run`` included: it
-        commits as it goes and compiles classes, which no rollback takes back, and it committed the caller's work.
+        4.7.0: with uncommitted work of the caller's on the connection (``$TLEVEL`` above 0), setup raises
+        ``CallerTransactionOpenError`` before doing anything, ``dry_run`` included: it commits as it goes and compiles
+        classes, which no rollback takes back, and it committed the caller's work. The driver's autocommit off with
+        nothing written yet (``$TLEVEL`` 0) is no refusal: there is nothing to lose.
         """
         from iris_vector_graph._write_txn import refuse_in_caller_transaction
 

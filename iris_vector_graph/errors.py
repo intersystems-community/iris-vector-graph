@@ -175,19 +175,18 @@ class GraphWriteSchemaError(GraphWriteError, IVGSchemaError):
 class CallerTransactionOpenError(IVGError, RuntimeError):
     """A call that cannot run inside the caller's open transaction was refused before it did anything (4.7.0).
 
-    ``initialize_schema()`` raises it when the connection has a transaction open (``$TLEVEL`` above 0, or the
-    driver's autocommit off): setup commits as it goes and compiles classes, which no rollback takes back, so it
-    used to commit the caller's work. The caller's transaction is left open, as it was; commit or roll it back, then
-    run the call again. ``operation`` is the call refused, ``level`` the ``$TLEVEL`` it found (0 with autocommit off
-    before the caller's first write)."""
+    ``initialize_schema()`` raises it when the connection holds uncommitted work of the caller's (``$TLEVEL`` above
+    0): setup commits as it goes and compiles classes, which no rollback takes back, so it used to commit the
+    caller's work. With the driver's autocommit off and nothing written yet (``$TLEVEL`` 0) there is nothing to lose,
+    and setup runs. The caller's transaction is left open, as it was; commit or roll it back, then run the call
+    again. ``operation`` is the call refused, ``level`` the ``$TLEVEL`` it found."""
 
     def __init__(self, operation: str, level: int, why: str):
         self.operation = operation
         self.level = level
-        opened = f"$TLEVEL {level}" if level > 0 else "the driver's autocommit is off"
         super().__init__(
-            f"{operation} cannot run inside the caller's open transaction ({opened}): {why}. Nothing was done, and "
-            f"the caller's transaction is still open; commit or roll it back, then call {operation} again"
+            f"{operation} cannot run inside the caller's open transaction ($TLEVEL {level}): {why}. Nothing was "
+            f"done, and the caller's transaction is still open; commit or roll it back, then call {operation} again"
         )
 
 

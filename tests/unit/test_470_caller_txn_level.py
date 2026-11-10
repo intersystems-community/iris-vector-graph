@@ -72,9 +72,14 @@ def test_the_refusal_names_the_call_the_level_and_the_reason():
     )
 
 
-def test_autocommit_off_is_named_in_the_refusal():
-    with pytest.raises(CallerTransactionOpenError, match="the driver's autocommit is off"):
-        refuse_in_caller_transaction(_conn(0, autocommit=False), "initialize_schema()", "why")
+def test_autocommit_off_before_the_first_write_is_no_refusal():
+    """$TLEVEL 0 with autocommit off: nothing of the caller's is uncommitted, so nothing can be lost (4.7.0 review)."""
+    refuse_in_caller_transaction(_conn(0, autocommit=False), "initialize_schema()", "why")
+
+
+def test_autocommit_off_after_a_write_is_refused():
+    with pytest.raises(CallerTransactionOpenError, match=r"\(\$TLEVEL 1\)"):
+        refuse_in_caller_transaction(_conn(1, autocommit=False), "initialize_schema()", "why")
 
 
 def test_no_transaction_is_no_refusal():

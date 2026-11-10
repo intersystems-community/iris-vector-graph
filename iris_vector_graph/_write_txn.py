@@ -88,10 +88,12 @@ def caller_transaction_level(conn) -> Optional[int]:
 
 
 def refuse_in_caller_transaction(conn, operation: str, why: str) -> None:
-    """Raise :class:`~iris_vector_graph.errors.CallerTransactionOpenError` when the caller has a transaction open on
-    ``conn``; nothing is sent but the ``$TLEVEL`` probe, so the caller's transaction is as it was."""
+    """Raise :class:`~iris_vector_graph.errors.CallerTransactionOpenError` when the caller has uncommitted work on
+    ``conn`` (``$TLEVEL`` above 0); nothing is sent but the ``$TLEVEL`` probe, so the caller's transaction is as it
+    was. With the driver's autocommit off and nothing written yet (``$TLEVEL`` 0) there is nothing a commit could
+    lose, so that is no refusal; ``WriteTxn`` still makes such a connection's writes the caller's."""
     level = caller_transaction_level(conn)
-    if level is not None:
+    if level:
         from iris_vector_graph.errors import CallerTransactionOpenError
 
         raise CallerTransactionOpenError(operation, level, why)

@@ -320,18 +320,44 @@ def test_initialize_schema_refuses_a_callers_open_transaction(observer, caller, 
     assert _has_caller_row(observer, u) is (how == "commit"), "the caller's row did not follow the caller's " + how
 
 
-def test_initialize_schema_refuses_autocommit_off_before_the_first_write(caller):
-    """setAutoCommit(False) is the caller's transaction even before its first write ($TLEVEL 0 until then)."""
+def test_initialize_schema_with_autocommit_off_runs_until_the_first_write(observer, caller):
+    """setAutoCommit(False) with nothing written yet ($TLEVEL 0) has nothing uncommitted to lose, so setup runs; after
+    the caller's first write ($TLEVEL 1) it refuses, and the caller's row is still in its open transaction."""
     from iris_vector_graph.errors import CallerTransactionOpenError
 
+    u = _uid()
     eng = _engine(caller)
     caller.setAutoCommit(False)
     try:
-        with pytest.raises(CallerTransactionOpenError):
+        assert _level(caller) == 0
+        status = eng.initialize_schema()
+        assert status["schema"] == "Graph_KG", status
+        _caller_row(caller, u)
+        with pytest.raises(CallerTransactionOpenError, match=r"\$TLEVEL 1"):
             eng.initialize_schema()
+        assert _level(caller) == 1
     finally:
         caller.rollback()
         caller.setAutoCommit(True)
+    assert not _has_caller_row(observer, u)
+
+
+def test_a_new_route_with_autocommit_off_is_made_until_the_first_write(observer, caller):
+    """The new-route refusal follows the same rule: $TLEVEL 0 (autocommit off, nothing written) makes the route."""
+    u = _uid()
+    graph = "g470a" + u
+    eng = _engine(caller)
+    assert eng.create_node(f"{u}n", graph=graph)
+    caller.setAutoCommit(False)
+    try:
+        assert _level(caller) == 0
+        r = eng.embed_nodes(model=Fake(), text_fn=lambda nid, props: nid, node_ids=[f"{u}n"], force=True,
+                            graph=graph)
+        assert r["embedded"] == 1 and r["errors"] == 0, r
+        caller.commit()
+    finally:
+        caller.setAutoCommit(True)
+    assert _routes(observer, graph) == 1
 
 
 # ------------------------------------------------------------------------- row 13: the caller's dicts stay as given
