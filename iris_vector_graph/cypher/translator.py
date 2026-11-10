@@ -4868,6 +4868,9 @@ def _run_unwind_dml_rows(
                 _map_val = _constant_value(_map_val, context)
             if isinstance(_map_val, dict):
                 _iter_clauses = _bind_unwound_map_props(_iter_clauses, _ualias, _map_val)
+            # 4.7.0: `UNWIND $p AS e ... SET n.f = e` raised UndefinedVariable, and the batch idiom `SET n += r` "takes a
+            # map literal or a map parameter" (4.6.5 too): a SET value reads the row's value
+            _iter_clauses = _bind_unwound_set_values(_iter_clauses, _ualias, _row_value_node(item_val))
         _bindings_changed(context)  # each row's writes follow the last row's
         for clause in _iter_clauses:
             if isinstance(clause, ast.UnwindClause):
@@ -7003,12 +7006,19 @@ def rewrite_ambiguous_param_unwind(cypher_query: ast.CypherQuery, params: Option
     """``UNWIND $p AS e ...`` opening the query, over an ambiguous list (``_ambiguous_list``), as
     ``WITH $p AS __lN UNWIND __lN AS e ...``, which reads each element as itself through CY_LIST_KINDS (4.7.0 row 22:
     `$p = ['[2]', [2], true, '1']` answered `[2], [2], '1', '1'`). Left alone: an UNWIND after another clause (the
-    WITH would drop that clause's variables); a query that writes (the WITH form's `CREATE (:X {v: e})` fails -119 on
-    rdf_props, where this one stores each element); a list of one kind, whose JSON_TABLE read is the fast one (the WITH
-    form reads a long list by position). A new tree: the parsed query is cached. The same tree when nothing applies,
-    so a second call is a no-op."""
-    parts = cypher_query.query_parts
-    if not parts or not parts[0].clauses or getattr(cypher_query, "writes", True):
+    WITH would drop that clause's variables); a write in the UNWIND's own part, which runs row by row from the list
+    (`UNWIND $p AS e CREATE (:X {v: e})`: the WITH form's fails -119 on rdf_props, where this one stores each element),
+    though a SET or REMOVE after a WITH (`UNWIND $p AS e WITH e WHERE e = true MATCH (n) SET n.f = e`) is rewritten
+    (a CREATE or MERGE after it fails -23 in the WITH form, `Label is not listed among the applicable tables`); a list of
+    one kind, whose JSON_TABLE read is the fast one (the WITH form reads a long list by position). A new tree: the
+    parsed query is cached. The same tree when nothing applies, so a second call is a no-op."""
+    parts = getattr(cypher_query, "query_parts", None)
+    if not parts or not parts[0].clauses:
+        return cypher_query
+    if getattr(cypher_query, "writes", True) and (len(parts) == 1 or not all(
+            isinstance(c, (ast.UnwindClause, ast.MatchClause, ast.WhereClause)) for c in parts[0].clauses) or not all(
+            isinstance(c, (ast.SetClause, ast.RemoveClause)) for p in parts for c in p.clauses
+            if isinstance(c, ast.UpdatingClause))):
         return cypher_query
     first = parts[0].clauses[0]
     expr = getattr(first, "expression", None)
@@ -7039,7 +7049,7 @@ def translate_to_sql(
     prop_set = _translation_prop_set.set(getattr(engine, "_prop_set_deployed", True) is not False)
     schema_token = _translation_schema.set(schema) if isinstance(schema, str) and schema else None
     try:
-        return _translate_to_sql(rewrite_ambiguous_param_unwind(cypher_query, params), params, engine, procedures)
+        return _translate_to_sql(cypher_query, params, engine, procedures)
     finally:
         if schema_token is not None:
             _translation_schema.reset(schema_token)
@@ -9091,6 +9101,69 @@ def _bind_unwound_map_props(node, var, value):
     return node
 
 
+def _row_value_node(value):
+    """An UNWIND row's value as an expression: a node as it is, a map as a map literal, anything else a literal."""
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return value
+    if isinstance(value, dict):
+        return ast.MapLiteral(entries={k: ast.Literal(v) for k, v in value.items()})
+    return ast.Literal(value)
+
+
+#: expressions that bind a variable of their own, which shadows an UNWIND variable of the same name inside them
+_BINDING_EXPRESSIONS = (ast.ListComprehension, ast.ListPredicateExpression, ast.ReduceExpression)
+
+
+def _bind_variable(node, var, value):
+    """Copy of `node` with every reference to the variable `var` replaced by the expression `value`."""
+    if isinstance(node, ast.Variable):
+        return value if node.name == var and not node.is_parameter else node
+    if isinstance(node, _BINDING_EXPRESSIONS) and node.variable == var:
+        return node
+    if isinstance(node, (list, tuple)):
+        new = [_bind_variable(x, var, value) for x in node]
+        return node if all(a is b for a, b in zip(new, node)) else type(node)(new)
+    if isinstance(node, dict):
+        new = {k: _bind_variable(x, var, value) for k, x in node.items()}
+        return node if all(new[k] is node[k] for k in node) else new
+    if dataclasses.is_dataclass(node) and not isinstance(node, type):
+        changes = {}
+        for f in dataclasses.fields(node):
+            old = getattr(node, f.name)
+            new = _bind_variable(old, var, value)
+            if new is not old:
+                changes[f.name] = new
+        return dataclasses.replace(node, **changes) if changes else node
+    return node
+
+
+def _bind_unwound_set_values(clauses, var, value):
+    """`clauses` with each SET item's value (a SET clause's, a MERGE's ON CREATE / ON MATCH) reading the UNWIND
+    variable `var` as this row's `value`. Only the values: the written target (`SET e.p = 1`) is left as it is."""
+    def items(its):
+        new = [dataclasses.replace(i, value=_bind_variable(i.value, var, value)) if isinstance(i, ast.SetItem) else i
+               for i in its]
+        return its if all(a is b for a, b in zip(new, its)) else new
+
+    def action(a):
+        if a is None:
+            return a
+        new = items(a.items)
+        return a if new is a.items else dataclasses.replace(a, items=new)
+
+    out = []
+    for c in clauses:
+        if isinstance(c, ast.SetClause):
+            new = items(c.items)
+            c = c if new is c.items else dataclasses.replace(c, items=new)
+        elif isinstance(c, ast.MergeClause):
+            on_create, on_match = action(c.on_create), action(c.on_match)
+            if on_create is not c.on_create or on_match is not c.on_match:
+                c = dataclasses.replace(c, on_create=on_create, on_match=on_match)
+        out.append(c)
+    return out
+
+
 _TEMPORAL_CREATE_FNS = frozenset(
     {"date", "time", "localtime", "localdatetime", "datetime", "duration"}
 )
@@ -11051,6 +11124,13 @@ def _merge_keyed_id(merge, context, bound_before) -> Optional[str]:
         return raw.value
     if isinstance(raw, ast.Variable) and isinstance(context.input_params.get(raw.name), str):
         return context.input_params[raw.name]
+    if isinstance(raw, ast.Variable) and context.variable_aliases.get(raw.name) == "__foreach_literal__":
+        # an UNWIND row's value (`UNWIND $ids AS e MERGE (n {id: e}) ON MATCH SET ...`): ON MATCH wrote nothing, its
+        # node read as the alias 'n0' (4.6.5 too); the row's id, as a literal's (4.7.0)
+        row = getattr(context, "foreach_literals", {}).get(raw.name)
+        row = row.value if isinstance(row, ast.Literal) else row
+        if isinstance(row, str):
+            return row
     return None
 
 
@@ -12171,7 +12251,10 @@ def _set_pair_key(context, target, other: str, target_id=None, other_edge=False,
     if value:
         # through CY_TYPED: a stored number fetched as a Python number under driver 5.4.0 and as IRIS's text under
         # 5.4.1, which the SET then wrote as the string '3'; the mark says its type, and the executor decodes it (R285)
-        second = f"{_fn('CY_TYPED')}({other_alias}.{_safe_alias(other)})"
+        json_text = _unwind_json_text(ast.Variable(name=other), context)
+        # a run-time list's row, as its JSON text (4.7.0: `WITH e ... SET n.f = e` wrote true as the string '1')
+        second = (f"CHAR(1) || 'J' || {json_text}" if json_text is not None
+                  else f"{_fn('CY_TYPED')}({other_alias}.{_safe_alias(other)})")
     else:
         second = other_edge_id if other_edge_id is not None else _id(other, other_alias)
     # a node written with no USE GRAPH: the pairs carry its graph, so each graph's node reads its own row's value and

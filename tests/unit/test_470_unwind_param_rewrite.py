@@ -20,7 +20,8 @@ AMBIGUOUS = ["[2]", [2], True, "1"]
 
 
 def _sql(q: str, params) -> str:
-    s = translate_to_sql(parse_query(q), dict(params)).sql
+    """The SQL execute_cypher runs: it rewrites the caller's query, then translates it."""
+    s = translate_to_sql(rewrite_ambiguous_param_unwind(parse_query(q), params), dict(params)).sql
     return s if isinstance(s, str) else "\n".join(s)
 
 
@@ -106,3 +107,24 @@ def test_the_native_cache_keys_the_two_reads_apart():
     plain = rewrite_ambiguous_param_unwind(parse_query(q), {"p": [1, 2]})
     mixed = rewrite_ambiguous_param_unwind(parse_query(q), {"p": AMBIGUOUS})
     assert Q._native_key(plain, {"p": [1, 2]}) != Q._native_key(mixed, {"p": AMBIGUOUS})
+
+
+def test_translate_to_sql_leaves_a_tree_as_it_is():
+    """Only the caller's query is rewritten (execute_cypher, /admin/explain): the write path translates trees of its
+    own, and rewriting `UNWIND $p AS e WITH e CREATE ...`'s read step made the statements around it fail -23."""
+    q = "UNWIND $p AS e RETURN e"
+    s = translate_to_sql(parse_query(q), {"p": AMBIGUOUS}).sql
+    assert "CY_LIST_KINDS" not in (s if isinstance(s, str) else "\n".join(s))
+
+
+@pytest.mark.parametrize("q, rewritten", [
+    ("UNWIND $p AS e WITH e WHERE e = true MATCH (n) SET n.f = e", True),  # a SET after a WITH reads the kinds
+    ("UNWIND $p AS e WITH e MATCH (n {id: e}) REMOVE n.f", True),
+    ("UNWIND $p AS e WITH e CREATE (:X {v: e})", False),  # the WITH form's CREATE fails -23
+    ("UNWIND $p AS e WITH e WHERE e <> true MERGE (:X {m: e})", False),
+    ("UNWIND $p AS e WITH e MATCH (n {id: e}) DETACH DELETE n", False),
+    ("UNWIND $p AS e MATCH (n {id: e}) SET n.f = e", False),  # runs row by row from the list: reads each as itself
+])
+def test_which_writes_are_rewritten(q, rewritten):
+    tree = parse_query(q)
+    assert (rewrite_ambiguous_param_unwind(tree, {"p": AMBIGUOUS}) is not tree) is rewritten

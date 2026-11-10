@@ -1845,7 +1845,10 @@ class QueryMixin:
                 or stripped.startswith("CREATE LOOKUP")):
             return IVGResult(columns=[], rows=[], sql=cypher_query, params=[])
 
-        parsed = parse_query(cypher_query)
+        # the caller's query only, never a tree the write path builds from it (its read step was rewritten, and the
+        # statements around it then failed -23); before every route, so the native translation cache (keyed by
+        # repr(parsed)) keys the two reads apart (4.7.0 row 22)
+        parsed = rewrite_ambiguous_param_unwind(parse_query(cypher_query), parameters)
 
         self._probe_if_idle()
 
@@ -1857,6 +1860,7 @@ class QueryMixin:
                 # every later run of the same text, and hid their writes from writes_cypher (R113)
                 part_query = copy.copy(part_query)
                 part_query.subsequent_queries = []
+                part_query = rewrite_ambiguous_param_unwind(part_query, current_params)
                 result = self._execute_parsed(part_query, current_params, procedures)
                 _raise_if_error(result, raise_on_error)
                 if result and result.rows and result.columns:
@@ -1977,8 +1981,6 @@ class QueryMixin:
         last.rows = out_rows
         return last
     def _execute_parsed(self, parsed, parameters, procedures=None):
-        # before every route, so the native translation cache (keyed by repr(parsed)) keys the two reads apart
-        parsed = rewrite_ambiguous_param_unwind(parsed, parameters)
         if parsed.procedure_call is not None:
             if _handler_may_answer(parsed):
                 # `USE GRAPH` and the query's parameters live on the parsed query, not on

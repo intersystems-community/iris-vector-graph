@@ -73,4 +73,5 @@ def test_a_pair_of_ids_runs_as_one_statement():
     stmt = "UPDATE rdf_props SET val = (SELECT x FROM t WHERE id = __PAIR_v0__[s]) WHERE s IN (__IDS_v0__)"
     out = _expand_captured_ids(stmt, {"v0": ["a", "b"], "v0#pairs": {"a": "m1", "b": "m2"}})
     assert len(out) == 1 and "WHEN 'a' THEN 'm1' WHEN 'b' THEN 'm2'" in out[0], out
-    assert _pair_value_sql(True) == "'True'" and _pair_value_sql(None) == "NULL"
+    # 4.7.0: a boolean pair (a run-time list's row read as JSON) as a SET of true stores it, not Python's 'True'
+    assert _pair_value_sql(True) == "'true'" and _pair_value_sql(None) == "NULL"

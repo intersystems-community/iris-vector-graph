@@ -269,6 +269,11 @@ def _pair_value_sql(v) -> str:
         return f"CAST('{float(v)!r}' AS DOUBLE)"
     if kind == "int":
         return f"CAST({int(v)} AS BIGINT)"
+    if isinstance(v, bool):
+        # a run-time list's row read as JSON (4.7.0): stored as a Cypher SET of true stores it, the text true
+        return "'true'" if v else "'false'"
+    if isinstance(v, (list, dict)):
+        return _ids_literal([json.dumps(v)])
     return _ids_literal([v])
 
 

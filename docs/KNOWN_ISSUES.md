@@ -420,14 +420,19 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 
 <a id="an-unwind-of-a-list-built-while-the-query-runs-can-read-a-nested-list-or-a-boolean-as-a-string"></a>
 
-### An UNWIND of a parameter list in a query that writes can read a string that spells a list as the list
+### An UNWIND of a parameter list after another clause can read a string that spells a list as the list
 
 - **Symptom:** over a parameter list that holds a list or map beside a scalar, an `UNWIND` variable reads a string
-  that is the same text as another element as that element, and a boolean as `'1'`, where the query writes (`CREATE`,
-  `MERGE`, `SET`, `DELETE`) or the `UNWIND` follows another clause: with `$p = ['[2]', [2], true, '1']`,
-  `MATCH (n:X) UNWIND $p AS e RETURN e` answers `[2], [2], '1', '1'` (openCypher: `'[2]', [2], true, '1'`). A read
-  that opens with the `UNWIND` answers each element as itself since 4.7.0, and so does a parameter list of one kind,
-  or of scalars and booleans only.
+  that is the same text as another element as that element, and a boolean as `'1'`, where the `UNWIND` follows
+  another clause, or a `WITH` after it leads to a `CREATE`, `MERGE` or `DELETE`: with `$p = ['[2]', [2], true, '1']`,
+  `MATCH (n:X) UNWIND $p AS e RETURN e` answers `[2], [2], '1', '1'` (openCypher: `'[2]', [2], true, '1'`), and
+  `UNWIND $p AS e WITH e MATCH (n:X) WHERE n.id = e DETACH DELETE n` with `$p = ['x', [1], true]` deletes the node
+  whose `id` is `'1'` too (measured 2026-11-10, both routes). Since
+  4.7.0 the rest answer each element as itself: a read that opens with the `UNWIND`; a write in the `UNWIND`'s own
+  clauses, which runs row by row from the list (`UNWIND $p AS e MATCH (n:X {id: 'x'}) SET n.f = e`); a `SET` or
+  `REMOVE` after a `WITH` (`UNWIND $p AS e WITH e WHERE e = true MATCH (n:X) SET n.f = e` writes `true`; 4.6.5 wrote
+  the string `'1'`, and its filter matched the string `'1'` too); and a parameter list of one kind, or of scalars and
+  booleans only.
 - **Also:**
   - an element compared with a stored property reads as its text:
     `UNWIND $p AS e MATCH (n:X) WHERE n.id = e RETURN n.id` with `$p = ['x', [1], true]` matches a node whose `id` is
@@ -442,13 +447,27 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
   boolean as `'1'` or `'0'`, the same text as the string `'[1]'` or `'1'`. A list literal, a list built at run time
   and (since 4.7.0) a read opening with `UNWIND $p` go through `CY_LIST_KINDS`, which puts each element's kind and JSON
   text beside it (the read is `WITH $p AS __l0 UNWIND __l0 AS e`). A `?` inside `JSON_TABLE(fn(...))` fails the
-  statement on IRIS, so the parameter is held in a `WITH` first; IVG does not do that for a query that writes, where
-  the `WITH` form's `CREATE (:X {v: e})` fails with SQLCODE -119 on `rdf_props`.
+  statement on IRIS, so the parameter is held in a `WITH` first. IVG does not do that before a `CREATE`, `MERGE` or
+  `DELETE` that follows a `WITH`: there the `WITH` form fails (SQLCODE -23, `Label is not listed among the applicable
+tables`), as such a write fails anyway (the entry below).
 - **Versions:** 4.6.0 and earlier for every such list; 4.7.0 for the cases above.
 - **Workaround:** for a read, open the query with the `UNWIND` (`UNWIND $p AS e MATCH (n:X) RETURN e`), or bind the
   parameter in a `WITH` first: `WITH $p AS l UNWIND l AS e RETURN e` answers `'[2]', [2], true, '1'` (measured
-  2026-11-10, both routes). For a write, keep a list of one kind per parameter.
+  2026-11-10, both routes). For a write, write in the `UNWIND`'s own clauses (`UNWIND $p AS e MATCH ... SET ...`),
+  or keep a list of one kind per parameter.
 - **Check:** the answer holds a list where you passed a string, or `'1'` where you passed `true`.
+
+### A `CREATE` or `MERGE` after `UNWIND $p AS e WITH e` fails with SQLCODE -119
+
+- **Symptom:** `UNWIND $p AS e WITH e CREATE (:X {v: e})`, and `MERGE` in the same place, raise `GraphWriteError`
+  (`execute_cypher failed (SQLCODE -119), nothing written`) for any list of two or more elements, `[1, 2]` included,
+  on both routes (4.6.5 and 4.7.0, measured 2026-11-10). Nothing is written.
+- **Cause:** the statement makes one node id for the whole query, and its property insert selects one row per element
+  of the `WITH`'s stage with that id: the second element's row repeats the first's key in `rdf_props`.
+- **Versions:** all 4.x; on the 4.7.1 list.
+- **Workaround:** write in the `UNWIND`'s own clauses, with no `WITH` between: `UNWIND $p AS e CREATE (:X {v: e})`
+  writes one node per element; filter with a `WHERE` on a `MATCH`, or filter the list before passing it.
+- **Check:** the error names SQLCODE -119 and the query has a `WITH` between the `UNWIND` and the `CREATE`.
 
 ### A query that reads many properties prepares slowly
 

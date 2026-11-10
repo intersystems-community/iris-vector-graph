@@ -724,8 +724,9 @@ class ExplainRequest(BaseModel):
 def admin_explain(req: ExplainRequest):
     try:
         from iris_vector_graph.cypher.parser import parse_query
-        from iris_vector_graph.cypher.translator import translate_to_sql
-        parsed = parse_query(req.query)
+        from iris_vector_graph.cypher.translator import rewrite_ambiguous_param_unwind, translate_to_sql
+        # as execute_cypher reads the caller's query (4.7.0 row 22), so the SQL shown is the SQL that runs
+        parsed = rewrite_ambiguous_param_unwind(parse_query(req.query), req.parameters)
         with _engine() as eng:
             sql_result = translate_to_sql(parsed, req.parameters, engine=eng)
         return {
