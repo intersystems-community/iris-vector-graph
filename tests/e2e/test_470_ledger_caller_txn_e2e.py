@@ -74,16 +74,23 @@ def observer():
     was_enabled = eng.ledger.meta().get("state") == "enabled"
     if not was_enabled:
         eng.ledger.enable()
-    report = eng.ledger.verify()
-    assert report.equal, f"the namespace's ledger does not match its graph before the test: {report.result}"
-    yield conn
     try:
-        if not was_enabled:
-            eng.ledger.disable()
-        cur.execute(f"DROP TABLE {CALLER_TABLE}")
+        # the ledger is put back as it was even when this fails: left enabled, the next run's precondition fails on
+        # whatever other files wrote meanwhile
+        report = eng.ledger.verify()
+        assert report.equal, (
+            f"the namespace's ledger does not match its graph before the test: {report.result}, "
+            f"{report.differences[:3]} (an enabled ledger another file wrote around)"
+        )
+        yield conn
     finally:
-        _close(eng)
-        conn.close()
+        try:
+            if not was_enabled:
+                eng.ledger.disable()
+            cur.execute(f"DROP TABLE {CALLER_TABLE}")
+        finally:
+            _close(eng)
+            conn.close()
 
 
 def _close(eng):
