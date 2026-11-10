@@ -23518,7 +23518,8 @@ def _iana_tz_offset(iana_name, ref_year=2015, ref_month=7, ref_day=21):
     """Return '+HH:MM' or '+HH:MM:SS' offset for IANA timezone at reference date."""
     try:
         import datetime as _dt2
-        from zoneinfo import ZoneInfo as _ZI
+
+        from iris_vector_graph._tz import zone as _ZI
 
         _zi = _ZI(iana_name)
         _aware = _dt2.datetime(ref_year, ref_month, ref_day, tzinfo=_zi)
@@ -24422,7 +24423,7 @@ def _build_date_from_map(m, with_time=False, with_tz=False):
                 # Named IANA timezone: compute offset and format as +HH:MM[Name]
                 if "/" in tz_name or tz_name in ("UTC", "GMT"):
                     try:
-                        from zoneinfo import ZoneInfo as _ZoneInfo
+                        from iris_vector_graph._tz import zone as _ZoneInfo
 
                         _zi = _ZoneInfo(tz_name)
                         # Offset at the wall time, not midnight: DST days change mid-day.
@@ -26796,7 +26797,7 @@ def _localize_to_zone(lhs_str, lhs_fn, rhs_str, rhs_fn):
             wall = local
         if name:
             try:
-                from zoneinfo import ZoneInfo
+                from iris_vector_graph._tz import zone as ZoneInfo
 
                 base = _dt.datetime.fromisoformat(wall[:19] if len(wall) >= 19 else wall)
                 utcoff = base.replace(tzinfo=ZoneInfo(name)).utcoffset()

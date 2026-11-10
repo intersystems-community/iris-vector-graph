@@ -1,12 +1,10 @@
 """TCK scenarios whose expected answer depends on the host, not on IVG: listed with why, and reported apart.
 
-Temporal2 [6] parses `1818-07-21T21:40:32.142[Europe/Stockholm]` and expects the offset `+00:53:28`. IVG resolves a
-zone with Python's `zoneinfo`, which reads the host's tz database (/usr/share/zoneinfo) before the `tzdata` package.
-A mainline tz build (macOS, the `tzdata` wheel) answers +00:53:28; Debian and Ubuntu build theirs with `backzone`,
-which keeps Stockholm's own 1818 offset, and answer +01:12:12 (both tz 2026e, 2026-11-07). Both are right for their
-database, and IVG does not pin one to satisfy a test. tests/tck/environment_dependent.txt lists such scenarios, each
-with its reason; summarize.py still counts a listed failure as eligible and failed, and names it on a line of its own
-so a gate can tell it from a regression. docs/dev/TCK.md says the same.
+None is listed. Temporal2 [6] was, until 4.7.0: it parses `1818-07-21T21:40:32.142[Europe/Stockholm]` and expects
+`+00:53:28`, and IVG read the zone with Python's `zoneinfo`, which reads the host's tz database first, so Debian and
+Ubuntu (tzdata built with `backzone`) answered +01:12:12. IVG now reads the `tzdata` wheel, a dependency, first
+(iris_vector_graph/_tz.py, tests/unit/test_470_tz.py), and every host answers +00:53:28. The list and the summary's
+line for it stay, for a scenario that is right both ways on its host; the tests below use a stand-in entry.
 """
 from __future__ import annotations
 
@@ -21,10 +19,16 @@ TEMPORAL2_6 = ("Temporal2.Temporal2 - Create Temporal Values from a String::[6] 
                "zone from string -- @1.5")
 
 
-def test_the_list_names_temporal2_6_with_its_reason():
-    listed = S.environment_dependent()
-    assert TEMPORAL2_6 in listed
-    assert "backzone" in listed[TEMPORAL2_6] and "+01:12:12" in listed[TEMPORAL2_6]
+def test_temporal2_6_is_not_listed():
+    """The tzdata wheel answers it on every host (4.7.0 row 15), so it is not environment-dependent."""
+    assert TEMPORAL2_6 not in S.environment_dependent()
+    assert S.environment_dependent() == {}
+
+
+@pytest.fixture
+def listed(monkeypatch):
+    """The list holding one stand-in entry, the scenario the runs below fail or pass."""
+    monkeypatch.setattr(S, "environment_dependent", lambda *a: {TEMPORAL2_6: "a stand-in reason"})
 
 
 def test_every_listed_scenario_is_in_the_vendored_features():
@@ -55,14 +59,14 @@ def _run(tmp_path, status: str) -> Path:
     return tmp_path / "run"
 
 
-def test_a_listed_failure_is_counted_and_named_apart(tmp_path, capsys):
+def test_a_listed_failure_is_counted_and_named_apart(tmp_path, capsys, listed):
     assert S.main([str(_run(tmp_path, "failed")), "--features", ""]) == 0
     out = capsys.readouterr().out
     assert "0 / 1 eligible" in out and "failed 1, skipped by harness 0" in out
     assert f"environment-dependent failures: 1 (tests/tck/environment_dependent.txt)\n  ENV {TEMPORAL2_6}" in out
 
 
-def test_a_listed_scenario_that_passes_is_not_named(tmp_path, capsys):
+def test_a_listed_scenario_that_passes_is_not_named(tmp_path, capsys, listed):
     assert S.main([str(_run(tmp_path, "passed")), "--features", ""]) == 0
     out = capsys.readouterr().out
     assert "1 / 1 eligible" in out and "environment-dependent failures: 0" in out and "ENV " not in out

@@ -22,7 +22,7 @@ else
   # Named packages only; do NOT --upgrade — that could pull in a new intersystems-iris* wheel and break the
   # embedded runtime (AGENTS.md hard rule).
   docker exec "$CONTAINER" "$PYBIN" -m pip install --target "$TARGET" \
-    "igraph>=1.0" "leidenalg>=0.10" "numpy>=1.24.0" "pydantic>=2.0.0" "requests>=2.28.0" 2>&1 \
+    "igraph>=1.0" "leidenalg>=0.10" "numpy>=1.24.0" "pydantic>=2.0.0" "requests>=2.28.0" "tzdata>=2025.2" 2>&1 \
     | grep -iE 'Successfully|already satisfied|ERROR' | head -5 || true
 fi
 

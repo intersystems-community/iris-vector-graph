@@ -324,17 +324,17 @@ environment-dependent failures: 1 (tests/tck/environment_dependent.txt)
   ENV Temporal2.Temporal2 - Create Temporal Values from a String::[6] ...
 ```
 
-List a scenario there only when both answers are right for their host, never to hide an IVG defect. The one listed:
+List a scenario there only when both answers are right for their host, never to hide an IVG defect. None is listed
+now. Until 4.7.0 one was:
 
-- **Temporal2 [6]**, `datetime('1818-07-21T21:40:32.142[Europe/Stockholm]')`. IVG resolves a named zone with
-  Python's `zoneinfo`, which reads the host's tz database (`/usr/share/zoneinfo`) before the `tzdata` package; IVG
-  holds no offsets of its own. A mainline tz build links Europe/Stockholm to Europe/Berlin and answers the TCK's
-  `+00:53:28`: macOS (2026e) and the `tzdata` wheel (2025.2 and 2026.6) do. Debian and Ubuntu build their `tzdata`
-  with `backzone`, which keeps Stockholm's own 1818 offset, and answer `+01:12:12` (Ubuntu 24.04, 2026e). Measured
-  2026-11-07, on the laptop and on dpgenai1. The same tz version can answer either way: the build decides, and a later
-  tz release can move this one historical offset again. So on Debian or Ubuntu IVG answers Stockholm's own mean
-  time of 1818 from the host's database, which is correct for that host and not a defect. IVG does not pin `tzdata`
-  to satisfy the test.
+- **Temporal2 [6]**, `datetime('1818-07-21T21:40:32.142[Europe/Stockholm]')`, which expects `+00:53:28`. IVG read a
+  named zone with Python's `zoneinfo`, which reads the host's tz database (`/usr/share/zoneinfo`) before the
+  `tzdata` package. A mainline tz build (macOS 2026e, the `tzdata` wheel 2025.2 and 2026.6) links Europe/Stockholm to
+  Europe/Berlin and answers `+00:53:28`; Debian and Ubuntu build their `tzdata` with `backzone`, which keeps
+  Stockholm's own 1818 offset, and answered `+01:12:12` (Ubuntu 24.04 and `python:3.12-slim`, 2026e). IVG now reads
+  the `tzdata` wheel, a dependency, first (`iris_vector_graph/_tz.py`), so every host answers as the wheel does, and
+  the scenario passes on Debian too. A later tz release can still move a historical offset like this one: that is a
+  change of the wheel's version, the same on every host.
 
 ## What a pass does and does not verify
 

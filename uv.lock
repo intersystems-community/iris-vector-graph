@@ -1420,6 +1420,7 @@ dependencies = [
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pydantic" },
     { name = "requests" },
+    { name = "tzdata" },
 ]
 
 [package.optional-dependencies]
@@ -1584,6 +1585,7 @@ requires-dist = [
     { name = "strawberry-graphql", extras = ["fastapi"], marker = "extra == 'full'", specifier = ">=0.280.0" },
     { name = "tabulate", marker = "extra == 'cli'", specifier = ">=0.9.0" },
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.0.0" },
+    { name = "tzdata", specifier = ">=2025.2" },
     { name = "uv", marker = "extra == 'dev'", specifier = ">=0.4" },
     { name = "uvicorn", marker = "extra == 'browser'", specifier = ">=0.37.0" },
     { name = "uvicorn", marker = "extra == 'full'", specifier = ">=0.37.0" },

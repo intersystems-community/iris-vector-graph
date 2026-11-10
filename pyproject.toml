@@ -59,6 +59,10 @@ dependencies = [
     # tests/unit/test_core_dependencies_cover_eager_imports.py enforces this rule
     # for every eager import, not just these.
     "requests>=2.28.0",
+    # A named zone's offset comes from this wheel before the host's tz database (iris_vector_graph/_tz.py, 4.7.0):
+    # Debian and Ubuntu build theirs with backzone, so Europe/Stockholm in 1818 answered +01:12:12 there and
+    # +00:53:28 (the openCypher TCK's) on macOS. 2025.2 and 2026.6 both answer +00:53:28.
+    "tzdata>=2025.2",
 ]
 
 [project.optional-dependencies]
