@@ -115,7 +115,10 @@ def test_a_second_run_re_creates_nothing():
     _run(ns)
     result = _run(ns)
     assert ns.created == []
-    assert result == {"created": [], "unchanged": 57, "failed": {}}
+    # every routine setup declares (57 through 4.6.5; 4.7.0 adds CY_LIST_KINDS)
+    every = len({routine_name(s) for s in GraphSchema.get_procedures_sql_list() if routine_name(s)})
+    assert every == 58
+    assert result == {"created": [], "unchanged": every, "failed": {}}
 
 
 def test_a_routine_dropped_by_hand_is_re_created_alone():

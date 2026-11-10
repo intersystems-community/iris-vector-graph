@@ -2289,6 +2289,15 @@ CREATE OR REPLACE FUNCTION Graph_KG.CY_LIST_ELEM(j VARCHAR(32000), i INTEGER) RE
             """
 CREATE OR REPLACE FUNCTION Graph_KG.CY_LIST_VAL(j VARCHAR(32000), i INTEGER) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New a, n, t, v, x If j = "" { Quit "" } Set a = ##class(%Library.DynamicArray).%FromJSON(j), n = a.%Size() If i < 0 { Set i = n + i } If (i < 0) || (i >= n) { Quit "" } Set t = a.%GetTypeOf(i), v = a.%Get(i) If $IsObject(v) { Quit v.%ToJSON() } If (t = "null") || (t = "unassigned") { Quit "" } If t = "boolean" { Quit $Select(v: "true", 1: "false") } If t = "number" { Set x = a.%Get(i, , "json") If (x [ ".") || (x [ "e") || (x [ "E") { Quit $DOUBLE(v) } Quit +v } If v = "" { Quit $Char(0) } Quit v }
 """,
+            # 4.7.0 row 21: a list built at run time, as JSON_TABLE reads its elements beside their kinds. Each element is
+            # {"v": <its JSON>, "k": "b" for a boolean, else "", "j": <its JSON as a string>, which a collect() of the
+            # UNWIND variable lists as it is}: JSON_TABLE hands a JSON boolean on as the text 1 / 0
+            # and an empty string as null, so an UNWIND (translator.py, the run-time JSON_TABLE) reads the flag beside
+            # the value, and the empty string goes as "\u0000", which JSON_TABLE reads as SQL's '' ($Char(0)). An object
+            # per element, not a pair: JSON_TABLE iterates the inner list of a one-element list of lists (R255).
+            """
+CREATE OR REPLACE FUNCTION Graph_KG.CY_LIST_KINDS(j VARCHAR(32000)) RETURNS VARCHAR(32000) LANGUAGE OBJECTSCRIPT { New a, n, i, t, x, jx, k, q, out If (j = "") || (j = $Char(0)) { Quit "[]" } Set a = ##class(%Library.DynamicArray).%FromJSON(j), n = a.%Size(), out = "", q = $Char(34) For i = 0 : 1 : (n - 1) { Set t = a.%GetTypeOf(i), k = $Select(t = "boolean": "b", 1: ""), x = a.%Get(i, , "json") If (t = "null") || (t = "unassigned") { Set x = "null" } Set jx = x If (t = "string") && (a.%Get(i) = "") { Set x = q _ $Char(92) _ "u0000" _ q } Set out = out _ $Select(i: ",", 1: "") _ "{" _ q _ "v" _ q _ ":" _ x _ "," _ q _ "k" _ q _ ":" _ q _ k _ q _ "," _ q _ "j" _ q _ ":" _ q _ $ZConvert(jx, "O", "JSON") _ q _ "}" } Quit "[" _ out _ "]" }
+""",
             """
 CREATE OR REPLACE FUNCTION Graph_KG.RAND() RETURNS DOUBLE LANGUAGE OBJECTSCRIPT { Quit $RANDOM(1000000) / 1000000.0 }
 """,

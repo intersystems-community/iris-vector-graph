@@ -197,7 +197,8 @@ def test_a_dry_run_where_rows_wait_for_their_first_build_says_kg_would_be_built(
     status = _dry_run(monkeypatch, _set_up_namespace(edge_rows=11, kg_marker=False))
     assert status["kg_built"] is True
     assert status["tables_created"] == []
-    assert status["routines"] == {"created": [], "unchanged": 57, "failed": {}}
+    every = len({routine_name(s) for s in GraphSchema.get_procedures_sql_list() if routine_name(s)})
+    assert status["routines"] == {"created": [], "unchanged": every, "failed": {}}  # 58 since 4.7.0
     assert status["objectscript_compiled"] == []
     assert status["adjacency_index"] == {"idx_edges_adj": "present", "idx_labels_adj": "present"}
 

@@ -334,8 +334,8 @@ def _fresh_setup(monkeypatch, grants_per_object=0):
 #: one more class, Graph.KG.Txn (its three Txn_* SqlProcs project from Graph.KG.SqlProcs, already loaded). 526 in
 #: 4.7.0: one more class, Graph.KG.PropWrite (its Prop_Set projects from Graph.KG.SqlProcs). 529 with 4.7.0 row 25:
 #: before writing anything, setup asks whether each of the three vector tables exists, to refuse a width change
-#: nobody asked for.
-FRESH_SETUP_ROUND_TRIPS = 529
+#: nobody asked for. 530 with 4.7.0 row 21's routine, CY_LIST_KINDS.
+FRESH_SETUP_ROUND_TRIPS = 530
 
 
 def test_a_fresh_setup_makes_a_fixed_number_of_round_trips(monkeypatch):

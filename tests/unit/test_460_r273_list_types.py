@@ -63,8 +63,10 @@ def test_collect_of_a_list_valued_column_lists_its_json():
 
 def test_an_unwind_of_a_collected_list_of_lists_is_not_flattened():
     sql = _t("WITH [1, 2] AS l WITH collect(l) AS c UNWIND c AS x RETURN x").sql
-    # the padded list is a column of Stage2 that JSON_TABLE reads (4.6.0 R310: not a correlated argument)
-    assert "Graph_KG.LIST_CONCAT(Stage2.c, '[null]') AS __u0 FROM %NOREDUCE Stage2) Stage2" in sql
+    # the padded list is a column of Stage2 that JSON_TABLE reads (4.6.0 R310: not a correlated argument), each element
+    # beside its kind since 4.7.0 (row 21: CY_LIST_KINDS)
+    assert ("Graph_KG.CY_LIST_KINDS(Graph_KG.LIST_CONCAT(Stage2.c, '[null]')) AS __u0 FROM %NOREDUCE Stage2) Stage2"
+            in sql)
     assert "JSON_TABLE(Stage2.__u0," in sql
     assert "WHERE u0.x IS NOT NULL" in sql
 

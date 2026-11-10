@@ -7421,6 +7421,8 @@ def _rel_prop_text_columns(cypher_query, context) -> List[int]:
 
 #: The RETURN column of an UNWIND row of a known list (translate_return_clause, 4.6.0 R308), whose group 1 is the row
 _UNWOUND_KNOWN_ROW = re.compile(r"^CASE WHEN (\w+\.\w+) IS NULL THEN NULL WHEN \S*CY_JSON_NUM\(\1\) IS NOT NULL ")
+#: A RETURN column of a run-time list's UNWIND row, its boolean flagged (4.7.0 row 21): the row is group 1.
+_UNWOUND_RUN_TIME_ROW = re.compile(r"^CASE WHEN \(CASE WHEN (\w+)\.(\w+)__k = 'b' THEN 1 ELSE 0 END\) = 1 THEN ")
 
 
 def _unwrap_typed(sql_expr: str) -> str:
@@ -7429,6 +7431,9 @@ def _unwrap_typed(sql_expr: str) -> str:
     known = _UNWOUND_KNOWN_ROW.match(sql_expr)
     if known:
         return known.group(1)  # TCK ReturnOrderBy1 [9]/[10]: CY_SORT_KEY read the marked text, sorting lists as strings
+    run_time = _UNWOUND_RUN_TIME_ROW.match(sql_expr)
+    if run_time:
+        return f"{run_time.group(1)}.{run_time.group(2)}"  # the row, not its J-marked boolean (4.7.0 row 21)
     head = next((h for h in (f"{_fn('CY_TYPED')}(", f"{_fn('CY_JSON_TYPED')}(") if sql_expr.startswith(h)), None)
     if head and sql_expr.endswith(")"):
         inner = sql_expr[len(head) : -1]
@@ -8518,12 +8523,32 @@ def translate_unwind_clause(unwind, context):
     if not (_is_range or _mixed_src or _unwind_kind) and unwind.alias not in context.collected_node_variables:
         # JSON_TABLE's VARCHAR column holds the element as IRIS's value: read as its JSON type (4.6.0 R310)
         _json_unwind_vars(context).add(unwind.alias)
-    by_position = _unwind_by_position(expr, alias, f"{_safe_alias(unwind.alias)} {col_type}", context)
+    _run_time = _known_list is None and _is_run_time_list(unwind.expression, context) and not (
+        _is_range or _mixed_src or _unwind_kind) and unwind.alias not in context.collected_node_variables
+    by_position = _unwind_by_position(expr, alias, f"{_safe_alias(unwind.alias)} {col_type}", context, kinds=_run_time)
     if by_position is not None:
         context.join_clauses.append(f"CROSS JOIN {by_position}")
+        if _run_time:
+            col = _safe_alias(unwind.alias)
+            _bool_flags[unwind.alias] = (alias, f"(CASE WHEN {alias}.{col}__k = 'b' THEN 1 ELSE 0 END)", "json",
+                                         f"{alias}.{col}__j")
         return
+    if _run_time:
+        # 4.7.0 row 21: a list built at run time goes through CY_LIST_KINDS, so a boolean element carries a flag
+        # (JSON_TABLE reads it as 1 / 0, which a RETURN, a collect() and a WITH then tell from a number, as R273's flag
+        # does for a literal list's) and an empty string reads as '' (it read as null). Before the hoist, so the
+        # JSON_TABLE argument stays one stage column (R310)
+        expr = f"{_fn('CY_LIST_KINDS')}({expr})"
     expr = _hoist_unwind_list(expr, alias, context)
     json_table_sql = f"JSON_TABLE({expr}, '$[*]' COLUMNS ({_safe_alias(unwind.alias)} {col_type} PATH '$')) {alias}"
+    if _run_time:
+        col = _safe_alias(unwind.alias)
+        json_table_sql = (
+            f"JSON_TABLE({expr}, '$[*]' COLUMNS ({col} {col_type} PATH '$.v', "
+            f"{col}__k VARCHAR(1) PATH '$.k', {col}__j VARCHAR(32000) PATH '$.j')) {alias}"
+        )
+        _bool_flags[unwind.alias] = (alias, f"(CASE WHEN {alias}.{col}__k = 'b' THEN 1 ELSE 0 END)", "json",
+                                     f"{alias}.{col}__j")
     if _mark_empty:
         col, inner = _safe_alias(unwind.alias), f"{alias}j"
         json_table_sql = (
@@ -8537,6 +8562,20 @@ def translate_unwind_clause(unwind, context):
 
 
 _STAGE_FROM = re.compile(r"(Stage\d+)(?: \1)?")
+
+
+def _is_run_time_list(expr, context) -> bool:
+    """An UNWIND source whose elements the query does not hold before it runs (4.7.0 row 21): not a list literal, a
+    parameter, or a WITH column bound to a literal list, which are read as their values (R310)."""
+    if isinstance(expr, ast.Literal):
+        return False
+    if isinstance(expr, ast.Variable):
+        if getattr(expr, "is_parameter", False) or expr.name in context.input_params:
+            return False
+        if expr.name in getattr(context, "literal_list_vars", {}) or expr.name in getattr(
+                context, "collected_literal_lists", {}):
+            return False
+    return True
 
 
 def _hoist_unwind_list(expr: str, alias: str, context) -> str:
@@ -8666,7 +8705,7 @@ def _reads_unwound_json_value(expr, context) -> bool:
 _UNWIND_BLOCK = 256
 
 
-def _unwind_by_position(expr: str, alias: str, column: str, context) -> Optional[str]:
+def _unwind_by_position(expr: str, alias: str, column: str, context, kinds: bool = False) -> Optional[str]:
     """The UNWIND of `expr` (a list a single stage holds) as positions and a one-element JSON_TABLE, under the engine's
     2026.3 long-list fallback (`unwind_by_index`); None when it is off or does not apply (4.6.0 R310).
 
@@ -8714,6 +8753,14 @@ def _unwind_by_position(expr: str, alias: str, column: str, context) -> Optional
         f"JSON_TABLE('{{\"v\":' || COALESCE(NULLIF({element}, ''), 'null') || '}}', "
         f"'$' COLUMNS ({column} PATH '$.v')) {alias}"
     )
+    if kinds:
+        # 4.7.0 row 21: the element beside its kind, as the usual route reads a run-time list's (CY_LIST_KINDS)
+        col = column.split()[0]
+        join = (
+            f"JSON_TABLE({_fn('CY_LIST_KINDS')}('[' || COALESCE(NULLIF({element}, ''), 'null') || ']'), "
+            f"'$[*]' COLUMNS ({column} PATH '$.v', {col}__k VARCHAR(1) PATH '$.k', {col}__j VARCHAR(32000) PATH '$.j')) "
+            f"{alias}"
+        )
     positioned.update({"from": context.from_clauses[0], "stage": stage,
                        "joins": list(context.join_clauses) + [f"CROSS JOIN {join}"]})
     return join
@@ -20711,6 +20758,15 @@ def _register_stage_bool_flags(context, stage) -> None:
             flags[alias] = (stage, f"{stage}.{_bool_flag_column(alias)}", kind)
 
 
+def _unwind_json_text(expr, context) -> Optional[str]:
+    """The JSON text column of a run-time list's UNWIND row (CY_LIST_KINDS' "j", 4.7.0 row 21), while the variable is
+    still read from its UNWIND rows; else None."""
+    entry = (getattr(context, "unwind_bool_flags", None) or {}).get(getattr(expr, "name", None))
+    if entry is None or len(entry) < 4 or context.variable_aliases.get(expr.name) != entry[0]:
+        return None
+    return entry[3]
+
+
 def _flagged_bool_text(sql, kind="num") -> str:
     """The JSON spelling of a flagged row's boolean, which IRIS holds as 1 or 0 ("num"), or as its text ("text")."""
     if kind == "text":
@@ -20739,12 +20795,19 @@ def _list_element_text(expr, sql, context=None) -> Optional[str]:
     if _bool_flag is not None:
         # 4.6.0 R273: collect() of an UNWIND boolean listed 1 (R227's open item): the flag tells it from a number
         kind = _bool_flag_kind(expr, context)
+        json_text = _unwind_json_text(expr, context)
+        if json_text is not None:
+            # 4.7.0 row 21: a run-time list's element, its own JSON text (CY_LIST_KINDS): true, '', [1] as themselves
+            return json_text
         other = _json_scalar_text(sql)
         if kind == "text":
             # R286: a row list's element through a WITH (CY_LIST_VAL): a number as CY_JSON_NUM spells a stored one
             # (1.0), a string as JSON_ARRAY's string
             other = f"COALESCE({_fn('CY_JSON_NUM')}({sql}), {other})"
         return f"CASE WHEN {_bool_flag} = 1 THEN {_flagged_bool_text(sql, kind)} ELSE {other} END"
+    if context is not None and not isinstance(expr, ast.Literal) and _is_bool_valued(expr, context):
+        # 4.7.0 row 21: a boolean expression's 1 / 0 as the JSON boolean (collect(exists(n.p)) answered [1, 0])
+        return f"CASE ({sql}) WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE 'null' END"  # read once (TCK, R203)
     return _list_element_text_plain(expr, sql, context)
 
 
@@ -29799,10 +29862,12 @@ def translate_return_clause(ret, context):
                 # binds true as 1), as CY_LIST_ELEM marks a list element's JSON; any other row as CY_TYPED reads it
                 # (R286: a row list's element through a WITH holds its boolean as 'true' / 'false', and a string
                 # 'true' with no flag is the string)
+                # 4.7.0 row 21: a run-time list's element as its JSON type (R310's CY_JSON_TYPED), as it read unflagged
+                _other_fn = "CY_JSON_TYPED" if _bool_flag_kind(item.expression, context) == "json" else "CY_TYPED"
                 context.select_items.append(
                     f"CASE WHEN {_bool_flag} = 1 THEN CHAR(1) || 'J' || "
                     f"{_flagged_bool_text(sql, _bool_flag_kind(item.expression, context))} "
-                    f"ELSE {_fn('CY_TYPED')}({sql}) END AS {safe}"
+                    f"ELSE {_fn(_other_fn)}({sql}) END AS {safe}"
                 )
                 context.typed_value_aliases.append(safe)
             elif _typed or _arith_col:

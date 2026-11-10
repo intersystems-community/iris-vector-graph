@@ -27,7 +27,8 @@ def test_an_unwound_with_list_element_reads_through_cy_json_typed():
 
 def test_an_unwound_collected_list_element_reads_through_cy_json_typed():
     t = _t("UNWIND [3, 1, 2] AS v WITH collect(v) AS l UNWIND l AS i RETURN i")
-    assert "Graph_KG.CY_JSON_TYPED(u1.i) AS i" in t.sql, t.sql
+    # 4.7.0 row 21: a boolean row is told by its flag (CY_LIST_KINDS); any other reads through CY_JSON_TYPED
+    assert "ELSE Graph_KG.CY_JSON_TYPED(u1.i) END AS i" in t.sql, t.sql
 
 
 def test_arithmetic_over_an_unwound_element_reads_through_cy_json_typed():

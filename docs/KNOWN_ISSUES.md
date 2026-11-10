@@ -279,19 +279,20 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 # → [[[1, 2], ['a', 'b']]]
 ```
 
-### An unwound boolean or empty string of a list built at run time reads as `1`, `0` or null
+<a id="an-unwound-boolean-or-empty-string-of-a-list-built-at-run-time-reads-as-1-0-or-null"></a>
 
-- **Symptom:** `MATCH (n:Flag) WITH collect(n.on) AS l UNWIND l AS x RETURN x` answers `'1'` and `'0'` for `true`
-  and `false`, and null for `''`; so does an `UNWIND` of any list the query builds as it runs (a `collect()`, a
-  stored list property, a list a `WITH` computes). IRIS's `JSON_TABLE`, which the `UNWIND` reads such a list with,
-  hands a JSON boolean on as the text `1` or `0` and an empty string as null, so neither can be told from the string
-  `'1'` or from a null element. A list whose values the query holds before it runs (a literal, a parameter, a `WITH`
-  bound to either) reads its booleans and `''` as themselves (4.6.0 R310), and numbers, strings, lists and maps read
-  as their JSON values whatever the list. Also, `collect()` of an `UNWIND`'s booleans holds `1` and `0`.
+### `toString()` of an unwound boolean of a list built at run time answers `'1'` or `'0'`
+
+- **Symptom:** `MATCH (n:Flag) WITH collect(n.on) AS l UNWIND l AS x RETURN toString(x)` answers `'1'` and `'0'` for
+  `true` and `false`, where openCypher answers `'true'` and `'false'`. `RETURN x`, `collect(x)`, a `WITH` of `x`,
+  `x = true` and `x = ''` answer as openCypher does since 4.7.0 (before, `x` read as `'1'`, `'0'` or null for `true`,
+  `false` and `''`, and `collect(exists(n.p))` listed `1` and `0`).
+- **Cause:** IRIS's `JSON_TABLE`, which the `UNWIND` reads such a list with, hands a JSON boolean on as `1` or `0`.
+  Since 4.7.0 the list goes through `CY_LIST_KINDS`, which puts each element's kind beside it, and the reads above
+  consult it; `toString()` does not yet.
 - **Versions:** all 4.x.
-- **Workaround:** keep the flag on the node and read it after the `UNWIND` (`UNWIND ns AS n RETURN n.flag`), or pass
-  the list as a parameter.
-- **Check:** `RETURN x IS NULL` on the row the empty string should give.
+- **Workaround:** `CASE WHEN x = true THEN 'true' WHEN x = false THEN 'false' ELSE toString(x) END`, or pass the
+  list as a parameter.
 
 ### `nodes(p)` of a variable-length path answers node ids
 
