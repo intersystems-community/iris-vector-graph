@@ -57,18 +57,21 @@ class RdfExportMixin:
             prefix: Short prefix string (e.g. "ex").
             uri: Full namespace URI (e.g. "http://example.org/").
         """
+        from iris_vector_graph._write_txn import write_txn
+
         cur = self.conn.cursor()
         try:
-            cur.execute(
-                f"UPDATE {self._ivg_schema}.rdf_namespaces SET uri = ? WHERE prefix = ?",
-                [uri, prefix],
-            )
-            if cur.rowcount == 0:
+            # 4.7.0: nested in the caller's transaction when there is one (it called conn.commit())
+            with write_txn(self.conn, self._ivg_schema, cur):
                 cur.execute(
-                    f"INSERT INTO {self._ivg_schema}.rdf_namespaces (prefix, uri) VALUES (?, ?)",
-                    [prefix, uri],
+                    f"UPDATE {self._ivg_schema}.rdf_namespaces SET uri = ? WHERE prefix = ?",
+                    [uri, prefix],
                 )
-            self.conn.commit()
+                if cur.rowcount == 0:
+                    cur.execute(
+                        f"INSERT INTO {self._ivg_schema}.rdf_namespaces (prefix, uri) VALUES (?, ?)",
+                        [prefix, uri],
+                    )
         finally:
             cur.close()
 

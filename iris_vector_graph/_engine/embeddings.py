@@ -528,12 +528,12 @@ class EmbeddingsMixin:
             self._record_route_index_state(
                 cursor, table_name, graph_id, index_state, index_error
             )
-            # Committed here, not left to the caller. `CREATE TABLE` above is DDL and is
-            # durable the moment it runs, so a rollback after this point cannot take the
-            # table with it — it takes only the row that names it, and the routed table
-            # carries a FK on (graph_id, node_id) that the Eraser then cannot see. One
-            # such orphan makes every erase in the namespace fail with SQLCODE -124 and
-            # erase nothing. The row has to be as durable as its table.
+            # Committed here, not left to the caller: the table, its index and the row that names it are kept
+            # together. A routed table with no row carries a FK on (graph_id, node_id) that the Eraser cannot see,
+            # and one such orphan makes every erase in the namespace fail with SQLCODE -124 and erase nothing; the
+            # engine's route cache keeps the route too. (4.7.0, measured on IRIS 2026.3: `CREATE TABLE` inside a
+            # transaction is taken back by its rollback, with its class; it is not durable the moment it runs, as
+            # this said. Inside the caller's transaction a new route is refused, above.)
             self.conn.commit()
         finally:
             try:
@@ -1614,7 +1614,6 @@ class EmbeddingsMixin:
                     valid_edges.append((s, p, o_id))
 
                 if not texts:
-                    self.conn.commit()
                     n_done = batch_start + len(batch)
                     if progress_callback:
                         progress_callback(n_done, n_to_embed)
@@ -1661,6 +1660,8 @@ class EmbeddingsMixin:
                             items, graph=graph_id, model_key=model_key
                         )
                         embedded += len(items)
+                    except CallerTransactionOpenError:
+                        raise  # refused before anything was written: not a batch's error to count
                     except Exception as ex2:
                         logger.warning(
                             "embed_edges: batch store failed (%d edges): %s",
@@ -1669,7 +1670,8 @@ class EmbeddingsMixin:
                         )
                         errors += len(items)
 
-                self.conn.commit()
+                # 4.7.0: no conn.commit() (as embed_nodes): store_edge_embeddings commits its own part, nested in the
+                # caller's transaction when there is one
                 n_done = batch_start + len(batch)
                 logger.info(
                     "embed_edges: %d/%d processed (%d embedded)",

@@ -17,6 +17,8 @@ from iris_vector_graph.ledger.client import GraphLedger
 class _Engine:
     def __init__(self, schema):
         self._schema_prefix = schema
+        # not an IRIS connection: enable()'s caller-transaction check (4.7.0) finds none
+        self.conn = None
 
 
 def _enable_args(schema):

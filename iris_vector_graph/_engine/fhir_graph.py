@@ -13,6 +13,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from iris_vector_graph._validate import validate_graph_name
+from iris_vector_graph._write_txn import refuse_in_caller_transaction, write_txn
 from iris_vector_graph.exceptions import FHIRGraphError
 from iris_vector_graph.fhir_links import parse_json_links
 from iris_vector_graph.schema import GraphSchema
@@ -199,6 +200,11 @@ class FhirGraphMixin:
             row = cursor.fetchone()
             if not row or not row[0]:
                 return
+            # 4.7.0: DDL and its commit, which ended the caller's transaction
+            refuse_in_caller_transaction(
+                self.conn, "creating the FHIR graph tables",
+                "they are created (DDL) and committed on the first registration in a namespace",
+            )
             for stmt in _split_sql_statements(rewrite_schema_text(GraphSchema.get_fhir_graph_schema_sql(), getattr(self, "_schema_prefix", "Graph_KG"))):
                 if not stmt.strip():
                     continue
@@ -628,8 +634,9 @@ class FhirGraphMixin:
         ]
         cursor = self.conn.cursor()
         try:
-            cursor.execute(rewrite_schema_text(self._CROSSWALK_UPSERT, self._ivg_schema), params)
-            self.conn.commit()
+            # 4.7.0: nested in the caller's transaction when there is one (it called conn.commit())
+            with write_txn(self.conn, self._ivg_schema, cursor):
+                cursor.execute(rewrite_schema_text(self._CROSSWALK_UPSERT, self._ivg_schema), params)
         finally:
             cursor.close()
 
@@ -648,21 +655,22 @@ class FhirGraphMixin:
                 f"FROM {self._t('fhir_bridges')}"
             )
             rows = cursor.fetchall()
-            for code, node, system, bridge_type, confidence in rows:
-                cursor.execute(
-                    rewrite_schema_text(self._CROSSWALK_UPSERT, self._ivg_schema),
-                    [
-                        code_system_uri(system or "ICD10CM"),
-                        code,
-                        "",
-                        node,
-                        "related",
-                        "fhir_bridges",
-                        bridge_type,
-                        1.0 if confidence is None else float(confidence),
-                    ],
-                )
-            self.conn.commit()
+            # 4.7.0: one transaction of IVG's, nested in the caller's when there is one (it called conn.commit())
+            with write_txn(self.conn, self._ivg_schema, cursor):
+                for code, node, system, bridge_type, confidence in rows:
+                    cursor.execute(
+                        rewrite_schema_text(self._CROSSWALK_UPSERT, self._ivg_schema),
+                        [
+                            code_system_uri(system or "ICD10CM"),
+                            code,
+                            "",
+                            node,
+                            "related",
+                            "fhir_bridges",
+                            bridge_type,
+                            1.0 if confidence is None else float(confidence),
+                        ],
+                    )
             return {"migrated": len(rows)}
         finally:
             cursor.close()

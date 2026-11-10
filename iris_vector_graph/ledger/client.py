@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .changeset import Changeset
 from .errors import (
     LedgerError,
+    LedgerTransactionOpenError,
     RedactionInProgressError,
     UnknownRevisionError,
     from_commit_error,
@@ -264,9 +265,23 @@ class GraphLedger:
 
     # -- lifecycle -------------------------------------------------------------
 
+    def _refuse_in_caller_transaction(self, operation: str) -> None:
+        """4.7.0: ``enable`` and ``redact`` commit on their own (Graph.KG.Ledger refuses an open transaction on its
+        own process); over the engine's Native API connection (``from_connect``), another process, they ran outside
+        the caller's transaction instead. Refused here when the caller has one open (``$TLEVEL`` above 0)."""
+        from iris_vector_graph._write_txn import caller_transaction_level
+
+        level = caller_transaction_level(self._engine.conn)
+        if level:
+            raise LedgerTransactionOpenError(
+                f"{operation} cannot run inside the caller's open transaction ($TLEVEL {level}) on the engine's "
+                "connection; nothing was done. Commit or roll it back, then call it again"
+            )
+
     def enable(
         self, *, strict: bool = False, max_ops: int = 50_000, recon_bound: int = 250_000
     ) -> RevisionInfo:
+        self._refuse_in_caller_transaction("ledger.enable()")
         # The schema whose tables the genesis reads, named as commit names it (4.6.0 R106): it came from
         # Enable's compiled default, right only because the deploy rewrites that default too.
         resp = self._call_json("Enable", 1 if strict else 0, int(max_ops), int(recon_bound), self._schema())
@@ -648,6 +663,7 @@ class GraphLedger:
         Exports written before the redaction, journals and backups still hold the
         content; the receipt's ``out_of_reach`` says so.
         """
+        self._refuse_in_caller_transaction("ledger.redact()")
         resp = self._call_json(
             "Redact",
             "" if graph is None else str(graph),

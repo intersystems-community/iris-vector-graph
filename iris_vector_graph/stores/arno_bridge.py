@@ -107,7 +107,7 @@ def _create_routines(conn, cur, ddls, *, schema: str) -> list:
     """Run each ``CREATE OR REPLACE`` in ``ddls`` that the routine record (4.6.0 R133) does not list as created, with
     this text, in ``schema``; record each one run. Answers the names created (4.6.0 R153: every wrapper was created
     again on first use in each connection, recompiling its class and discarding the cached queries that call it)."""
-    from iris_vector_graph.routine_record import RoutineRecord
+    from iris_vector_graph.routine_record import RoutineRecord, routine_name
 
     try:
         routines = RoutineRecord(host_for(conn), cur, schema)
@@ -119,6 +119,14 @@ def _create_routines(conn, cur, ddls, *, schema: str) -> list:
         ddl = ddl.strip()
         if routines.unchanged(ddl):
             continue
+        if not created:
+            # 4.7.0: DDL and a class compile, and the caller commits after it (it committed the caller's work)
+            from iris_vector_graph._write_txn import refuse_in_caller_transaction
+
+            refuse_in_caller_transaction(
+                conn, f"creating the Arno SQL function {routine_name(ddl)}",
+                "a SQL function is DDL and a class compile, committed when it is made",
+            )
         routines.forget(ddl)
         cur.execute(ddl)
         created.append(routines.created(ddl))
@@ -362,8 +370,8 @@ def _ensure_zf_call_function(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
         return
 
     cur = conn.cursor()
-    _create_routines(conn, cur, _zf_wrapper_ddls(schema), schema=schema)
-    conn.commit()
+    if _create_routines(conn, cur, _zf_wrapper_ddls(schema), schema=schema):
+        conn.commit()  # 4.7.0: only after creating one (never in the caller's transaction: refused there)
 
     _probe_cache.setdefault(key, {}).setdefault("ddl_schemas", set()).add(schema)
 
@@ -743,8 +751,8 @@ def build_kg_adjacency_chunked(
 
     chunk_size = 30000
     cur = conn.cursor()
-    _create_routines(conn, cur, [_adj_append_ddl(schema)], schema=schema)
-    conn.commit()
+    if _create_routines(conn, cur, [_adj_append_ddl(schema)], schema=schema):
+        conn.commit()  # 4.7.0: only after creating one (never in the caller's transaction: refused there)
 
     lib_path = _probe_cache[_conn_key(conn)]["lib_path"]
     pos = 0
@@ -889,8 +897,8 @@ def _build_kg_adjacency_serverside(conn, *, schema: str = DEFAULT_SCHEMA) -> "tu
 
     cur = conn.cursor()
     if schema not in cache.get("serverside_ddl_schemas", ()):
-        _create_routines(conn, cur, _serverside_ddls(schema), schema=schema)
-        conn.commit()
+        if _create_routines(conn, cur, _serverside_ddls(schema), schema=schema):
+            conn.commit()  # 4.7.0: only after creating one (never in the caller's transaction: refused there)
         _probe_cache.setdefault(key, {}).setdefault("serverside_ddl_schemas", set()).add(schema)
 
     cur.execute(f"SELECT {schema}.ivg_arno_build_adj('{lib_path}')")

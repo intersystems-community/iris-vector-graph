@@ -217,10 +217,14 @@ def test_import_rdf_raises_on_a_refused_batch_commit(tmp_path):
     pytest.importorskip("rdflib")
     nt = tmp_path / "x.nt"
     nt.write_text("<http://x/a> <http://x/knows> <http://x/b> .\n")
-    eng = _engine(_Cursor())
-    eng.conn.commit.side_effect = RuntimeError(LOCK)
+    # 4.7.0: each batch is IVG's own transaction (_write_txn; here, as tests/unit/conftest.py makes it, START
+    # TRANSACTION ... COMMIT on the cursor), which nests in a caller's (conn.commit() committed the caller's work); a
+    # refused commit of it still raises (R276), and leaves nothing of the batch
+    cur = _Cursor(fail=r"^COMMIT$", error=LOCK)
+    eng = _engine(cur)
     with pytest.raises(GraphWriteError, match=r"import_rdf.*SQLCODE -110"):
         eng.import_rdf(str(nt))
+    assert cur.committed == [] and cur.pending == []
 
 
 def test_the_temporal_mirror_commits_nothing_of_a_callers():

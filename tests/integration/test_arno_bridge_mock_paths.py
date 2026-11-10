@@ -38,6 +38,16 @@ from iris_vector_graph.stores.arno_bridge import (
 def clean_probe_cache():
     clear_probe_cache()
     yield
+
+
+@pytest.fixture(autouse=True)
+def no_caller_transaction():
+    """The patched cursor scripts the catalog too, so every wrapper reads as one to create, and creating one first
+    asks `SELECT $TLEVEL` (4.7.0: it is refused inside a caller's transaction), which the script does not answer.
+    These tests are of the call paths with no caller transaction: pinned so (tests/e2e/test_470_caller_txn_3b_e2e.py
+    has the caller-transaction cases)."""
+    with patch("iris_vector_graph._write_txn.caller_transaction_level", return_value=None):
+        yield
     clear_probe_cache()
 
 

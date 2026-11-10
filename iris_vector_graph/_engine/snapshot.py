@@ -553,6 +553,17 @@ class SnapshotMixin:
             g = Graph()
         g.parse(path, format=format)
 
+        from iris_vector_graph._write_txn import caller_transaction_level, refuse_in_caller_transaction, write_txn
+
+        # 4.7.0: each batch is a transaction of IVG's, nested in the caller's when there is one (conn.commit()
+        # committed the caller's work). Inside one, ^KG is the adjacency index's, kept in the same transaction; a
+        # namespace without the index rebuilds ^KG with BuildKG on another connection, which cannot wait for it.
+        in_caller = caller_transaction_level(self.conn) is not None
+        if in_caller and not self._adjacency_indexed:
+            refuse_in_caller_transaction(
+                self.conn, "import_rdf()",
+                "this namespace has no adjacency index, so ^KG is rebuilt (BuildKG) outside the transaction",
+            )
         cursor = self.conn.cursor()
         nodes_inserted = 0
         edges_inserted = 0
@@ -597,6 +608,7 @@ class SnapshotMixin:
 
         def _flush():
             nonlocal nodes_inserted, edges_inserted, props_inserted
+            txn = write_txn(self.conn, self._ivg_schema, cursor)
             for nid, node_graph in batch_nodes:
                 if _ensure_node(nid, node_graph):
                     nodes_inserted += 1
@@ -635,8 +647,9 @@ class SnapshotMixin:
                         k, s, prop_graph, e,
                     )
             try:
-                self.conn.commit()
+                txn.commit()
             except Exception as e:
+                txn.rollback()
                 # It was passed over (4.6.0 R276): the batch counted as written and was not.
                 from iris_vector_graph.errors import GraphWriteError
 
@@ -696,10 +709,12 @@ class SnapshotMixin:
 
         _flush()
 
-        try:
-            self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildKG")
-        except Exception as e:
-            logger.warning(f"import_rdf BuildKG failed (^KG may be stale): {e}")
+        # inside the caller's transaction the adjacency index wrote ^KG with each row (above)
+        if not in_caller:
+            try:
+                self._iris_obj().classMethodVoid("Graph.KG.Traversal", "BuildKG")
+            except Exception as e:
+                logger.warning(f"import_rdf BuildKG failed (^KG may be stale): {e}")
 
         result = {
             "triples": triple_count,
@@ -1013,6 +1028,13 @@ class SnapshotMixin:
         failure was ignored and the table counted as restored.
         """
         _ledger_check(self, "restore_snapshot")
+        from iris_vector_graph._write_txn import refuse_in_caller_transaction
+
+        # 4.7.0: it committed the caller's work, table by table
+        refuse_in_caller_transaction(
+            self.conn, "restore_snapshot()",
+            "a restore erases the graph (without merge), may create tables, and commits table by table",
+        )
         import json as _json
         import zipfile as _zipfile
 

@@ -329,16 +329,19 @@ class TestExportRdfFromCypher:
 class TestNamespacePersistence:
 
     def test_register_namespace_inserts_when_not_exists(self):
+        """UPDATE then INSERT, committed, nothing left pending (tests/unit/_txn_model.py). 4.7.0: as IVG's own
+        transaction, nested in a caller's (tests/e2e/test_470_caller_txn_3b_e2e.py); it was conn.commit()."""
+        from tests.unit._txn_model import TxnModel
+
         engine, conn, cursor = _make_engine()
         cursor.rowcount = 0  # UPDATE affects 0 rows → INSERT
+        model = TxnModel(cursor, conn)
 
         engine.register_namespace("ex", "http://example.org/")
 
-        # Should have called UPDATE then INSERT
-        calls = [c.args[0] for c in cursor.execute.call_args_list]
-        assert any("UPDATE" in c.upper() for c in calls)
-        assert any("INSERT" in c.upper() for c in calls)
-        conn.commit.assert_called()
+        assert model.committed_verbs() == ["UPDATE", "INSERT"]
+        assert model.committed[1][1] == ("ex", "http://example.org/")
+        assert model.pending == [] and not model.open
 
     def test_register_namespace_updates_when_exists(self):
         engine, conn, cursor = _make_engine()

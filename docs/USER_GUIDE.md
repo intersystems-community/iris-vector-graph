@@ -290,11 +290,18 @@ The ledger's `commit` joins your transaction too (4.7.0): your rollback leaves n
 outside your transaction, or refuse (`LedgerTransactionOpenError`) on yours. The ledger's head stays locked until your
 transaction ends, so another connection's `commit` waits for it and then raises `LedgerLockTimeoutError` (the lock
 timeout is 30 s; the refusal came 40 s after the call on the test container): keep a transaction that commits to the
-ledger short. `enable()` and `redact()` are not part
-of it: where they run on your connection's process they refuse (`LedgerTransactionOpenError`), and on the engine's own
-Native API connection (`from_connect`) they run outside your transaction.
+ledger short. `enable()` and `redact()` are not part of it: they refuse (below).
 
-Not part of your transaction: `embed_edges` (it commits each batch) and upgrades. A
+These join your transaction as well (4.7.0; each called `conn.commit()`, which committed your work): `embed_edges`,
+the SQL table mappings (`map_sql_table`, `map_sql_relationship`, `remove_table_mapping`,
+`attach_embeddings_to_table`), `code_crosswalk_add`, `fhir_bridge_add`, `migrate_fhir_bridges_to_crosswalk`,
+`register_namespace` and `import_rdf`. Others refuse to run once your transaction holds a write (`$TLEVEL` above 0),
+before doing anything, because what they do cannot wait for your commit: `restore_snapshot` (it erases, may create
+tables and commits table by table), every `BulkLoader` method (`%NOINDEX %NOCHECK` loads committed per batch, index and
+`^KG` rebuilds), `import_rdf` on a namespace without the adjacency index (it rebuilds `^KG` on another connection), the
+first registration of a FHIR graph in a namespace (it creates the FHIR graph tables), and an Arno algorithm call that
+must first create one of its SQL functions (DDL and a class compile). Each raises `CallerTransactionOpenError`;
+the ledger's `enable()` and `redact()` raise `LedgerTransactionOpenError`. Upgrades are not part of your transaction. A
 write that IVG sends over a Native API connection of its own (an engine made with `from_connect`: the temporal edge
 stores, `^KG` on a namespace without the adjacency index) runs in another IRIS process, outside your transaction.
 

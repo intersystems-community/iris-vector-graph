@@ -840,9 +840,16 @@ class TestEngineMapSQLTable:
         assert result.get("label") == "Protein"
 
     def test_map_sql_table_commits(self):
+        """The mapping row is committed, nothing left pending (tests/unit/_txn_model.py). 4.7.0: as IVG's own
+        transaction, nested in a caller's (tests/e2e/test_470_caller_txn_3b_e2e.py); it was conn.commit()."""
+        from tests.unit._txn_model import TxnModel
+
         self._mock_table_exists()
+        model = TxnModel(self.cursor, self.conn)
         self.engine.map_sql_table("bio.Protein", "id", "Protein")
-        self.conn.commit.assert_called()
+        assert model.committed_verbs() == ["UPDATE", "INSERT"]
+        assert model.committed[1][1] == ("Protein", "bio.Protein", "id", None)
+        assert model.pending == [] and not model.open
 
     def test_map_sql_table_validation_fails(self):
         self.cursor.fetchone.return_value = (0,)

@@ -2,6 +2,12 @@
 import json
 from unittest.mock import MagicMock, call, patch
 
+import builtins as _builtins
+
+#: the real __import__, for the fakes that patch it: calling `__import__` inside the patch called the patch again
+#: (RecursionError once the code under test imports anything, as 4.7.0's caller-transaction check does)
+_REAL_IMPORT = _builtins.__import__
+
 
 class TestModels:
 
@@ -305,7 +311,7 @@ class TestBulkLoader:
         cursor.execute.return_value = None
         G = nx.DiGraph()
         bl = BulkLoader(conn, batch_size=100)
-        with patch("builtins.__import__", side_effect=lambda name, *a, **kw: MagicMock() if name == "iris" else __import__(name, *a, **kw)):
+        with patch("builtins.__import__", side_effect=lambda name, *a, **kw: MagicMock() if name == "iris" else _REAL_IMPORT(name, *a, **kw)):
             stats = bl.load_networkx(G, build_globals=False)
         assert isinstance(stats, dict)
         assert stats.get("input_nodes", 0) == 0
@@ -321,7 +327,7 @@ class TestBulkLoader:
         G.add_node("n2", namespace="Disease")
         G.add_edge("n1", "n2", predicate="CAUSES")
         bl = BulkLoader(conn, batch_size=100)
-        with patch("builtins.__import__", side_effect=lambda name, *a, **kw: MagicMock() if name == "iris" else __import__(name, *a, **kw)):
+        with patch("builtins.__import__", side_effect=lambda name, *a, **kw: MagicMock() if name == "iris" else _REAL_IMPORT(name, *a, **kw)):
             stats = bl.load_networkx(G, build_globals=False)
         assert isinstance(stats, dict)
         assert stats.get("input_nodes") == 2

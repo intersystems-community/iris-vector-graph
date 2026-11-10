@@ -27,6 +27,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from iris_vector_graph._write_txn import refuse_in_caller_transaction
 from iris_vector_graph.exceptions import BulkLoadError
 from iris_vector_graph.prop_values import prop_value
 from iris_vector_graph.schema import _call_classmethod
@@ -147,6 +148,15 @@ class BulkLoader:
         self._skipped = skipped
         return inserted
 
+    def _refuse_in_caller_transaction(self, operation: str) -> None:
+        """4.7.0: the loader commits per batch (and rolls back with ``conn.rollback()``), writes ``%NOINDEX``
+        ``%NOCHECK`` and rebuilds indices and ``^KG`` after, none of which can be part of the caller's transaction;
+        each public method refuses one (``$TLEVEL`` above 0) before doing anything. It committed the caller's work."""
+        refuse_in_caller_transaction(
+            self.conn, operation,
+            "the bulk loader commits per batch, loads %NOINDEX %NOCHECK and rebuilds the indices and ^KG after",
+        )
+
     def _rollback(self) -> None:
         try:
             self.conn.rollback()
@@ -254,6 +264,7 @@ class BulkLoader:
         Returns:
             Dict with counts: nodes, labels, props, errors, elapsed_s
         """
+        self._refuse_in_caller_transaction("BulkLoader.load_nodes()")
         _check_rows("load_nodes", nodes, 2, "(node_id, attrs_dict)")
         cursor = self.conn.cursor()
         t0 = time.time()
@@ -370,6 +381,7 @@ class BulkLoader:
         Returns:
             Dict with counts: edges, errors, elapsed_s
         """
+        self._refuse_in_caller_transaction("BulkLoader.load_edges()")
         _check_rows("load_edges", edges, 4, "(source_id, predicate, target_id, qualifiers_dict)")
         cursor = self.conn.cursor()
         t0 = time.time()
@@ -448,6 +460,7 @@ class BulkLoader:
         Must be called after load_edges(use_noindex=True).
         Also rebuilds bitmap extent indexes for correct COUNT(*).
         """
+        self._refuse_in_caller_transaction("BulkLoader.rebuild_all_indices()")
         results = {}
         cursor = self.conn.cursor()
         try:
@@ -478,6 +491,7 @@ class BulkLoader:
         Requires Graph.KG.Traversal and Graph.KG.GraphIndex to be deployed.
         Returns True if successful.
         """
+        self._refuse_in_caller_transaction("BulkLoader.build_graph_globals()")
         cursor = self.conn.cursor()
         try:
             logger.info("Building ^KG + ^NKG globals from SQL tables...")
@@ -530,6 +544,7 @@ class BulkLoader:
         Returns:
             Dict with comprehensive statistics
         """
+        self._refuse_in_caller_transaction("BulkLoader.load_networkx()")
         t_total = time.time()
         stats: Dict[str, Any] = {
             "input_nodes": G.number_of_nodes(),

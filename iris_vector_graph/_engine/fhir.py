@@ -2,6 +2,9 @@ import json
 import logging
 from typing import Optional, Dict, Any, List
 
+from iris_vector_graph._write_txn import write_txn
+from iris_vector_graph.errors import CallerTransactionOpenError
+
 
 logger = logging.getLogger(__name__)
 
@@ -122,16 +125,17 @@ class FhirMixin:
                 f"Verify the table exists and id_column is correct."
             )
         prop_json = json.dumps(property_columns) if property_columns else None
-        cur.execute(
-            f"UPDATE {self._ivg_schema}.table_mappings SET sql_table=?, id_column=?, prop_columns=? WHERE label=?",
-            [table, id_column, prop_json, label],
-        )
-        if cur.rowcount == 0:
+        # 4.7.0: one transaction of IVG's, nested in the caller's when there is one (it called conn.commit())
+        with write_txn(self.conn, self._ivg_schema, cur):
             cur.execute(
-                f"INSERT INTO {self._ivg_schema}.table_mappings (label, sql_table, id_column, prop_columns) VALUES (?,?,?,?)",
-                [label, table, id_column, prop_json],
+                f"UPDATE {self._ivg_schema}.table_mappings SET sql_table=?, id_column=?, prop_columns=? WHERE label=?",
+                [table, id_column, prop_json, label],
             )
-        self.conn.commit()
+            if cur.rowcount == 0:
+                cur.execute(
+                    f"INSERT INTO {self._ivg_schema}.table_mappings (label, sql_table, id_column, prop_columns) VALUES (?,?,?,?)",
+                    [label, table, id_column, prop_json],
+                )
         self._invalidate_mapping_cache()
         return {
             "label": label,
@@ -169,35 +173,20 @@ class FhirMixin:
                 f"Target label '{target_label}' is not registered. Call map_sql_table first."
             )
         cur = self.conn.cursor()
-        cur.execute(
-            f"UPDATE {self._ivg_schema}.relationship_mappings SET target_fk=?, via_table=?, via_source=?, via_target=? "
-            "WHERE source_label=? AND predicate=? AND target_label=?",
-            [
-                target_fk,
-                via_table,
-                via_source,
-                via_target,
-                source_label,
-                predicate,
-                target_label,
-            ],
-        )
-        if cur.rowcount == 0:
+        # 4.7.0: one transaction of IVG's, nested in the caller's when there is one (it called conn.commit())
+        with write_txn(self.conn, self._ivg_schema, cur):
             cur.execute(
-                f"INSERT INTO {self._ivg_schema}.relationship_mappings "
-                "(source_label, predicate, target_label, target_fk, via_table, via_source, via_target) "
-                "VALUES (?,?,?,?,?,?,?)",
-                [
-                    source_label,
-                    predicate,
-                    target_label,
-                    target_fk,
-                    via_table,
-                    via_source,
-                    via_target,
-                ],
+                f"UPDATE {self._ivg_schema}.relationship_mappings SET target_fk=?, via_table=?, via_source=?, "
+                "via_target=? WHERE source_label=? AND predicate=? AND target_label=?",
+                [target_fk, via_table, via_source, via_target, source_label, predicate, target_label],
             )
-        self.conn.commit()
+            if cur.rowcount == 0:
+                cur.execute(
+                    f"INSERT INTO {self._ivg_schema}.relationship_mappings "
+                    "(source_label, predicate, target_label, target_fk, via_table, via_source, via_target) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    [source_label, predicate, target_label, target_fk, via_table, via_source, via_target],
+                )
         self._invalidate_mapping_cache()
         return {
             "source_label": source_label,
@@ -256,12 +245,13 @@ class FhirMixin:
         )
         if int(cur.fetchone()[0]) == 0:
             raise ValueError(f"Label '{label}' not found in table_mappings.")
-        cur.execute(f"DELETE FROM {self._ivg_schema}.table_mappings WHERE label=?", [label])
-        cur.execute(
-            f"DELETE FROM {self._ivg_schema}.relationship_mappings WHERE source_label=? OR target_label=?",
-            [label, label],
-        )
-        self.conn.commit()
+        # 4.7.0: one transaction of IVG's, nested in the caller's when there is one (it called conn.commit())
+        with write_txn(self.conn, self._ivg_schema, cur):
+            cur.execute(f"DELETE FROM {self._ivg_schema}.table_mappings WHERE label=?", [label])
+            cur.execute(
+                f"DELETE FROM {self._ivg_schema}.relationship_mappings WHERE source_label=? OR target_label=?",
+                [label, label],
+            )
         self._invalidate_mapping_cache()
 
     def reload_table_mappings(self) -> None:
@@ -334,11 +324,13 @@ class FhirMixin:
                         node_id, emb, graph=graph, model_key=model_key
                     )
                     embedded += 1
+                except CallerTransactionOpenError:
+                    raise  # a new route refused before anything was written: not a row's failure
                 except Exception as ex:
                     logger.warning(
                         f"attach_embeddings_to_table: failed to embed {node_id}: {ex}"
                     )
-            self.conn.commit()
+            # 4.7.0: no conn.commit(): store_embedding commits its own part, nested in the caller's transaction
             n_done = batch_start + len(batch)
             logger.info(
                 f"attach_embeddings_to_table: {n_done}/{n_total} rows processed"
@@ -374,29 +366,30 @@ class FhirMixin:
             stacklevel=2,
         )
         cursor = self.conn.cursor()
+        # 4.7.0: one transaction of IVG's, nested in the caller's when there is one (it called conn.commit())
         try:
-            cursor.execute(
-                f"INSERT OR UPDATE INTO {self._t('fhir_bridges')} "
-                "(fhir_code, kg_node_id, fhir_code_system, bridge_type, confidence, source_cui) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                [fhir_code, kg_node_id, fhir_code_system, bridge_type, float(confidence), source_cui],
-            )
-            cursor.execute(
-                f"INSERT OR UPDATE INTO {self._t('code_crosswalk')} "
-                "(code_system_uri, code, target_graph, target_node_id, relation, source, "
-                "source_version, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    code_system_uri(fhir_code_system),
-                    fhir_code,
-                    "",
-                    kg_node_id,
-                    "related",
-                    "fhir_bridges",
-                    bridge_type,
-                    float(confidence),
-                ],
-            )
-            self.conn.commit()
+            with write_txn(self.conn, self._ivg_schema, cursor):
+                cursor.execute(
+                    f"INSERT OR UPDATE INTO {self._t('fhir_bridges')} "
+                    "(fhir_code, kg_node_id, fhir_code_system, bridge_type, confidence, source_cui) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    [fhir_code, kg_node_id, fhir_code_system, bridge_type, float(confidence), source_cui],
+                )
+                cursor.execute(
+                    f"INSERT OR UPDATE INTO {self._t('code_crosswalk')} "
+                    "(code_system_uri, code, target_graph, target_node_id, relation, source, "
+                    "source_version, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        code_system_uri(fhir_code_system),
+                        fhir_code,
+                        "",
+                        kg_node_id,
+                        "related",
+                        "fhir_bridges",
+                        bridge_type,
+                        float(confidence),
+                    ],
+                )
         finally:
             cursor.close()
 

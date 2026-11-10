@@ -223,7 +223,8 @@ class TestCrosswalkAdd:
             "http://hl7.org/fhir/sid/icd-10-cm", "E11.9", "MESH:D003924", target_graph="mesh",
             relation="broader", source="umls", source_version="2026AA", confidence=0.9,
         )
-        sql, params = cur.execute.call_args.args
+        # 4.7.0: the upsert is inside IVG's own transaction (_write_txn), so it is not the last statement
+        sql, params = next(c.args for c in cur.execute.call_args_list if c.args[0].startswith("INSERT OR UPDATE"))
         assert sql.startswith("INSERT OR UPDATE INTO Graph_KG.code_crosswalk")
         assert params == [
             "http://hl7.org/fhir/sid/icd-10-cm", "E11.9", "mesh", "MESH:D003924",
@@ -234,7 +235,7 @@ class TestCrosswalkAdd:
         engine, _ = eng
         cur = engine.conn.cursor.return_value
         engine.code_crosswalk_add("http://loinc.org", "4548-4", "HbA1c")
-        params = cur.execute.call_args.args[1]
+        params = next(c.args for c in cur.execute.call_args_list if c.args[0].startswith("INSERT OR UPDATE"))[1]
         assert params[2] == "" and params[4] == "exact"
 
     @pytest.mark.parametrize("field", ["code_system_uri", "code", "target_node_id"])

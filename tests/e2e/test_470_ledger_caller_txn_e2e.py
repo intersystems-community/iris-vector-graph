@@ -269,3 +269,31 @@ def test_a_rolled_back_revision_leaves_no_gap_in_the_chain(observer, engine):
     assert not _node(observer, f"{u}r")
     report = engine.ledger.verify()
     assert report.equal, (report.result, report.differences[:5])
+
+
+def test_enable_and_redact_refuse_the_callers_transaction(observer, engine):
+    """3b: on a from_connect engine `enable()` and `redact()` ran on its own Native API connection, outside the
+    caller's transaction; on the caller's own connection Graph.KG.Ledger refused them. Both kinds refuse now, before
+    doing anything, and the caller's rollback takes its row back. (The module's ledger is enabled; a disabled one is
+    re-enabled after, outside a transaction.)"""
+    from iris_vector_graph.ledger import LedgerTransactionOpenError
+
+    u = _uid()
+    engine.ledger.disable()
+    try:
+        _caller_txn(engine, u)
+        with pytest.raises(LedgerTransactionOpenError, match=r"\$TLEVEL"):
+            engine.ledger.enable()
+        assert engine.ledger.meta().get("state") == "disabled", "enable() ran inside the caller's transaction"
+        assert _level(engine.conn) == 1
+        engine.conn.cursor().execute("ROLLBACK")
+        assert not _has_caller_row(observer, u)
+    finally:
+        engine.ledger.enable()
+    _caller_txn(engine, u)
+    with pytest.raises(LedgerTransactionOpenError, match=r"\$TLEVEL"):
+        engine.ledger.redact("g470nothing" + u)
+    assert _level(engine.conn) == 1
+    engine.conn.cursor().execute("ROLLBACK")
+    assert not _has_caller_row(observer, u)
+    assert engine.ledger.verify().equal
