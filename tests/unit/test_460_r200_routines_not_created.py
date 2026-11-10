@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 import re
 
+import pytest
+
 from iris_vector_graph._engine.schema import _setup_summary
 from iris_vector_graph.schema import GraphSchema
 from tests.unit.test_460_r133_routine_fingerprints import _all_names, _Namespace, _run
@@ -108,3 +110,15 @@ def test_a_routine_the_caller_may_not_run_is_unchecked_not_missing():
     assert status.missing_routines == []
     assert "routines" in status.unknown
     assert any("could not check 1 routine(s)" in e and "kg_RRF_FUSE" in e for e in status.errors), status.errors
+
+
+@pytest.mark.parametrize("error", ["[SQLCODE: <-400>:<Fatal error occurred>]", "connection reset"])
+def test_a_routine_probe_failing_otherwise_is_an_error_not_a_crash(error):
+    """Any answer but -359, -99 or -357 is neither missing nor present: named in `errors`, `routines` unknown. On
+    33630819 this raised UnboundLocalError (the exception's name read after its `except` block)."""
+    registry = _routines_present([n for n in _all_names() if n != "KG_RRF_FUSE"])
+    registry.fail_on["SELECT TOP 0 Graph_KG.kg_RRF_FUSE("] = RuntimeError(error)
+    status, _ = _status(registry, native=_native())
+    assert status.missing_routines == []
+    assert "routines" in status.unknown
+    assert any("routine check of Graph_KG.kg_RRF_FUSE failed" in e and error in e for e in status.errors), status.errors

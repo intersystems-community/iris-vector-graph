@@ -718,32 +718,32 @@ class AdminMixin:
             errors.append(f"routine check failed (INFORMATION_SCHEMA.ROUTINES): {e}")
             return []
         declared = [declared_routine_name(s) for s in GraphSchema.get_procedures_sql_list(table_schema=schema)]
-        missing, unchecked = [], []
+        missing, unchecked, failed = [], [], False
         for name in declared:
             if not name or name.upper() in present:
                 continue
             try:
                 cursor.execute(f"SELECT TOP 0 {schema}.{name}(NULL)")
                 cursor.fetchall()
-                continue  # it is there and the caller may run it (the view had not listed it)
             except Exception as e:
-                code = _re.search(r"SQLCODE: <(-?\d+)>", str(e))
-                code = code.group(1) if code else None
-            if code == "-359":
-                missing.append(name)
-            elif code == "-99":
-                unchecked.append(name)
-            elif code is None or code not in ("-357",):  # -357: a procedure, which is there
-                unchecked.append(name)
-                errors.append(f"routine check of {schema}.{name} failed: {e}")
+                m = _re.search(r"SQLCODE: <(-?\d+)>", str(e))
+                code = m.group(1) if m else None
+                if code == "-359":
+                    missing.append(name)
+                elif code == "-99":
+                    unchecked.append(name)
+                elif code != "-357":  # -357: a procedure, which is there
+                    failed = True
+                    errors.append(f"routine check of {schema}.{name} failed: {e}")
+            # no error: it is there and the caller may run it (the view had not listed it)
         if unchecked:
             errors.append(
                 f"status() could not check {len(unchecked)} routine(s) this user may not run (no EXECUTE on "
                 f"them, SQLCODE -99; INFORMATION_SCHEMA.ROUTINES lists only routines the caller may run): "
                 f"{', '.join(unchecked)}"
             )
-            if unknown is not None and "routines" not in unknown:
-                unknown.append("routines")
+        if (unchecked or failed) and unknown is not None and "routines" not in unknown:
+            unknown.append("routines")
         return missing
 
     def verify_sync(self, heal: bool = False) -> "SyncReport":
