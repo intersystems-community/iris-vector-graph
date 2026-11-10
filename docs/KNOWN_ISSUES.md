@@ -353,17 +353,18 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
   the list as a parameter.
 - **Check:** `RETURN x IS NULL` on the row the empty string should give.
 
-### `nodes(p)` answers node ids and `relationships(p)` relationship types
+### `nodes(p)` of a variable-length path answers node ids
 
-- **Symptom:** `MATCH p = (a)-[:R]->(b) RETURN nodes(p), relationships(p)` answers `['a', 'b']` and `['R']`, the
-  node ids and the relationship types, where openCypher answers the nodes and the relationships themselves. A `WITH`
-  of `nodes(p)` returned as a whole column answers the nodes (`{"_id", "_labels", "_props"}` each).
-- **Cause:** a fixed-length path is built in SQL as its ids and types (`RETURN p` answers the same,
-  `{'nodes': [...], 'rels': [...]}`); the nodes and relationships are read back only where a query reads their
-  properties.
-- **Versions:** all 4.x. A fix is planned for 4.6.1.
+- **Symptom:** `MATCH p = (a)-[:R*2]->(b) RETURN nodes(p)` answers `['a', 'b', 'c']`, the node ids, where openCypher
+  answers the nodes, and so does `tail(nodes(p))` of any path. Of a fixed-length path
+  `RETURN nodes(p), relationships(p)` answers the nodes and the relationships as `RETURN [a, b]` and `RETURN [r]` spell
+  them (`{"_id", "_labels", "_props"}` and `{"type", "props"}` each; before 4.7.0 the ids and the types), and
+  `relationships(p)` of a variable-length path answers the relationships.
+- **Cause:** a path is built in SQL as its ids and types; the nodes are read back where a query reads their
+  properties, and a `RETURN` of `nodes(p)` itself of a fixed-length path.
+- **Versions:** all 4.x (a fixed-length path's, before 4.7.0).
 - **Workaround:** read what you need through the path: `[x IN nodes(p) | x.name]`, `[x IN nodes(p) | labels(x)]`,
-  `[r IN relationships(p) | properties(r)]`, or `RETURN a, b` and the relationship variable.
+  or a fixed-length pattern and `RETURN a, b`.
 
 ### A list predicate over a list holding a stored NaN fails
 

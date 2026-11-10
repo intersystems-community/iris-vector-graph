@@ -115,8 +115,9 @@ class TestPathFunctions:
         assert "JSON_ARRAY" in sql
 
     def test_relationships_named_path(self):
+        # 4.7.0 row 20: the relationship itself, as RETURN [r] spells it, not JSON_ARRAY of its type
         sql = tr("MATCH p = (a)-[r]->(b) RETURN relationships(p)")
-        assert "JSON_ARRAY" in sql
+        assert "'{\"type\":\"' || e" in sql and '"props"' in sql
 
     def test_nodes_non_path_var_raises(self):
         with pytest.raises((ValueError, SyntaxError)):

@@ -14362,6 +14362,46 @@ def _fixed_path_relationships(expr, context) -> bool:
     return bool(aliases) and not any(a in getattr(context, "_edgescan_aliases", set()) for a in aliases)
 
 
+def _returned_path_list_sql(expr, context) -> Optional[str]:
+    """A RETURN item `nodes(p)` or `relationships(p)` of a fixed-length named path, as the JSON list of the nodes or
+    relationships themselves, spelled as `RETURN [a, b]` and `RETURN [r]` spell theirs (4.7.0 row 20: the SQL lists
+    the node ids and the relationship types, which the comprehensions, UNWIND and size() over them read, and RETURN
+    answered those). None for anything else, a variable-length path among it."""
+    if not (isinstance(expr, ast.FunctionCall) and len(expr.arguments) == 1
+            and expr.function_name.lower() in ("nodes", "relationships")):
+        return None
+    arg = expr.arguments[0]
+    if not (isinstance(arg, ast.Variable) and arg.name in context.named_paths):
+        return None
+    if _vlp_path_sql(context, arg.name, "length") is not None or arg.name in {
+            vl.get("path_var") for vl in (context.var_length_paths or [])}:
+        return None
+    if getattr(context, "optional_null_row_unconditional", False):
+        return None
+    if expr.function_name.lower() == "relationships":
+        if not _fixed_path_relationships(expr, context):
+            return None
+        prev = getattr(context, "_rel_objects", False)
+        context._rel_objects = True
+        try:
+            return translate_expression(expr, context, segment="select")
+        finally:
+            context._rel_objects = prev
+    aliases = context.path_node_aliases.get(arg.name) or []
+    if not aliases:
+        return None
+    node_id_expr = getattr(context, "node_id_expr", {})
+    objs = []
+    for a in aliases:
+        nid = node_id_expr.get(a, f"{a}.node_id")
+        objs.append(
+            f"'{{\"_id\":\"' || {nid} || '\",' "
+            f"|| '\"_labels\":' || {labels_subquery(nid)} || ',' "
+            f"|| '\"_props\":' || COALESCE({properties_subquery(nid)}, '[]') || '}}'"
+        )
+    return "('[' || " + " || ',' || ".join(objs) + " || ']')"
+
+
 def _translate_list_source(expr, context, segment):
     """`expr` (a comprehension's or list predicate's source) translated, and the kind of its elements: a fixed-length
     path's relationships come out as objects ("vrel"), see `_fixed_path_relationships`."""
@@ -29518,6 +29558,10 @@ def translate_return_clause(ret, context):
             _rel_json = _with_rel_list_json(item.expression, context) if isinstance(item.expression, ast.Variable) else None
             if _rel_json is not None:
                 sql = _rel_json
+            # 4.7.0 row 20: nodes(p) and relationships(p) answer the nodes and relationships, not ids and types
+            _path_list = _returned_path_list_sql(item.expression, context)
+            if _path_list is not None:
+                sql = _path_list
         finally:
             context._rel_collect = None
             context._typed_coalesce = None
@@ -29645,7 +29689,8 @@ def translate_return_clause(ret, context):
                     context.typed_value_aliases.append(safe)
             if _holds_collected_nodes(item.expression, context):
                 context.__dict__.setdefault("node_json_aliases", []).append(safe)
-            if _holds_graph_json(item.expression, context) or _rel_json is not None:
+            if _holds_graph_json(item.expression, context) or _rel_json is not None or (
+                    _path_list is not None and item.expression.function_name.lower() == "relationships"):
                 context.__dict__.setdefault("graph_json_aliases", []).append(safe)
             if _container_kind(item.expression, context) is not None or (
                 isinstance(item.expression, ast.Variable)

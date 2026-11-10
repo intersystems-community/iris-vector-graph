@@ -87,12 +87,12 @@ class TestNamedPathTranslation:
         assert sql.count("node_id") >= 3
 
     def test_relationships_p_emits_json_array(self):
-        """T016: relationships(p) emits JSON_ARRAY of edge predicate columns"""
+        """T016: a RETURN of relationships(p) lists each relationship as `RETURN [r1, r2]` does, its type the edge's
+        predicate column (4.7.0 row 20: the list of the types alone, JSON_ARRAY(e.p, ...))"""
         q = parse_query("MATCH p = (a)-[r1]->(b)-[r2]->(c) RETURN relationships(p)")
         result = translate_to_sql(q)
         sql = result.sql
-        assert "JSON_ARRAY" in sql
-        assert ".p" in sql
+        assert sql.count("'{\"type\":\"' || e") == 2 and ".p" in sql, sql
 
     def test_invalid_path_ref_raises_error(self):
         """T017: nodes(x) where x is not a path raises error"""
