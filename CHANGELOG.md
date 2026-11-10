@@ -29,6 +29,15 @@ InvalidArgumentType: * needs two numbers and got a value that is not one`. The P
 
 **Fixed: procedures and errors**
 
+- **The HTTP API runs one request at a time on its connection.** `cypher_api` keeps one IRIS connection for every
+  request, and FastAPI answers requests on several threads, but only the Cypher endpoints took its lock: `/health`,
+  `/schema`, `/indexes`, `/server`, `/metrics`, `/stats` and the `/admin/*` endpoints did not. The driver does not allow
+  that (`iris.dbapi.threadsafety` is 1: threads may not share a connection). On a 4.2.2 deployment with a Docker health
+  check every 15 s, 13 of 200 queries answered an empty HTTP 200 (SQLCODE -400 `<UNDEFINED>Server+484^%SYS.DBSRV.1`: the
+  server lost the statement handle), and 0 of 200 with the check off. There the probe itself failed on every call, and
+  4.2.2 rolled the shared connection back after a failed statement, which 4.6.4 no longer does; on 4.6.5 the race did
+  not reproduce. Every endpoint now takes the lock, and `/admin/load` waits for it off the event loop. **What to do:**
+  nothing.
 - **A `CALL ivg.*` procedure refuses an option its method refuses.** `CALL ivg.closeness({formula: 'classic'})` (and
   `'bogus'`, and `1`) answered the harmonic scores, and `{maxHops: -1}` answered 0.0 for every node, where
   `closeness_centrality(formula="classic")` raised: the procedures read their options with `int()` and `str()` and never

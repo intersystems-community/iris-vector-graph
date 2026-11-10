@@ -9,10 +9,12 @@ import struct
 import threading
 import time
 import uuid
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
@@ -145,7 +147,9 @@ class Neo4jTxRequest(BaseModel):
 
 
 _engine_cache: IRISGraphEngine | None = None
-_engine_lock = threading.Lock()
+# One request at a time on the shared connection (4.6.5): a /health probe beside a query made IRIS lose the
+# query's statement handle (SQLCODE -400). Re-entrant, so a locked helper may run inside a locked endpoint.
+_engine_lock = threading.RLock()
 _IRIS_NAMESPACE = os.environ.get("IRIS_NAMESPACE", "USER")
 
 
@@ -194,6 +198,7 @@ def _make_engine() -> IRISGraphEngine:
 
 
 def _get_engine() -> IRISGraphEngine:
+    """Internal: get or create the cached engine. Callers MUST hold _engine_lock."""
     global _engine_cache
     if _engine_cache is None:
         _engine_cache = _make_engine()
@@ -201,6 +206,7 @@ def _get_engine() -> IRISGraphEngine:
 
 
 def _reset_engine():
+    """Internal: reset the cached engine. Callers MUST hold _engine_lock."""
     global _engine_cache
     try:
         if _engine_cache is not None:
@@ -208,6 +214,13 @@ def _reset_engine():
     except Exception:
         pass
     _engine_cache = None
+
+
+@contextmanager
+def _engine() -> Iterator[IRISGraphEngine]:
+    """The cached engine, with ``_engine_lock`` held until the block ends: the one way an endpoint reaches it."""
+    with _engine_lock:
+        yield _get_engine()
 
 
 _READ_ONLY_CYPHER_MESSAGE = "mutation queries, and queries that do not parse, are not allowed; the server is read-only (IVG_READ_ONLY)"
@@ -259,8 +272,9 @@ def health():
     server log, not the body (a connection error names the host, port and user).
     """
     try:
-        result = _get_engine().execute_cypher("MATCH (n) RETURN count(n) AS c")
-        error = getattr(result, "error", None)
+        with _engine() as eng:
+            result = eng.execute_cypher("MATCH (n) RETURN count(n) AS c")
+            error = getattr(result, "error", None)
         if error:
             # execute_cypher folds a failed statement into IVGResult.error.
             raise RuntimeError(error)
@@ -305,8 +319,8 @@ def _resolve_patient_anchors(req: CypherRequest) -> list[str]:
     icd_codes = [c["code"] for c in fhir_result["conditions"] if c.get("code")]
     if not icd_codes:
         return []
-    engine = _get_engine()
-    return get_kg_anchors(engine, icd_codes)
+    with _engine() as eng:
+        return get_kg_anchors(eng, icd_codes)
 
 
 def _patient_anchors(req: CypherRequest) -> dict:
@@ -314,7 +328,8 @@ def _patient_anchors(req: CypherRequest) -> dict:
     otherwise from the external bridge, unchanged (spec 235, research R15). ``ids``
     is what the query sees as ``$patient_anchors``."""
     try:
-        found = _get_engine().fhir_patient_anchors(req.fhir_patient_id, graph=req.fhir_graph)
+        with _engine() as eng:
+            found = eng.fhir_patient_anchors(req.fhir_patient_id, graph=req.fhir_graph)
     except Exception:
         found = {"graphs": []}
     if found.get("graphs"):
@@ -453,15 +468,15 @@ def _neo4j_meta(value: Any) -> dict | None:
 @app.get("/schema")
 def get_schema():
     try:
-        eng = _get_engine()
-        return {
-            "labels": eng.get_labels(),
-            "relationshipTypes": eng.get_relationship_types(),
-            "propertyKeys": eng.get_property_keys(),
-            "nodeCount": eng.get_node_count(),
-            "edgeCount": eng.get_edge_count(),
-            "labelDistribution": eng.get_label_distribution(),
-        }
+        with _engine() as eng:
+            return {
+                "labels": eng.get_labels(),
+                "relationshipTypes": eng.get_relationship_types(),
+                "propertyKeys": eng.get_property_keys(),
+                "nodeCount": eng.get_node_count(),
+                "edgeCount": eng.get_edge_count(),
+                "labelDistribution": eng.get_label_distribution(),
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -469,12 +484,12 @@ def get_schema():
 @app.get("/indexes")
 def get_indexes():
     try:
-        eng = _get_engine()
-        result = eng.execute_cypher("SHOW INDEXES")
-        return {
-            "columns": result.columns,
-            "indexes": result.rows,
-        }
+        with _engine() as eng:
+            result = eng.execute_cypher("SHOW INDEXES")
+            return {
+                "columns": result.columns,
+                "indexes": result.rows,
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -482,28 +497,28 @@ def get_indexes():
 @app.get("/server")
 def get_server_info():
     try:
-        eng = _get_engine()
-        st = eng.status()
-        return {
-            "ivg_version": _ivg_version(),
-            "iris_version": _iris_version(eng),
-            "namespace": _IRIS_NAMESPACE,
-            "schema": {
-                "nodes": st.tables.nodes,
-                "edges": st.tables.edges,
-                "labels": st.tables.labels,
-                "embeddings": st.tables.node_embeddings,
-            },
-            "adjacency": {
-                "kg_populated": st.adjacency.kg_populated,
-                "nkg_populated": st.adjacency.nkg_populated,
-                "bfs_path": st.adjacency.bfs_path,
-            },
-            "objectscript_deployed": st.objectscript.deployed,
-            "arno_loaded": st.arno.loaded,
-            "probe_ms": st.probe_ms,
-            "errors": st.errors,
-        }
+        with _engine() as eng:
+            st = eng.status()
+            return {
+                "ivg_version": _ivg_version(),
+                "iris_version": _iris_version(eng),
+                "namespace": _IRIS_NAMESPACE,
+                "schema": {
+                    "nodes": st.tables.nodes,
+                    "edges": st.tables.edges,
+                    "labels": st.tables.labels,
+                    "embeddings": st.tables.node_embeddings,
+                },
+                "adjacency": {
+                    "kg_populated": st.adjacency.kg_populated,
+                    "nkg_populated": st.adjacency.nkg_populated,
+                    "bfs_path": st.adjacency.bfs_path,
+                },
+                "objectscript_deployed": st.objectscript.deployed,
+                "arno_loaded": st.arno.loaded,
+                "probe_ms": st.probe_ms,
+                "errors": st.errors,
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -511,28 +526,28 @@ def get_server_info():
 @app.get("/metrics")
 def get_metrics():
     try:
-        eng = _get_engine()
-        st = eng.status()
-        lines = [
-            "# HELP ivg_nodes_total Total nodes in the graph",
-            "# TYPE ivg_nodes_total gauge",
-            f"ivg_nodes_total {st.tables.nodes}",
-            "# HELP ivg_edges_total Total edges in the graph",
-            "# TYPE ivg_edges_total gauge",
-            f"ivg_edges_total {st.tables.edges}",
-            "# HELP ivg_embeddings_total Total node embeddings",
-            "# TYPE ivg_embeddings_total gauge",
-            f"ivg_embeddings_total {st.tables.node_embeddings}",
-            "# HELP ivg_kg_populated Whether ^KG adjacency index is built (0/1)",
-            "# TYPE ivg_kg_populated gauge",
-            f"ivg_kg_populated {1 if st.adjacency.kg_populated else 0}",
-            "# HELP ivg_nkg_populated Whether ^NKG adjacency index is built (0/1)",
-            "# TYPE ivg_nkg_populated gauge",
-            f"ivg_nkg_populated {1 if st.adjacency.nkg_populated else 0}",
-            "# HELP ivg_status_probe_ms Time to collect status in milliseconds",
-            "# TYPE ivg_status_probe_ms gauge",
-            f"ivg_status_probe_ms {st.probe_ms:.2f}",
-        ]
+        with _engine() as eng:
+            st = eng.status()
+            lines = [
+                "# HELP ivg_nodes_total Total nodes in the graph",
+                "# TYPE ivg_nodes_total gauge",
+                f"ivg_nodes_total {st.tables.nodes}",
+                "# HELP ivg_edges_total Total edges in the graph",
+                "# TYPE ivg_edges_total gauge",
+                f"ivg_edges_total {st.tables.edges}",
+                "# HELP ivg_embeddings_total Total node embeddings",
+                "# TYPE ivg_embeddings_total gauge",
+                f"ivg_embeddings_total {st.tables.node_embeddings}",
+                "# HELP ivg_kg_populated Whether ^KG adjacency index is built (0/1)",
+                "# TYPE ivg_kg_populated gauge",
+                f"ivg_kg_populated {1 if st.adjacency.kg_populated else 0}",
+                "# HELP ivg_nkg_populated Whether ^NKG adjacency index is built (0/1)",
+                "# TYPE ivg_nkg_populated gauge",
+                f"ivg_nkg_populated {1 if st.adjacency.nkg_populated else 0}",
+                "# HELP ivg_status_probe_ms Time to collect status in milliseconds",
+                "# TYPE ivg_status_probe_ms gauge",
+                f"ivg_status_probe_ms {st.probe_ms:.2f}",
+            ]
         return PlainTextResponse("\n".join(lines) + "\n", media_type="text/plain; version=0.0.4")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -541,13 +556,13 @@ def get_metrics():
 @app.get("/stats")
 def get_stats():
     try:
-        eng = _get_engine()
-        return {
-            "labelDistribution": eng.get_label_distribution(),
-            "nodeCount": eng.get_node_count(),
-            "edgeCount": eng.get_edge_count(),
-            "embeddingCount": eng.embedding_count(),
-        }
+        with _engine() as eng:
+            return {
+                "labelDistribution": eng.get_label_distribution(),
+                "nodeCount": eng.get_node_count(),
+                "edgeCount": eng.get_edge_count(),
+                "embeddingCount": eng.embedding_count(),
+            }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -560,13 +575,13 @@ class AdminSchemaRequest(BaseModel):
 @app.post("/admin/schema/init")
 def admin_schema_init(req: AdminSchemaRequest):
     try:
-        eng = _get_engine()
-        # The server's engine is built with no dimension (_make_engine); setup creates the
-        # vector column at the one the request names (4.6.0 R102: it was never read).
-        eng.embedding_dimension = req.embedding_dimension
-        result = eng.initialize_schema(
-            auto_deploy_objectscript=req.auto_deploy_objectscript
-        )
+        with _engine() as eng:
+            # The server's engine is built with no dimension (_make_engine); setup creates the
+            # vector column at the one the request names (4.6.0 R102: it was never read).
+            eng.embedding_dimension = req.embedding_dimension
+            result = eng.initialize_schema(
+                auto_deploy_objectscript=req.auto_deploy_objectscript
+            )
         return {"status": "ok", "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -575,9 +590,9 @@ def admin_schema_init(req: AdminSchemaRequest):
 @app.post("/admin/indexes/rebuild")
 def admin_indexes_rebuild():
     try:
-        eng = _get_engine()
-        kg_ok = eng.rebuild_kg()
-        nkg_ok = eng.rebuild_nkg()
+        with _engine() as eng:
+            kg_ok = eng.rebuild_kg()
+            nkg_ok = eng.rebuild_nkg()
         return {"status": "ok", "kg": kg_ok, "nkg": nkg_ok}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -591,11 +606,16 @@ class AdminEmbedRequest(BaseModel):
 @app.post("/admin/embed")
 def admin_embed(req: AdminEmbedRequest):
     try:
-        eng = _get_engine()
-        result = eng.embed_nodes(label=req.label, force=req.force)
+        with _engine() as eng:
+            result = eng.embed_nodes(label=req.label, force=req.force)
         return {"status": "ok", "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _import_ndjson(path: str):
+    with _engine() as eng:
+        return eng.import_graph_ndjson(path)
 
 
 @app.post("/admin/load")
@@ -607,8 +627,8 @@ async def admin_load(request: Request):
             f.write(body)
             path = f.name
         try:
-            eng = _get_engine()
-            result = eng.import_graph_ndjson(path)
+            # in the thread pool: waiting for the lock here would stall the event loop, and the Bolt sessions on it
+            result = await run_in_threadpool(_import_ndjson, path)
         finally:
             _os.unlink(path)
         return {"status": "ok", "result": result}
@@ -620,11 +640,11 @@ async def admin_load(request: Request):
 def admin_export():
     try:
         import tempfile, os as _os
-        eng = _get_engine()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".ndjson", delete=False) as f:
             path = f.name
         try:
-            result = eng.export_graph_ndjson(path)
+            with _engine() as eng:
+                result = eng.export_graph_ndjson(path)
             with open(path, "rb") as f:
                 data = f.read()
         finally:
@@ -642,10 +662,10 @@ def admin_export():
 def admin_snapshot_save():
     try:
         import tempfile, os as _os
-        eng = _get_engine()
         snap_dir = _os.environ.get("IVG_SNAPSHOT_DIR", tempfile.gettempdir())
         path = _os.path.join(snap_dir, f"ivg_snapshot_{int(time.time())}.snapshot")
-        result = eng.save_snapshot(path)
+        with _engine() as eng:
+            result = eng.save_snapshot(path)
         return {"status": "ok", "path": path, "result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -654,19 +674,19 @@ def admin_snapshot_save():
 @app.get("/admin/queries")
 def admin_list_queries():
     try:
-        eng = _get_engine()
-        cursor = eng.conn.cursor()
-        try:
-            from iris_vector_graph._engine.admin import active_queries_sql
+        with _engine() as eng:
+            cursor = eng.conn.cursor()
+            try:
+                from iris_vector_graph._engine.admin import active_queries_sql
 
-            cursor.execute(active_queries_sql(50))
-            rows = cursor.fetchall()
-            queries = [
-                {"id": str(r[0]), "state": r[1], "client": r[2], "command": str(r[3])[:200]}
-                for r in rows
-            ]
-        except Exception:
-            queries = []
+                cursor.execute(active_queries_sql(50))
+                rows = cursor.fetchall()
+                queries = [
+                    {"id": str(r[0]), "state": r[1], "client": r[2], "command": str(r[3])[:200]}
+                    for r in rows
+                ]
+            except Exception:
+                queries = []
         return {"queries": queries}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -675,13 +695,13 @@ def admin_list_queries():
 @app.delete("/admin/queries/{query_id}")
 def admin_kill_query(query_id: str):
     try:
-        eng = _get_engine()
-        cursor = eng.conn.cursor()
-        try:
-            cursor.execute("SELECT %SYSTEM.SYS.KillProcess(?)", [int(query_id)])
-            return {"status": "ok", "killed": query_id}
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Could not kill query {query_id}: {e}")
+        with _engine() as eng:
+            cursor = eng.conn.cursor()
+            try:
+                cursor.execute("SELECT %SYSTEM.SYS.KillProcess(?)", [int(query_id)])
+                return {"status": "ok", "killed": query_id}
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Could not kill query {query_id}: {e}")
     except HTTPException:
         raise
     except Exception as e:
@@ -699,8 +719,8 @@ def admin_explain(req: ExplainRequest):
         from iris_vector_graph.cypher.parser import parse_query
         from iris_vector_graph.cypher.translator import translate_to_sql
         parsed = parse_query(req.query)
-        eng = _get_engine()
-        sql_result = translate_to_sql(parsed, req.parameters, engine=eng)
+        with _engine() as eng:
+            sql_result = translate_to_sql(parsed, req.parameters, engine=eng)
         return {
             "cypher": req.query,
             "sql": sql_result.sql,
