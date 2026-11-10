@@ -32,11 +32,22 @@ class _Cursor:
     def __init__(self, fail=None, error=LOCK, rows=(), one=None):
         self.fail, self.error, self.rows, self.one = fail and re.compile(fail, re.I), error, list(rows), one
         self.sql, self.rowcount, self.description = [], 1, [("c", None)]
+        #: what a transaction would leave: the writes committed, and those of the open transaction
+        self.committed, self.pending, self.open = [], [], False
 
     def execute(self, sql, params=None):
         self.sql.append(sql)
         if self.fail and self.fail.search(sql):
             raise RuntimeError(self.error)
+        verb = sql.split()[0].upper()
+        if verb == "START":
+            self.open = True
+        elif verb in ("COMMIT", "ROLLBACK"):
+            if verb == "COMMIT":
+                self.committed.extend(self.pending)
+            self.pending, self.open = [], False
+        elif verb in ("INSERT", "UPDATE", "DELETE"):
+            (self.pending if self.open else self.committed).append((verb, tuple(params or ())))
 
     def fetchall(self):
         return list(self.rows)
@@ -299,7 +310,9 @@ def test_a_refused_post_commit_property_delete_is_the_reported_error():
     applied, error = GraphLedger._apply_post_commit_properties(ledger, {"a": {"k": "v"}}, "r1")
     assert applied is False and "-99" in error
     assert not any(s.lstrip().upper().startswith("INSERT") for s in cur.sql)
-    ledger._engine.conn.rollback.assert_called_once()
+    # nothing of it is left, committed or pending (4.7.0: IVG's own transaction is taken back, not the connection's;
+    # tests/e2e/test_470_ledger_caller_txn_e2e.py shows a caller's work surviving it)
+    assert cur.committed == [] and cur.pending == [] and not cur.open
 
 
 def test_post_commit_properties_are_written_and_committed():
@@ -310,8 +323,11 @@ def test_post_commit_properties_are_written_and_committed():
     ledger._engine.conn.cursor.return_value = cur
     ledger._schema.return_value = "Graph_KG"
     assert GraphLedger._apply_post_commit_properties(ledger, {"a": {"k": "v"}}, "r1") == (True, None)
-    assert [s.split()[0] for s in cur.sql] == ["DELETE", "INSERT"]
-    ledger._engine.conn.commit.assert_called_once()
+    # the DELETE and the INSERT are committed together, nothing left pending (4.7.0: as IVG's own transaction, which
+    # nests in a caller's: tests/e2e/test_470_ledger_caller_txn_e2e.py shows the caller's rollback taking them back)
+    assert [verb for verb, _ in cur.committed] == ["DELETE", "INSERT"]
+    assert cur.committed[1][1] == ("", "a", "k", "v")
+    assert cur.pending == [] and not cur.open
 
 
 # ------------------------------------------------------------------ reads that answer
