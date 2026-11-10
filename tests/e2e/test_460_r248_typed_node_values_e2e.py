@@ -19,7 +19,8 @@ So:
   ``2.5 * 2`` as an IRIS decimal, which R218 reads as the integer) in ``RETURN n``, ``WITH n RETURN n``,
   ``collect(n)``, ``[n]``, ``{m: n}``, a node ``CALL ivg.degreeCentrality`` yields, ``properties(n)``, a
   variable-length path's node (``properties(x)`` of ``UNWIND nodes(p)``; a path value lists node ids since R291) and a
-  variable-length target; ``a``'s are the strings '0.95' and '29' (the API's text);
+  variable-length target; ``a``'s are the strings '0.95' and '29' (the API's text), in ``properties(n)`` too since
+  4.7.0 (row 10: it read them as the numbers, unlike ``n.f``);
 - each of ``c``'s ``_props`` values is the value ``RETURN n.<key>`` answers on the SQL path;
 - ``{f: n.f, g: n.g, i: n.i}`` over ``c`` is the JSON ``{"f": 0.95, "g": 5.0, "i": 29}``;
 - ``percentileDisc(n.price, 0.5)`` over z1..z3 is 20.0, at 0.0 10.0;
@@ -157,8 +158,11 @@ def test_properties_of_a_node_reads_its_stored_types(g):
     for who, want in (("c", _c_props(ids, key)), ("a", None)):
         for path, rows in _both(e, "MATCH (n:T248 {id: $id}) RETURN properties(n) AS p", {"id": ids[who]}).items():
             got = rows[0][0]  # 4.6.0 R311: properties(n) is the dict
-            if want is None:  # an API-written number-shaped text reads as the number (KNOWN_ISSUES, R168)
-                assert _typed(got) == _typed({"id": ids["a"], "f": 0.95, "i": 29, key: 0.95}), path
+            if want is None:
+                # 4.7.0 row 10: properties(n) reads each value as `RETURN n.<key>` does, so the API's 4.6.3 text stays
+                # the strings '0.95' and '29'. Before, a number-shaped text read as the number (KNOWN_ISSUES, R168),
+                # and properties(n).f was 0.95 where n.f was '0.95'.
+                assert _typed(got) == _typed(_a_props(ids, key)), path
             else:
                 assert _typed(got) == _typed(want), path
 
@@ -181,8 +185,9 @@ def test_a_variable_length_path_and_target_read_their_stored_types(g):
     for path, rows in _both(e, q, {"a": ids["a"]}).items():
         got = {r[0]: (json.loads(r[1]) if isinstance(r[1], str) else r[1]) for r in rows}
         assert _typed(got[ids["c"]]) == _typed(_c_props(ids, key)), path
-        # properties() reads the API's text '0.95' and '29' as the numbers they are, as `RETURN properties(a)` does
-        assert _typed(got[ids["a"]]) == _typed({"id": ids["a"], "f": 0.95, "i": 29, key: 0.95}), path
+        # 4.7.0 row 10: properties() reads each value as `RETURN x.<key>` does, so the API's 4.6.3 text stays the
+        # strings '0.95' and '29', as `RETURN properties(a)` answers (it read them as the numbers before)
+        assert _typed(got[ids["a"]]) == _typed(_a_props(ids, key)), path
     for path, rows in _both(e, "MATCH (a:T248 {id: $a})-[:R248*1..2]->(t) RETURN t", {"a": ids["a"]}).items():
         assert rows[0][0] == ids["c"], (path, rows)
         assert _typed(_props({"_props": rows[0][2]})) == _typed(_c_props(ids, key)), path
@@ -255,3 +260,12 @@ def test_a_with_column_of_arithmetic_keeps_its_type(ar):
     q = "MATCH (n:T248A {id: $x}) WITH n.g * 2 AS d, n.i * 2 AS j RETURN d, j"
     for path, rows in _both(e, q, {"x": x}).items():
         assert [(v, type(v).__name__) for v in rows[0]] == [(4.0, "float"), (6, "int")], path
+
+
+def test_properties_reads_each_value_as_the_property_does(g):
+    """4.7.0 row 10: `properties(a).f` and `a.f` are one value of one type, the text the API stored for a."""
+    e, ids, _ = g
+    for path, rows in _both(e, "MATCH (n:T248 {id: $id}) RETURN n.f AS f, n.i AS i, properties(n).f AS pf, "
+                            "properties(n).i AS pi",
+                            {"id": ids["a"]}).items():
+        assert [(v, type(v).__name__) for v in rows[0]] == [("0.95", "str"), ("29", "str")] * 2, path
