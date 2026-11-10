@@ -14436,6 +14436,38 @@ def _with_rel_list_edge_ids(expr, context):
     return None
 
 
+def _with_rel_list_json(expr, context) -> Optional[str]:
+    """Each relationship of a WITH item that is a list of them, as RETURN spells one (`{"type", "props"}` JSON text, a
+    JSON array of those strings), beside `_with_rel_list_edge_ids`'s ids, so a RETURN of the name answers the
+    relationships (4.7.0 row 19: it read the stage's types column, `['R', 'R']`). `collect(r)` aggregates it in the
+    same pass as the ids and types, so in their order; a list literal `[r1, r2]` lists it; a name forwarded from an
+    earlier stage reads that stage's."""
+    if isinstance(expr, ast.Variable):
+        alias = context.variable_aliases.get(expr.name, "")
+        if alias.startswith("Stage") and expr.name in getattr(context, "rel_list_json_vars", ()):
+            return f"{alias}.__rels_{expr.name}_json"
+        return None
+    if isinstance(expr, ast.Literal) and isinstance(expr.value, list) and expr.value:
+        parts = []
+        for el in expr.value:
+            js = _graph_value_sql(el.name, context) if isinstance(el, ast.Variable) else None
+            if js is None or not _is_relationship_var(el.name, context):
+                return None
+            parts.append(js)
+        return "JSON_ARRAY(" + ", ".join(parts) + ")"
+    if (
+        isinstance(expr, ast.AggregationFunction)
+        and expr.function_name.lower() == "collect"
+        and not expr.distinct
+        and isinstance(expr.argument, ast.Variable)
+        and _rel_edge_id_sql(expr.argument.name, context) is not None
+    ):
+        js = _graph_value_sql(expr.argument.name, context)
+        if js is not None:
+            return f"COALESCE(JSON_ARRAYAGG({js}), CAST('[]' AS VARCHAR(256)))"
+    return None
+
+
 def _vlp_rel_prop_filters(rel, context) -> Optional[list]:
     """`[(json path key, value)]` for the property map of variable-length hop `rel`, each value one CY_VLP_PATHS's
     relationships are checked against in SQL: a string, a number (4.6.0 R298: a float too, compared
@@ -29482,6 +29514,10 @@ def translate_return_clause(ret, context):
         }
         try:
             sql = translate_expression(item.expression, context, segment="select")
+            # 4.7.0 row 19: a list of relationships a WITH collected answers them, not the types its column holds
+            _rel_json = _with_rel_list_json(item.expression, context) if isinstance(item.expression, ast.Variable) else None
+            if _rel_json is not None:
+                sql = _rel_json
         finally:
             context._rel_collect = None
             context._typed_coalesce = None
@@ -29609,7 +29645,7 @@ def translate_return_clause(ret, context):
                     context.typed_value_aliases.append(safe)
             if _holds_collected_nodes(item.expression, context):
                 context.__dict__.setdefault("node_json_aliases", []).append(safe)
-            if _holds_graph_json(item.expression, context):
+            if _holds_graph_json(item.expression, context) or _rel_json is not None:
                 context.__dict__.setdefault("graph_json_aliases", []).append(safe)
             if _container_kind(item.expression, context) is not None or (
                 isinstance(item.expression, ast.Variable)
@@ -30195,9 +30231,15 @@ def translate_with_clause(with_clause, context):
             context.rel_list_vars = set()
         _rel_list_vars = context.rel_list_vars
         _rel_list_vars.discard(alias)
+        _rel_list_json = _with_rel_list_json(item.expression, context) if _rel_list_eids is not None else None
+        context.__dict__.setdefault("rel_list_json_vars", set()).discard(alias)
         if _rel_list_eids is not None:
             context.select_items.append(f"{_rel_list_eids} AS __rels_{alias}_eids")
             _rel_list_vars.add(alias)
+            # 4.7.0 row 19: and the relationships themselves, which a RETURN of the name answers
+            if _rel_list_json is not None:
+                context.select_items.append(f"{_rel_list_json} AS __rels_{alias}_json")
+                context.rel_list_json_vars.add(alias)
         context.select_items.append(f"{sql} AS {_safe_alias(alias).replace('.', '_')}")
         # 4.6.0 R286: a boolean flag goes on with its value, so the next stage still tells true from 1 (an UNWIND row's
         # flag, R273: `UNWIND [true, 1] AS v WITH v RETURN v` answered 1, 1) and a boolean element from the string
