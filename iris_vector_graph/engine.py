@@ -721,7 +721,8 @@ class IRISGraphEngine(
     @property
     def _fetch_first_unsafe(self) -> bool:
         """True when this IRIS build SIGSEGVs in %qaqpre on a multi-table JOIN combined
-        with `FETCH FIRST n ROWS ONLY` (observed on irishealth 2026.3.0AI build 106).
+        with `FETCH FIRST n ROWS ONLY` (observed on irishealth 2026.3.0AI build 106), or refuses
+        an ORDER BY of an aggregate with it at Prepare (Community 2026.1, GitHub #13).
 
         Detected once and cached. Primary signal is a behavioral probe run in a
         SUBPROCESS (the crash is a hard SIGSEGV — uncatchable in-process), gated on
@@ -786,6 +787,13 @@ class IRISGraphEngine(
                     f"    cur.execute('SELECT id FROM {a} FETCH FIRST 0 ROWS ONLY'); cur.fetchall()\n"
                     f"    cur.execute('SELECT a.id FROM {a} a JOIN {b} b "
                     "ON b.sid=a.id FETCH FIRST 1 ROWS ONLY'); cur.fetchall()\n"
+                    # 4.7.0 row 1 (GitHub #13): Community 2026.1 refuses an ORDER BY of an aggregate with FETCH FIRST
+                    # at Prepare (-400 <UNDEFINED>main+129^%qaqcasl *mt("top")), and takes the JOIN above
+                    "    try:\n"
+                    f"        cur.execute('SELECT id, COUNT(*) AS k FROM {a} GROUP BY id ORDER BY COUNT(*) DESC "
+                    "FETCH FIRST 1 ROWS ONLY'); cur.fetchall()\n"
+                    "    except Exception as e:\n"
+                    "        print('AGG_FF_REFUSED: ' + str(e)[:300])\n"
                     "    print('OK')\n"
                     "finally:\n"
                     f"    for d in ('DROP TABLE {a}', 'DROP TABLE {b}'):\n"
@@ -803,6 +811,12 @@ class IRISGraphEngine(
                     raise
                 if "DROPPED" not in (r.stdout or ""):
                     self._drop_fetch_first_probe_tables((a, b))
+                if "AGG_FF_REFUSED" in (r.stdout or ""):
+                    logger.info(
+                        "IRIS build refuses an ORDER BY of an aggregate with FETCH FIRST (Community 2026.1); ivg "
+                        "will emit TOP for LIMIT queries"
+                    )
+                    return True
                 if r.returncode in (-11, 139, -6, 134):
                     logger.warning(
                         "IRIS build SIGSEGVs in %%qaqpre on FETCH FIRST + multi-table JOIN "

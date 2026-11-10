@@ -104,3 +104,25 @@ def test_a_probe_that_failed_without_crashing_is_safe_and_is_cleaned_up_too():
     assert answer is False
     dropped = [c.args[0] for c in cleanup.cursor.return_value.execute.call_args_list]
     assert dropped == [f"DROP TABLE {t}" for t in _tables(script)]
+
+
+# 4.7.0 row 1 (GitHub #13): on IRIS Community 2026.1 (Build 234U) the JOIN shape above runs, but any ORDER BY of an
+# aggregate with FETCH FIRST (or LIMIT / OFFSET ... FETCH) fails at Prepare, SQLCODE -400 `<UNDEFINED>main+129^%qaqcasl
+# *mt("top")`, measured on a single table too; TOP does not. The probe runs that shape as well, and a refusal of it
+# marks the build as one to answer with TOP.
+
+
+def test_the_probe_runs_the_aggregate_order_by_shape():
+    _, script, _, _ = _run(_engine(), stdout="OK\nDROPPED\n")
+    a, _b = _tables(script)
+    assert re.search(rf"FROM {re.escape(a)} GROUP BY id ORDER BY COUNT\(\*\) DESC FETCH FIRST 1 ROWS ONLY", script), script
+
+
+def test_a_refused_aggregate_order_by_marks_the_build_unsafe():
+    answer, _, _, _ = _run(_engine(), stdout="AGG_FF_REFUSED: SQLCODE -400\nOK\nDROPPED\n")
+    assert answer is True
+
+
+def test_an_accepted_aggregate_order_by_leaves_the_build_safe():
+    answer, _, _, _ = _run(_engine(), stdout="OK\nDROPPED\n")
+    assert answer is False

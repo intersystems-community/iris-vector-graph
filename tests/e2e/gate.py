@@ -162,6 +162,11 @@ SESSION_NAMESPACES: Dict[str, str] = {
         "_e2e.py reads this release's engine against the older functions and classes; the gate builds only this "
         "release's namespaces, so whoever runs the file sets one up; unset, the file skips"
     ),
+    "IVG_ISSUE13_NS": (
+        "a namespace on a throwaway IRIS Community 2026.1 container (IVG_ISSUE13_PORT), the build GitHub #13 failed "
+        "on (tests/e2e/test_470_issue13_count_distinct_limit_e2e.py), which the gate cannot make; or an IVG470* "
+        "scratch namespace on the enterprise container; unset, the file skips"
+    ),
 }
 #: The variables read only by the files they name, so a module that reads one needs that group.
 _BY_VAR = {g.var: name for name, g in GROUPS.items() if g.var != "IVG_NAMESPACE"}

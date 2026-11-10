@@ -3732,16 +3732,16 @@ def _maybe_split_deep_joins(sql: str, params: list, context) -> str:
     outer_sql = f"WITH _MR AS (\n{inner_sql}\n)\n{select_prefix}{outer_cols}\nFROM _MR"
     order_m = _re.search(r"\nORDER BY .+", sql, _re.DOTALL)
     limit_m = _re.search(r"\nFETCH FIRST (\d+) ROWS ONLY", sql)
-    offset_m = _re.search(r"\nOFFSET \d+", sql)
+    offset_m = _re.search(r"\nOFFSET (\d+) ROWS", sql)
     suffix = ""
     if order_m:
         start = order_m.start()
-        end = limit_m.start() if limit_m and limit_m.start() > start else len(sql)
-        suffix += sql[start:end]
+        ends = [m.start() for m in (offset_m, limit_m) if m and m.start() > start]
+        suffix += sql[start:min(ends) if ends else len(sql)]
+    if offset_m:
+        suffix += f"\nOFFSET {offset_m.group(1)} ROWS"  # before the FETCH, as apply_pagination writes it
     if limit_m:
         suffix += f"\nFETCH FIRST {limit_m.group(1)} ROWS ONLY"
-    if offset_m:
-        suffix += f"\nOFFSET {offset_m.group(0).split()[1]}"
     outer_sql += suffix
     return outer_sql
 
@@ -8026,6 +8026,10 @@ def apply_pagination(
             return sql
     if order_by_items:
         sql += f"\nORDER BY {', '.join(order_by_items)}"
+    if skip is not None:
+        # before the FETCH: IRIS refuses `FETCH FIRST n ROWS ONLY OFFSET k` (SQLCODE -25), so every SKIP with LIMIT
+        # failed on an engine whose probe found FETCH FIRST safe (a from_connect() engine on 2026.3; 4.7.0 row 1)
+        sql += f"\nOFFSET {skip} ROWS"
     if limit is not None:
         if limit == 0 and sql.lstrip().upper().startswith("SELECT "):
             # FETCH FIRST 0 ROWS ONLY hangs on IRIS 2026.x builds; use TOP 0 instead
@@ -8037,8 +8041,6 @@ def apply_pagination(
             sql = head + sep + rest
         else:
             sql += f"\nFETCH FIRST {limit} ROWS ONLY"
-    if skip is not None:
-        sql += f"\nOFFSET {skip}"
     return sql
 
 

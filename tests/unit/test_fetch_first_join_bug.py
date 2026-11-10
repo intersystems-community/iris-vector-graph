@@ -83,3 +83,18 @@ def test_an_optional_match_where_compares_over_subqueries_iris_takes_in_an_outer
     # correlated subqueries it takes it (4.6.0 R308: the cast to DOUBLE read every string as 0)
     sql = _sql("MATCH (x:X) OPTIONAL MATCH (x)-[:E1]->(y:Y) WHERE x.val < y.val RETURN x, y", unsafe=False)
     assert "CY_CMP((SELECT val FROM" in sql and "AS DOUBLE) <" not in sql, sql
+
+
+def test_skip_with_limit_puts_offset_before_fetch_first():
+    """4.7.0: `FETCH FIRST n ROWS ONLY OFFSET k` is refused by IRIS (SQLCODE -25); OFFSET k ROWS comes first."""
+    from iris_vector_graph.cypher.parser import parse_query
+    from iris_vector_graph.cypher.translator import translate_to_sql
+
+    for q in ("MATCH (n:P) RETURN n.name AS a ORDER BY a SKIP 2 LIMIT 3",
+              "MATCH (n:P)-[:R]->(m) RETURN m.name AS a, count(n) AS k ORDER BY k DESC SKIP 2 LIMIT 3"):
+        sql = translate_to_sql(parse_query(q), {}).sql
+        sql = sql if isinstance(sql, str) else "\n".join(sql)
+        assert "\nOFFSET 2 ROWS\nFETCH FIRST 3 ROWS ONLY" in sql, sql
+        assert "ROWS ONLY\nOFFSET" not in sql, sql
+    sql = translate_to_sql(parse_query("MATCH (n:P) RETURN n.name AS a ORDER BY a SKIP 2"), {}).sql
+    assert "\nOFFSET 2 ROWS" in sql and "FETCH" not in sql, sql
