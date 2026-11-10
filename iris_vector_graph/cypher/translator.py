@@ -4873,7 +4873,8 @@ def _run_unwind_dml_rows(
             _iter_clauses = _bind_unwound_set_values(_iter_clauses, _ualias, _row_value_node(item_val))
             # and a MATCH / WHERE compares the row's value as the same literal would: `true` beside a list was
             # inlined as 1 (matching the node whose id is '1'), and `[1]` as raw SQL text (SQLCODE -12)
-            _iter_clauses = [_bind_variable(c, _ualias, _row_literal(item_val))
+            _literal = _row_literal(item_val)
+            _iter_clauses = [_bind_variable(c, _ualias, _literal)
                              if isinstance(c, (ast.MatchClause, ast.WhereClause)) else c for c in _iter_clauses]
         _bindings_changed(context)  # each row's writes follow the last row's
         for clause in _iter_clauses:
@@ -7019,10 +7020,11 @@ def rewrite_ambiguous_param_unwind(cypher_query: ast.CypherQuery, params: Option
     parts = getattr(cypher_query, "query_parts", None)
     if not parts or not parts[0].clauses:
         return cypher_query
-    if getattr(cypher_query, "writes", True) and (len(parts) == 1 or not all(
-            isinstance(c, (ast.UnwindClause, ast.MatchClause, ast.WhereClause)) for c in parts[0].clauses) or not all(
-            isinstance(c, (ast.SetClause, ast.RemoveClause, ast.DeleteClause)) for p in parts for c in p.clauses
-            if isinstance(c, ast.UpdatingClause))):
+    if getattr(cypher_query, "writes", True) and not (
+            len(parts) > 1
+            and all(isinstance(c, (ast.UnwindClause, ast.MatchClause, ast.WhereClause)) for c in parts[0].clauses)
+            and all(isinstance(c, (ast.SetClause, ast.RemoveClause, ast.DeleteClause))
+                    for p in parts for c in p.clauses if isinstance(c, ast.UpdatingClause))):
         return cypher_query
     first = parts[0].clauses[0]
     expr = getattr(first, "expression", None)
@@ -9078,30 +9080,34 @@ def _bind_unwound_map_props(node, var, value):
     a property of it (`UNWIND $maps AS m MERGE (:P {k: m.k})`) would otherwise
     reach the DML as the PropertyReference object.
     """
-    import dataclasses as _dc
+    def leaf(n):
+        if isinstance(n, ast.PropertyReference):
+            return ast.Literal(value.get(n.property_name)) if n.variable == var else n
+        return None
 
-    if isinstance(node, ast.PropertyReference):
-        if node.variable == var:
-            return ast.Literal(value.get(node.property_name))
-        return node
+    return _map_ast(node, leaf)
+
+
+def _map_ast(node, leaf):
+    """Copy of `node` with each node `leaf` answers (not None) replaced by its answer, walking lists, tuples, dicts
+    and dataclass fields; the same object where nothing changed."""
+    got = leaf(node)
+    if got is not None:
+        return got
     if isinstance(node, (list, tuple)):
-        new = [_bind_unwound_map_props(x, var, value) for x in node]
-        if all(a is b for a, b in zip(new, node)):
-            return node
-        return type(node)(new)
+        new = [_map_ast(x, leaf) for x in node]
+        return node if all(a is b for a, b in zip(new, node)) else type(node)(new)
     if isinstance(node, dict):
-        new = {k: _bind_unwound_map_props(x, var, value) for k, x in node.items()}
-        if all(new[k] is node[k] for k in node):
-            return node
-        return new
-    if _dc.is_dataclass(node) and not isinstance(node, type):
+        new = {k: _map_ast(x, leaf) for k, x in node.items()}
+        return node if all(new[k] is node[k] for k in node) else new
+    if dataclasses.is_dataclass(node) and not isinstance(node, type):
         changes = {}
-        for f in _dc.fields(node):
+        for f in dataclasses.fields(node):
             old = getattr(node, f.name)
-            new = _bind_unwound_map_props(old, var, value)
+            new = _map_ast(old, leaf)
             if new is not old:
                 changes[f.name] = new
-        return _dc.replace(node, **changes) if changes else node
+        return dataclasses.replace(node, **changes) if changes else node
     return node
 
 
@@ -9131,33 +9137,27 @@ _BINDING_EXPRESSIONS = (ast.ListComprehension, ast.ListPredicateExpression, ast.
 
 def _bind_variable(node, var, value):
     """Copy of `node` with every reference to the variable `var` replaced by the expression `value`."""
-    if isinstance(node, ast.Variable):
-        return value if node.name == var and not node.is_parameter else node
-    if isinstance(node, _BINDING_EXPRESSIONS) and node.variable == var:
-        return node
-    if isinstance(node, (list, tuple)):
-        new = [_bind_variable(x, var, value) for x in node]
-        return node if all(a is b for a, b in zip(new, node)) else type(node)(new)
-    if isinstance(node, dict):
-        new = {k: _bind_variable(x, var, value) for k, x in node.items()}
-        return node if all(new[k] is node[k] for k in node) else new
-    if dataclasses.is_dataclass(node) and not isinstance(node, type):
-        changes = {}
-        for f in dataclasses.fields(node):
-            old = getattr(node, f.name)
-            new = _bind_variable(old, var, value)
-            if new is not old:
-                changes[f.name] = new
-        return dataclasses.replace(node, **changes) if changes else node
-    return node
+    def leaf(n):
+        if isinstance(n, ast.Variable):
+            return value if n.name == var and not n.is_parameter else n
+        if isinstance(n, _BINDING_EXPRESSIONS) and n.variable == var:
+            return n
+        return None
+
+    return _map_ast(node, leaf)
 
 
 def _bind_unwound_set_values(clauses, var, value):
     """`clauses` with each SET item's value (a SET clause's, a MERGE's ON CREATE / ON MATCH) reading the UNWIND
     variable `var` as this row's `value`. Only the values: the written target (`SET e.p = 1`) is left as it is."""
+    def item(i):
+        if not isinstance(i, ast.SetItem):
+            return i
+        v = _bind_variable(i.value, var, value)
+        return i if v is i.value else dataclasses.replace(i, value=v)
+
     def items(its):
-        new = [dataclasses.replace(i, value=_bind_variable(i.value, var, value)) if isinstance(i, ast.SetItem) else i
-               for i in its]
+        new = [item(i) for i in its]
         return its if all(a is b for a, b in zip(new, its)) else new
 
     def action(a):
@@ -14604,7 +14604,7 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
                     context.optional_null_row_labels.append(label)
     for k, v in node.properties.items():
         val_sql = _prop_value_sql(v, context)
-        if k == "id" and _unwind_json_text(v, context) is not None and _unwind_bool_flag(v, context) is not None:
+        if k == "id" and _unwind_json_text(v, context) is not None:
             # 4.7.0: an UNWIND row whose kind is known only as the query runs: a string names the node, as `{id: 'x'}`
             # does; a boolean, list or map is the `id` property, as `{id: true}` is (it compared true as the node id
             # '1'). The property's join is a LEFT one: a string's node need not have it.
@@ -17592,10 +17592,10 @@ def _row_value_case(col_sql: str, var, plain_sql: str, context, col_may_be_null:
     DETACH DELETE n` over ['x', [1], true] compared true as its text 1). A CASE answering 1, 0 or NULL; None when
     `var` has no kinds. `col_may_be_null`: a NULL `col` does not make the answer NULL (`plain_sql` reads another
     column: a node id)."""
-    json_text = _unwind_json_text(var, context) if isinstance(var, ast.Variable) else None
-    flag = _unwind_bool_flag(var, context) if json_text is not None else None
-    if flag is None:
+    json_text = _unwind_json_text(var, context)
+    if json_text is None:
         return None
+    flag = _unwind_bool_flag(var, context)
     value = translate_expression(var, context, segment="where")
     unknown = f"{json_text} IS NULL OR {json_text} = 'null'" + ("" if col_may_be_null else f" OR {col_sql} IS NULL")
     return (f"(CASE WHEN {unknown} THEN NULL "
@@ -17607,7 +17607,7 @@ def _row_value_case(col_sql: str, var, plain_sql: str, context, col_may_be_null:
 
 def _typed_row_equality(expr, context) -> Optional[str]:
     """`n.p = e` / `n.p <> e`, a stored property against an UNWIND variable whose rows carry their kind
-    (`_row_value_eq_sql`); None when it does not apply."""
+    (`_row_value_case`); None when it does not apply."""
     if expr.operator not in (ast.BooleanOperator.EQUALS, ast.BooleanOperator.NOT_EQUALS) or len(expr.operands) != 2:
         return None
     a, b = expr.operands
@@ -17619,8 +17619,6 @@ def _typed_row_equality(expr, context) -> Optional[str]:
         col = translate_expression(prop, context, segment="where")
         # a string or number element compares as it did: the stored text against the row's text
         case = _row_value_case(col, var, f"{col} = {translate_expression(var, context, segment='where')}", context)
-        if case is None:
-            return None
         return f"({case} = {1 if expr.operator == ast.BooleanOperator.EQUALS else 0})"
     return None
 
