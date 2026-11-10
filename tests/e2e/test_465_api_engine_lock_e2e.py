@@ -1,12 +1,12 @@
 """4.6.5: the HTTP API's endpoints share one connection, and every one now takes the lock `_run_cypher` took.
 
-Reported from a 4.2.2 deployment whose Docker health check probed every 15 s: 13 of 200 queries failed (SQLCODE -400
-`<UNDEFINED>Server+484^%SYS.DBSRV.1`, the server lost the statement handle), 0 of 200 with the check off. Its probe
-failed on every call there, and 4.2.2 rolled the shared connection back after a failed statement (4.6.4 no longer
-does). On 4.6.5 with driver 5.4.0 the race did not reproduce, with or without the lock; the lock is there because the
-driver's `threadsafety` is 1 (threads may not share a connection). tests/unit/test_465_api_engine_lock.py pins it:
-it fails without the lock. Here, on IRIS, one thread runs one-hop queries through `/db/neo4j/query/v2` while another
-probes `/health`, and every query must answer its known row and every probe 200.
+Reported from a 4.2.2 deployment (IRIS 2026.3.0AI.154, driver 5.4.1) with `/health` probed every 0.2 s: 147 of 250
+queries answered empty, each with SQLCODE -400 `<UNDEFINED>Server+484^%SYS.DBSRV.1` (the server lost the statement
+handle), while every probe succeeded. Two threads on one 4.6.5 engine did not reproduce it on IRIS 2026.3.0AI.113 with
+drivers 5.4.0 and 5.4.1; the lock is there because the driver's `threadsafety` is 1 (threads may not share a
+connection). tests/unit/test_465_api_engine_lock.py pins it: it fails without the lock. Here, on IRIS, one thread runs
+one-hop queries through `/db/neo4j/query/v2` while another probes `/health`, and every query must answer its known row
+and every probe 200.
 
 The graph, a ring n0 -> n1 -> n2 -> n3 -> n4 -> n0: the one-hop query from n0 answers Node1, and nothing else.
 
