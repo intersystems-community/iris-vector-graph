@@ -176,6 +176,21 @@ def _procedure_options(proc, context):
     return _validate.validate_procedure_options(name, getattr(_validate, model_name), values, fields)
 
 
+def _refuse_positional_options_map(proc, context, *arg_names: str):
+    """A positional-argument procedure refuses an options map, naming its arguments as USER_GUIDE does (4.6.5 round 9).
+
+    ``CALL ivg.ppr({seeds: ['a']})`` read ``proc.options`` as ``{seeds: ['a']}``, which ``_translate_ppr`` never checked,
+    so it answered no rows and ``result.error`` said "requires at least 1 argument (seed_ids)" — that name was never
+    documented. A newcomer who tried ``CALL ivg.ppr(['a'], {alpha: 0.5})`` got silent wrong answers: the map went into
+    ``proc.options``, which was ignored, so alpha kept its default. Now these procedures refuse a map where
+    ``_procedure_options`` refuses positional arguments, naming the documented positional-argument list.
+    """
+    name = proc.procedure_name
+    if proc.options:
+        args_list = ", ".join(arg_names)
+        raise ValueError(f"{name} takes positional arguments ({args_list}), not an options map")
+
+
 def _int_argument(name: str, label: str, value, minimum: Optional[int] = None) -> int:
     """A procedure argument that must be a whole number (4.6.5: ``int()`` truncated ``2.5`` and said "invalid literal"
     for ``'x'``, naming neither the procedure nor the argument)."""
@@ -2909,6 +2924,7 @@ def _translate_neighbors(proc: ast.CypherProcedureCall, context: TranslationCont
     Args: source (str or list[str]), predicate (str, optional), direction ('out'/'in'/'both', default 'out')
     Yields: neighbor (node ID)
     """
+    _refuse_positional_options_map(proc, context, "source_ids", "predicate", "direction")
     args = proc.arguments
     if len(args) < 1:
         raise ValueError("ivg.neighbors requires at least 1 argument (source_ids)")
@@ -2985,9 +3001,10 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     graph was passed, so the walk under `USE GRAPH 'g'` was the default graph's. Without one, a walk in each graph with
     edges, a row per graph and node (4.6.0 R192: the default graph's alone before).
     """
+    _refuse_positional_options_map(proc, context, "seeds", "alpha", "maxIter")
     args = proc.arguments
     if len(args) < 1:
-        raise ValueError("ivg.ppr requires at least 1 argument (seed_ids)")
+        raise ValueError("ivg.ppr requires at least 1 argument (seeds)")
 
     seeds = _resolve_arg(args[0], context, "ivg.ppr")
     if isinstance(seeds, str):
@@ -2996,7 +3013,7 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
         raise ValueError(f"ivg.ppr: seeds must be a string or list, got {type(seeds).__name__}")
 
     alpha = _number_argument("ivg.ppr", "alpha", _resolve_arg(args[1], context, "ivg.ppr")) if len(args) > 1 else 0.85
-    max_iter = _int_argument("ivg.ppr", "max_iter", _resolve_arg(args[2], context, "ivg.ppr")) if len(args) > 2 else 20
+    maxIter = _int_argument("ivg.ppr", "maxIter", _resolve_arg(args[2], context, "ivg.ppr")) if len(args) > 2 else 20
 
     seed_json = json.dumps(seeds)
     ppr_fn = _fn("kg_PPR")
@@ -3009,7 +3026,7 @@ def _translate_ppr(proc: ast.CypherProcedureCall, context: TranslationContext) -
     cte_sql = _union_all([
         f"SELECT j.node_id AS node, j.node_id, j.score, {_sql_arg(g)} AS graph_id\n"
         f"FROM JSON_TABLE(\n"
-        f"  {ppr_fn}({_sql_arg(seed_json)}, {_sql_arg(alpha)}, {_sql_arg(max_iter)}, 0, 1.0, "
+        f"  {ppr_fn}({_sql_arg(seed_json)}, {_sql_arg(alpha)}, {_sql_arg(maxIter)}, 0, 1.0, "
         f"{_sql_arg(g)}),\n"
         f"  '$[*]' COLUMNS(\n"
         f"    node_id VARCHAR(256) PATH '$.id',\n"
@@ -3048,6 +3065,7 @@ def _index_graph_rows(proc_name: str, index_name: str, index_type: str, context)
 
 
 def _translate_bm25_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
+    _refuse_positional_options_map(proc, context, "name", "query", "k")
     args = proc.arguments
     if len(args) < 3:
         raise ValueError("ivg.bm25.search requires 3 arguments: name, query, k")
@@ -3142,10 +3160,11 @@ def _retrieve_query_vector(query: str, embedding_config: str, context: Translati
 
 
 def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
+    _refuse_positional_options_map(proc, context, "query", "limit", "bm25_name", "vec_label", "rrf_k", "embedding_config")
     args = proc.arguments
     if not args:
         raise ValueError(
-            "ivg.retrieve requires: (query_text, limit, bm25_name='default', vec_label='*', rrf_k=60, embedding_config='')"
+            "ivg.retrieve requires: (query, limit, bm25_name='default', vec_label='*', rrf_k=60, embedding_config='')"
         )
 
     query = _resolve_arg(args[0], context, "ivg.retrieve")
@@ -3277,6 +3296,7 @@ def _translate_retrieve(proc: ast.CypherProcedureCall, context: TranslationConte
 
 
 def _translate_ivf_search(proc: ast.CypherProcedureCall, context: TranslationContext) -> None:
+    _refuse_positional_options_map(proc, context, "name", "query_vec", "k", "nprobe")
     args = proc.arguments
     if len(args) < 4:
         raise ValueError("ivg.ivf.search requires 4 arguments: name, query_vec, k, nprobe")
@@ -3386,8 +3406,9 @@ def _translate_weighted_shortest_path(
     answer, dropping every later MATCH, WITH and RETURN. The arguments are inlined as escaped literals, as the other
     procedure CTEs' are, and read as the handler reads them.
     """
-    args = proc.arguments
     name = "ivg.shortestPath.weighted"
+    _refuse_positional_options_map(proc, context, "from", "to", "weightProp", "maxCost", "maxHops", "direction", "types")
+    args = proc.arguments
     if len(args) < 2:
         raise ValueError(f"{name} requires at least 2 arguments: from, to")
     yielded = list(proc.yield_items or [])
