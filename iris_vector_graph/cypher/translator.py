@@ -12819,8 +12819,9 @@ def _set_node_prop_dml(context, k, v, cte, subquery, subparams, var=None, alias=
             context.add_dml(
                 f'DELETE FROM {_table("rdf_props")} WHERE s IN ({subquery}) AND "key" = ? AND val IS NULL', [k]
             )
-        elif _set_conversion(v) is not None:
-            # a conversion's null (`toInteger('x')`, a node without the property) removes it (4.7.0 row 35)
+        else:
+            # a null value removes the property, as openCypher's SET to null does: a conversion's null
+            # (`toInteger('x')`, 4.7.0 row 35) and an arithmetic one (`n.missing + 1`, which left a null row, row 35b)
             context.add_dml(
                 f'{cte}DELETE FROM {_table("rdf_props")} WHERE s IN ({subquery}) AND "key" = ? AND val IS NULL',
                 _lead_cte(context, cte, [], subparams) + [k],

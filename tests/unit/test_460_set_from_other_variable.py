@@ -57,7 +57,9 @@ def test_each_statement_reads_the_other_node_of_its_row():
 
 @pytest.mark.parametrize("q", ["MATCH (n:X {id:'a'}) SET n.c = n.x", "MATCH (n:X {id:'a'}) SET n.c = n.x + 1"])
 def test_the_own_node_s_property_is_read_from_the_written_row(q):
-    up, ins = _writes(_stmts(q))
+    # the third statement removes a null value's row (4.7.0 row 35b: a SET to null removes the property)
+    up, ins, dele = _writes(_stmts(q))
+    assert dele[0].startswith("DELETE FROM rdf_props") and "val IS NULL" in dele[0], dele
     assert "_upd.s = rdf_props.s" in up[0], up
     assert "_upd.s = nodes.node_id" in ins[0] and "rdf_props.s" not in ins[0], ins
 
