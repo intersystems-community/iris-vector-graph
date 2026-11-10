@@ -93,49 +93,12 @@ RIGHT.update({"duration": Temporal("duration", "P2D"), "date": Temporal("date", 
               "time": Temporal("time", "13:00:00Z"), "datetime": Temporal("datetime", "2020-01-02T00:00:00Z"),
               "localdatetime": Temporal("localdatetime", "2020-01-02T00:00:00")})
 COMPARISON_KINDS = KINDS + TEMPORAL_KINDS
-#: KNOWN_ISSUES "A date or time read by position from a collected list compares as its text": a date, time, datetime
-#: or local datetime read by position from a collect()ed list compares as its ISO text against a string, another
-#: temporal type, a list or a map, where openCypher answers null for the orderings. Measured on 4.6.0 fixes81 (both
-#: drivers, both graph modes); the E2E family requires exactly these to still disagree, so a fix shows as a failure
-#: until this set is emptied. 4.6.3 fixed the same read from a WITH-held literal list (`subscript`, 20 cases).
-KNOWN_WRONG_461 = frozenset({
-    ('collected', 'date vs datetime'),
-    ('collected', 'date vs list'),
-    ('collected', 'date vs localdatetime'),
-    ('collected', 'date vs map'),
-    ('collected', 'date vs string'),
-    ('collected', 'date vs time'),
-    ('collected', 'datetime vs date'),
-    ('collected', 'datetime vs list'),
-    ('collected', 'datetime vs localdatetime'),
-    ('collected', 'datetime vs map'),
-    ('collected', 'datetime vs string'),
-    ('collected', 'datetime vs time'),
-    ('collected', 'list vs date'),
-    ('collected', 'list vs datetime'),
-    ('collected', 'list vs localdatetime'),
-    ('collected', 'list vs time'),
-    ('collected', 'localdatetime vs date'),
-    ('collected', 'localdatetime vs datetime'),
-    ('collected', 'localdatetime vs list'),
-    ('collected', 'localdatetime vs map'),
-    ('collected', 'localdatetime vs string'),
-    ('collected', 'localdatetime vs time'),
-    ('collected', 'map vs date'),
-    ('collected', 'map vs datetime'),
-    ('collected', 'map vs localdatetime'),
-    ('collected', 'map vs time'),
-    ('collected', 'string vs date'),
-    ('collected', 'string vs datetime'),
-    ('collected', 'string vs localdatetime'),
-    ('collected', 'string vs time'),
-    ('collected', 'time vs date'),
-    ('collected', 'time vs datetime'),
-    ('collected', 'time vs list'),
-    ('collected', 'time vs localdatetime'),
-    ('collected', 'time vs map'),
-    ('collected', 'time vs string'),
-})
+#: The comparison cases IVG answers otherwise than openCypher, which the E2E family requires to still disagree, so a
+#: fix shows as a failure until the case leaves the set. Empty since 4.7.0 (row 18): the 36 `collected` cases (a date,
+#: time, datetime or local datetime read by position from a collect()ed list, against a string, another temporal
+#: kind, a list or a map) compared the value's ISO text; 4.6.3 fixed the same read from a WITH-held list
+#: (`subscript`, 20 cases).
+KNOWN_WRONG_461 = frozenset()
 OPS = ("<", "<=", ">", ">=", "=", "<>")
 FORMS = ("literal", "with", "param", "subscript", "unwound", "collected", "stored")
 MATH = ("abs", "ceil", "floor", "round", "sign", "sqrt", "exp", "log", "log10", "sin", "cos", "tan", "cot", "asin",

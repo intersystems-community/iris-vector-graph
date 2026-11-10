@@ -4122,12 +4122,55 @@ def _node_coalesce_vars(expr, context) -> list:
     return names
 
 
+def _collected_unwound_literal(part, i: int, cypher_query) -> Optional[Tuple[str, list]]:
+    """``(alias, elements)`` when ``part`` is ``UNWIND <list literal> AS e WITH collect(e) AS alias`` and nothing else,
+    first in the query: the collected list is then the literal's elements less its nulls, in their order, known before
+    the query runs (4.7.0 row 18). Each element must be a literal or a temporal constructor of a literal text. Else
+    None: rows before the UNWIND, a second WITH item, DISTINCT, WHERE, ORDER BY, SKIP or LIMIT each change what is
+    collected."""
+    w = part.with_clause
+    if i != 0 or cypher_query is None or cypher_query.procedure_call is not None or len(part.clauses) != 1:
+        return None
+    unwind = part.clauses[0]
+    if not (isinstance(unwind, ast.UnwindClause) and isinstance(unwind.expression, ast.Literal)
+            and isinstance(unwind.expression.value, list)):
+        return None
+    if (w.distinct or w.star or w.where_clause is not None or w.order_by_clause is not None or w.skip is not None
+            or w.limit is not None or len(w.items) != 1):
+        return None
+    item = w.items[0]
+    agg = item.expression
+    if not (isinstance(agg, ast.AggregationFunction) and agg.function_name.lower() == "collect"
+            and not getattr(agg, "distinct", False) and isinstance(agg.argument, ast.Variable)
+            and agg.argument.name == unwind.alias and item.alias):
+        return None
+    elems = []
+    for e in unwind.expression.value:
+        if isinstance(e, ast.Literal) and e.value is None:
+            continue  # collect() drops a null
+        temporal = (isinstance(e, ast.FunctionCall) and e.function_name.lower() in _TEMPORAL_KINDS
+                    and len(e.arguments) == 1 and isinstance(e.arguments[0], ast.Literal)
+                    and isinstance(e.arguments[0].value, str))
+        if not (temporal or (isinstance(e, (ast.Literal, ast.MapLiteral)) and _is_fully_literal(e))
+                or isinstance(e, (bool, int, float, str))):
+            return None
+        elems.append(e)
+    return item.alias, elems
+
+
 def _to_sql_handle_with(part, context: TranslationContext, i: int, cypher_query=None) -> None:
     if part.with_clause.order_by_clause:
         # Before the projection: an ambiguous sort key is reported ahead of a
         # missing alias (WithOrderBy4 [20]).
         _check_with_order_by_aggregation(part.with_clause, context)
     translate_with_clause(part.with_clause, context)
+    # 4.7.0 row 18: a collect() of an UNWIND of a list literal is that list, so an element read by position compares
+    # as its value, a temporal one too, as a WITH-held list literal's does (4.6.3); its ISO text compared as a string
+    # Held apart from literal_list_vars, which the rest of the translation folds from: only a comparison reads it, and a
+    # later WITH or UNWIND of the name forgets it (translate_with_clause, the UNWIND translation)
+    collected = _collected_unwound_literal(part, i, cypher_query)
+    if collected is not None:
+        context.__dict__.setdefault("collected_unwound_lists", {})[collected[0]] = collected[1]
 
     # Build alias → underlying SQL expression map from the projected SELECT items.
     # e.g. 'p2.val AS property' → {'property': 'p2.val'}
@@ -5105,7 +5148,7 @@ def _tts_process_parts(cypher_query, context, metadata):
             if _stage_reads_after_writes(cypher_query, i, context, _pin_head):
                 _pin_head = None  # read after the writes, through the captures (R241)
             _bindings_changed(context)
-            _to_sql_handle_with(part, context, i)
+            _to_sql_handle_with(part, context, i, cypher_query)
             _pin_stage_after_writes(cypher_query, i, context, _pin_head, *_pin_from)
             context._alias_pins = {}  # the next part's aliases are its own
             # The WITH projected the created variables into Stage{i+1}; a later part
@@ -8297,6 +8340,7 @@ def translate_unwind_clause(unwind, context):
         context.literal_list_vars[unwind.alias] = _cll[unwind.expression.name]
     else:
         context.literal_list_vars.pop(unwind.alias, None)
+    getattr(context, "collected_unwound_lists", {}).pop(unwind.alias, None)
 
     # UNWIND nodes(p): each row's value is a node id, whose properties are rdf_props rows and whose node_id is the
     # value itself. It was read as JSON, so n.name and n.node_id answered null every row (4.6.0 R228).
@@ -20018,6 +20062,9 @@ def _cmp_literal_list(name, context, temporal=False):
     _NO_STATIC_VALUE in place of making the list None (4.6.3)."""
     elems = getattr(context, "literal_list_vars", {}).get(name)
     alias = str(context.variable_aliases.get(name, ""))
+    if temporal and not isinstance(elems, list):
+        # 4.7.0 row 18: a collect() of an UNWIND of a list literal (_collected_unwound_literal)
+        elems = getattr(context, "collected_unwound_lists", {}).get(name)
     if not isinstance(elems, list) or not alias.startswith("Stage") or name in context.rel_variables:
         return None
     if temporal:
@@ -30050,6 +30097,8 @@ def translate_with_clause(with_clause, context):
         elif hasattr(context, "literal_list_vars"):
             # 4.6.0 R308: bound to anything else, the name holds that (`WITH l + [2] AS l` kept the literal)
             context.literal_list_vars.pop(alias, None)
+        # 4.7.0 row 18: a WITH of the name, whatever it binds, forgets a collected list literal of it
+        getattr(context, "collected_unwound_lists", {}).pop(alias, None)
 
         _wvk = getattr(context, "with_value_kinds", None)
         if _wvk is not None:
