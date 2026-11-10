@@ -12091,14 +12091,10 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
             convert, store = conversion
             return store(convert(arg_sql)), arg_params * convert("\0").count("\0")
 
-        # Fallback: try regular translation (for string concatenation etc.)
-        try:
-            sql = translate_expression(e, context, segment="select")
-            return sql, list(context.select_params)
-        except SyntaxError:
-            raise
-        except Exception:
-            return "NULL", []
+        # Fallback: try regular translation (for string concatenation etc.). An error raises: it was caught and the
+        # value stored as NULL, which removed or nulled the property and answered success (4.7.0 row 35b).
+        sql = translate_expression(e, context, segment="select")
+        return sql, list(context.select_params)
 
     # Determine the node variable from the expression's context
     node_var = ""
