@@ -51,13 +51,13 @@ whatever setup ran: see the list that follows.
 - **GitHub #12 (ArnolfJp): `bulk_create_nodes()` stores `id`.** Fixed in 4.6.0 (R089) and checked again: bulk and
   create answer the issue's six queries alike.
 - **python-devx: loading 10k nodes and 30k edges into a new namespace is no longer quadratic.** The script's load took
-  37.8 to 42.8 s on 4.6.5 against 16.5 to 21.4 s on 4.4.1: the server node loader's per-row checks read every node of
+  37.8 to 42.8 s before this fix against 16.5 to 21.4 s on 4.4.1 (python-devx measured 74.7 s on 4.6.2): the server node loader's per-row checks read every node of
   the label and every node holding `id`. They read the node's own rows now: 9.8 to 10.4 s (4.4.1: 16.7 to 17.0 s).
   Loads into a used namespace were and are within noise of 4.4.1 (medians 6.75 s and 6.49 s). The same check, quadratic
   the same way, in `create_node`, `store_node`, the bulk SQL path and Cypher writes: `UNWIND $rows AS r CREATE
 (:L {k: r})`, 1,000 rows a statement, took 2.3 s for the first statement and 8.4 s for the tenth, and takes 1.1 to
   2.9 s; `create_node` went from 0.86 s rising to 1.72 s per 500 to about 0.5 s.
-- **python-devx's class: IVG no longer commits a transaction you opened.** Measured on 4.6.5 after `START TRANSACTION`
+- **python-devx's class: IVG no longer commits a transaction you opened.** Measured before these fixes, after `START TRANSACTION`
   and a row of the caller's: `bulk_load_session` and `embed_nodes` left `$TLEVEL` 0 (they called `conn.commit()`), so
   the caller's `ROLLBACK` kept everything; so did `embed_edges`, `map_sql_table`, `map_sql_relationship`,
   `remove_table_mapping`, `attach_embeddings_to_table`, `fhir_bridge_add`, `code_crosswalk_add`,
@@ -66,17 +66,17 @@ whatever setup ran: see the list that follows.
   your transaction: your rollback removes your row and the call's writes, your commit keeps both. Inside it,
   `bulk_load_session` keeps the indexes in place, tunes nothing, does not retry on a dropped connection, and leaves the
   adjacency for `sync()` (`stats["in_caller_transaction"]` says which way it ran). The calls that cannot be part of a
-  transaction refuse it, listed above; on 4.6.5 `initialize_schema()` left the caller's row behind its own `ROLLBACK`.
+  transaction refuse it, listed above; before the fix `initialize_schema()` left the caller's row behind its own `ROLLBACK`.
   What commits is IVG's `conn.commit()`, not DDL: measured, `CREATE TABLE`, `CREATE INDEX`, `DROP INDEX` and
   `TUNE TABLE` each left `$TLEVEL` at 1, and `ROLLBACK` took them back with the caller's row.
-- **A ledger commit inside your transaction is part of it.** On 4.6.5 an engine on the caller's connection raised
+- **A ledger commit inside your transaction is part of it.** Before the fix an engine on the caller's connection raised
   `LedgerTransactionOpenError`, and a `from_connect` engine committed on its own Native API connection, so the caller's
   `ROLLBACK` left the revision row and the node. `ledger.commit` now runs nested in the caller's transaction: a rollback
   leaves no revision, no head move and no graph change, and leaves no gap in `seq`; a commit keeps them, and
   `ledger.verify()` answers equal. The head stays locked until the caller's transaction ends (another connection's
   commit raised `LedgerLockTimeoutError` after 30 s, then committed in 0.01 s once the caller rolled back).
 - **opsreview: a temporal purge retires the endpoint nodes it leaves bare, by default (Python API).** With the defaults
-  on 4.6.5 a purge of 5 edges left their 4 bare endpoints (`nodes_retired` 0); now all 4 go, and a node with another
+  before this fix a purge of 5 edges left their 4 bare endpoints (`nodes_retired` 0); now all 4 go, and a node with another
   edge, a label or a property stays. opsreview reported the growth (941 nodes to 7.2 million); they purge from
   ObjectScript, whose three-argument `PurgeRawBefore(graph, tsEnd, tsStart)` still keeps the nodes and answers
   `deleted:skipped`, and they sweep orphans themselves. `retire_bare_nodes=False` keeps every endpoint. The store now
