@@ -288,3 +288,44 @@ def test_import_rdf_refuses_a_literal_wider_than_the_column_and_writes_nothing(c
     with pytest.raises(ValueError, match=r"import_rdf: .*'http://example.org/p/doc' literal .*64001 characters.* 64000"):
         _engine_sql(conn).import_rdf(_rdf(u, 64001), format="nt")
     assert _count(conn, "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id %STARTSWITH ?", [f"urn:{u}:"]) == 0
+
+
+# ------------------------------------------------------------------------------- row 3e: import_rdf's property keys
+
+
+def _rdf_keyed(u, local, lang=False) -> str:
+    from pathlib import Path
+
+    scratch = Path.home() / ".cache" / "ivg-bench" / "rel-470" / "txn-scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    path = scratch / f"{u}.nt"
+    tag = "@en" if lang else ""
+    path.write_text(
+        f"<urn:{u}:a> <urn:p:R470E> <urn:{u}:b> .\n"
+        f'<urn:{u}:b> <http://example.org/p/{local}> "v"{tag} .\n'
+    )
+    return str(path)
+
+
+def _keys(conn, nid):
+    cur = conn.cursor()
+    cur.execute('SELECT "key" FROM Graph_KG.rdf_props WHERE s = ?', [nid])
+    return sorted(r[0] for r in cur.fetchall())
+
+
+def test_import_rdf_stores_a_128_character_key_whole(conn):
+    u = _uid()
+    _engine_sql(conn).import_rdf(_rdf_keyed(u, "k" * 128), format="nt")
+    assert "k" * 128 in _keys(conn, f"urn:{u}:b")
+
+
+@pytest.mark.parametrize("local, lang", [("k" * 129, False), ("k" * 124, True)], ids=("key", "lang_key"))
+def test_import_rdf_refuses_a_key_wider_than_the_column_and_writes_nothing(conn, local, lang):
+    """The key is the predicate's local name; on 4.6.5 a longer one was cut to 128 characters, so two predicates
+    sharing those 128 wrote one key, and a language tag's `<key>_lang` (129 to 133 characters here) was refused by
+    IRIS, logged and skipped."""
+    u = _uid()
+    width = len(local) + (5 if lang else 0)
+    with pytest.raises(ValueError, match=rf"import_rdf: .*property key .*{width} characters.* 128"):
+        _engine_sql(conn).import_rdf(_rdf_keyed(u, local, lang), format="nt")
+    assert _count(conn, "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id %STARTSWITH ?", [f"urn:{u}:"]) == 0

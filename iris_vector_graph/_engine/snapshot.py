@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from iris_vector_graph._engine._rdf_utils import graph_id_of_iri
 from iris_vector_graph._engine.ledger import ledger_check as _ledger_check
-from iris_vector_graph._widths import VALUE_WIDTH, check_width
+from iris_vector_graph._widths import KEY_WIDTH, VALUE_WIDTH, check_width
 from iris_vector_graph.prop_values import prop_value
 from iris_vector_graph.schema_name import runs_in_ivg_schema, schema_package
 from iris_vector_graph.security import vector_text
@@ -378,6 +378,12 @@ def _column_names(row: Dict[str, Any]) -> List[str]:
     return cols
 
 
+def _literal_key(predicate: str) -> str:
+    """The property key ``import_rdf`` stores a literal under: the predicate's local name (after the last ``/`` or
+    ``#``). 4.7.0 row 3e: whole; it was cut to 128 characters, so two predicates sharing their first 128 wrote one."""
+    return predicate.rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+
+
 def snapshot_globals(schema: str) -> List[tuple]:
     """``(global name, subscript prefixes)`` for every global ``save_snapshot`` archives: the one list both the save
     and the restore's allow-list read."""
@@ -567,7 +573,9 @@ class SnapshotMixin:
         (statements that succeeded, rows already present included), and ``inferred`` with ``infer``; a row
         that fails is logged and skipped. A literal is stored whole; one longer than ``rdf_props.val`` (64000
         characters) raises ``ValueError`` naming its subject and predicate, before anything is written (4.7.0: it
-        was cut to 64000 and counted as written). Needs ``rdflib``.
+        was cut to 64000 and counted as written). So does a property key (the predicate's local name, or its
+        ``<key>_lang``) longer than ``rdf_props.key`` (128 characters): it was cut to 128, or for ``_lang`` refused
+        by IRIS and skipped. Needs ``rdflib``.
         """
         _ledger_check(self, "import_rdf")
         try:
@@ -601,10 +609,15 @@ class SnapshotMixin:
         else:
             g = Graph()
         g.parse(path, format=format)
-        # 4.7.0 row 3d: checked before the first batch is written, as the batches commit one by one
+        # 4.7.0 rows 3d, 3e: checked before the first batch is written, as the batches commit one by one
         for s, p, o, *_ in g.quads() if is_quads else g:
             if not isinstance(o, (URIRef, BNode)):
-                check_width("import_rdf", "literal", o, VALUE_WIDTH, f"subject {str(s)!r} predicate {str(p)!r} ")
+                where = f"subject {str(s)!r} predicate {str(p)!r} "
+                check_width("import_rdf", "literal", o, VALUE_WIDTH, where)
+                key = _literal_key(str(p)) if isinstance(o, RDFLiteral) else str(p)
+                check_width("import_rdf", "property key", key, KEY_WIDTH, where)
+                if getattr(o, "language", None):
+                    check_width("import_rdf", "property key", f"{key}_lang", KEY_WIDTH, where)
 
         from iris_vector_graph._write_txn import caller_transaction_level, refuse_in_caller_transaction, write_txn
 
@@ -738,7 +751,7 @@ class SnapshotMixin:
             batch_nodes.add((s_id, effective_graph))
 
             if isinstance(o, RDFLiteral):
-                key = p_str.rsplit("/", 1)[-1].rsplit("#", 1)[-1][:128]
+                key = _literal_key(p_str)
                 val = str(o)
                 lang = getattr(o, "language", None)
                 if lang:
@@ -751,9 +764,7 @@ class SnapshotMixin:
                 batch_nodes.add((o_id, effective_graph))
                 batch_edges.append((s_id, p_str, o_id, effective_graph))
             else:
-                batch_props.append(
-                    (s_id, p_str[:128], str(o), effective_graph)
-                )
+                batch_props.append((s_id, p_str, str(o), effective_graph))
 
             if triple_count % batch_size == 0:
                 _flush()
