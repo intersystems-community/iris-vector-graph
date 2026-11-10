@@ -227,7 +227,9 @@ class _AdjCursor:
         self.ddl = []
 
     def execute(self, sql, params=None):
-        if "CompiledClass WHERE Name IN" in sql:
+        if "%Dictionary.CompiledIndex" in sql:
+            self._next = None  # the index kind probe (4.7.0): no index of the name; fetchall answers []
+        elif "CompiledClass WHERE Name IN" in sql:
             self._next = (2,)
         elif "Graph.KG.SqlProcs" in sql:
             self._next = (1,)
@@ -249,6 +251,9 @@ class _AdjCursor:
 
     def fetchone(self):
         return self._next
+
+    def fetchall(self):
+        return []
 
 
 @pytest.mark.parametrize("rows, level", [(False, logging.DEBUG), (True, logging.INFO)])

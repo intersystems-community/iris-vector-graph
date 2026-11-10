@@ -695,7 +695,8 @@ class IRISGraphEngine(
 
     @property
     def _adjacency_indexed(self) -> bool:
-        """True when ``rdf_edges`` carries the functional index ``idx_edges_adj`` (spec 252, ADR-0008).
+        """True when ``rdf_edges`` carries the functional index ``idx_edges_adj`` (spec 252, ADR-0008); a plain index of
+        that name is not it (4.7.0 row 16).
 
         The index then maintains ``^KG("out"/"in")`` from every row write, so the engine's edge writers write rows
         only; without it (a DDL-only namespace, an install ``ensure_indexes`` has not reached) they keep writing
@@ -705,8 +706,9 @@ class IRISGraphEngine(
             try:
                 cur = self.conn.cursor()
                 cur.execute(
-                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.INDEXES "
-                    f"WHERE TABLE_SCHEMA = '{self._ivg_schema}' AND TABLE_NAME = 'rdf_edges' AND INDEX_NAME = 'idx_edges_adj'"
+                    "SELECT COUNT(*) FROM %Dictionary.CompiledIndex ci WHERE ci.SqlName = 'idx_edges_adj' "
+                    "AND ci.TypeClass IS NOT NULL AND ci.TypeClass <> '' AND ci.parent IN (SELECT Name FROM "
+                    f"%Dictionary.CompiledClass WHERE SqlSchemaName = '{self._ivg_schema}' AND SqlTableName = 'rdf_edges')"
                 )
                 row = cur.fetchone()
                 count = row[0] if row else 0

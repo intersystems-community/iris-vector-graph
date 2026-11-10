@@ -22,7 +22,9 @@ class _Catalog:
 
     def execute(self, sql, args=None):
         self.sql.append(sql)
-        if "%Dictionary.CompiledClass" in sql:
+        if "%Dictionary.CompiledIndex" in sql:
+            self._row = None  # the index kind probe (4.7.0): no index of the name
+        elif "%Dictionary.CompiledClass" in sql:
             names = [n for n in ("Graph.KG.AdjIndex", "Graph.KG.LabelIndex", "RAG.SqlProcs", "Graph.KG.SqlProcs")
                      if f"'{n}'" in sql]
             self._row = (sum(1 for n in names if n in self.compiled),)
@@ -41,6 +43,9 @@ class _Catalog:
 
     def fetchone(self):
         return self._row
+
+    def fetchall(self):
+        return []
 
 
 CODE = {"Graph.KG.AdjIndex", "Graph.KG.LabelIndex"}

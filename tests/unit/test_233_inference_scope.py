@@ -64,11 +64,13 @@ def eng():
 def test_every_read_is_graph_scoped(eng, rules, graph):
     engine, cursor, _ = eng
     engine.materialize_inference(rules=rules, graph=graph)
-    # catalog probes (the engine asking INFORMATION_SCHEMA whether an index exists, spec 252) read no graph rows
+    # catalog probes (the engine asking INFORMATION_SCHEMA, or since 4.7.0 %Dictionary for the index's type, whether
+    # the adjacency index exists, spec 252) read no graph rows
     reads = [
         sql
         for sql, _ in cursor.calls
         if sql.lstrip().upper().startswith("SELECT") and "rdf_edges" in sql and "INFORMATION_SCHEMA" not in sql
+        and "%Dictionary" not in sql
     ]
     assert reads
     assert [sql for sql in reads if "graph_id" not in sql] == []

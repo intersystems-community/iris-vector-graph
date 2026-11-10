@@ -766,12 +766,30 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
     )
 
     @staticmethod
+    def adjacency_index_kind(
+        cursor, name: str = "idx_edges_adj", table: str = "rdf_edges", schema: str = "Graph_KG"
+    ) -> str:
+        """``functional`` when ``schema.table`` has the index ``name`` as a functional index (a TypeClass, such as
+        Graph.KG.AdjIndex), ``plain`` when an index of that name is an ordinary one, ``absent`` when there is none
+        (4.7.0 row 16: a plain ``idx_edges_adj`` was taken for the adjacency index, and ``^KG`` went unwritten)."""
+        cursor.execute(
+            "SELECT ci.TypeClass FROM %Dictionary.CompiledIndex ci WHERE ci.SqlName = ? AND ci.parent IN "
+            "(SELECT Name FROM %Dictionary.CompiledClass WHERE SqlSchemaName = ? AND SqlTableName = ?)",
+            [name, schema, table],
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            return "absent"
+        return "functional" if any(r[0] for r in rows) else "plain"
+
+    @staticmethod
     def ensure_adjacency_index(cursor) -> Dict[str, Any]:
         """Declare the functional indexes that keep ``^KG("out"/"in"/"label")`` current with their rows (spec 252).
 
         Only where ``Graph.KG.AdjIndex`` and ``Graph.KG.LabelIndex`` are compiled (a DDL-only namespace has no callbacks),
         only once ``rdf_edges.ekey`` exists (the edge index reads it; spec 234's migration adds it) and ``graph_id`` is on
-        both tables (a 3.x namespace gains it in ``upgrade_to_4_0_0``), and only when the index is missing.
+        both tables (a 3.x namespace gains it in ``upgrade_to_4_0_0``), and only when the index is missing; a plain index of
+        the same name is dropped and replaced (4.7.0 row 16).
         ``CREATE INDEX`` builds the index over every existing row, which on an install whose adjacency has drifted is also
         the repair; that can take minutes on a large graph, so it is announced first.
         """
@@ -806,13 +824,23 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         if not row or row[0] != 2:
             return {"skipped": "rdf_edges / rdf_labels have no graph_id column yet"}
         status: Dict[str, Any] = {}
+        schema = cursor._schema if isinstance(cursor, SchemaCursor) else "Graph_KG"
         for name, table, stores, ddl in GraphSchema.ADJACENCY_INDEXES:
-            cursor.execute(
-                "SELECT 1 FROM INFORMATION_SCHEMA.INDEXES WHERE TABLE_SCHEMA = 'Graph_KG' AND INDEX_NAME = ?", [name]
-            )
-            if cursor.fetchone():
+            kind = GraphSchema.adjacency_index_kind(cursor, name, table, schema)
+            if kind == "functional":
                 status[name] = "present"
                 continue
+            if kind == "plain":
+                # 4.7.0 row 16: a plain index of this name maintains no ^KG, and the writers took it for this one
+                logger.warning(
+                    "%s.%s: %s is a plain index, not the adjacency index; dropping it to declare %s",
+                    schema,
+                    table,
+                    name,
+                    stores,
+                )
+                cursor.execute(f"DROP INDEX {name} ON Graph_KG.{table}")
+                status[f"{name}_replaced_plain"] = True
             if name == "idx_edges_adj":
                 # ADR-0009: a temporal edge written before this has a ^KG shadow and no row; the build below
                 # derives ^KG from rows, so give each one its marked row first.

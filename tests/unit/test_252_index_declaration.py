@@ -15,13 +15,19 @@ LABEL_DDL = "CREATE INDEX idx_labels_adj ON Graph_KG.rdf_labels (graph_id, s, la
 
 
 class _Cursor:
-    def __init__(self, classes=2, ekey=True, present=(), graph_id=2):
+    def __init__(self, classes=2, ekey=True, present=(), graph_id=2, plain=()):
         self.classes, self.ekey, self.present, self.sql, self._row = classes, ekey, set(present), [], None
         self.graph_id = graph_id  # how many of rdf_edges and rdf_labels carry graph_id
+        self.plain, self._rows = set(plain), []  # 4.7.0: indexes of the name that are not functional ones
 
     def execute(self, sql, args=None):
         self.sql.append(sql)
-        if "%Dictionary.CompiledClass" in sql:
+        if "%Dictionary.CompiledIndex" in sql:
+            # the index kind probe (GraphSchema.adjacency_index_kind): its TypeClass, None for a plain index
+            name = args[0] if args else ""
+            self._rows = ([("Graph.KG.AdjIndex",)] if name in self.present
+                          else [(None,)] if name in self.plain else [])
+        elif "%Dictionary.CompiledClass" in sql:
             self._row = (self.classes,)
         elif "COLUMN_NAME = 'ekey'" in sql:
             self._row = (1,) if self.ekey else None
@@ -35,6 +41,9 @@ class _Cursor:
 
     def fetchone(self):
         return self._row
+
+    def fetchall(self):
+        return self._rows
 
     def ddl(self):
         return [s for s in self.sql if s.startswith("CREATE INDEX")]
@@ -111,3 +120,15 @@ def test_initialize_schema_declares_it_once_the_classes_are_deployed():
     deploy = t.index("deploy_objectscript_classes")
     assert len(t) - 1 - t[::-1].index("ensure_adjacency_index") > deploy
     assert "adjacency_index" in t[deploy:]
+
+
+def test_a_plain_index_of_the_name_is_replaced(caplog):
+    """4.7.0 row 16: a plain idx_edges_adj keeps no ^KG; it was "present", so the functional one was never declared
+    (tests/e2e/test_470_adjacency_index_kind_e2e.py has it against IRIS)."""
+    cur = _Cursor(present={"idx_labels_adj"}, plain={"idx_edges_adj"})
+    with caplog.at_level(logging.WARNING, logger="iris_vector_graph.schema"):
+        status = GraphSchema.ensure_adjacency_index(cur)
+    assert "DROP INDEX idx_edges_adj ON Graph_KG.rdf_edges" in cur.sql
+    assert cur.ddl() == [EDGE_DDL]
+    assert status["idx_edges_adj"] == "created" and status["idx_edges_adj_replaced_plain"] is True
+    assert any("plain index" in r.getMessage() for r in caplog.records if r.levelname == "WARNING")

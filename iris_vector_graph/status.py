@@ -31,6 +31,10 @@ class AdjacencyStatus:
     nkg_populated: bool = False
     kg_predicates_consistent: bool = True
     bfs_path: str = "none"
+    # 4.7.0 row 16: rdf_edges' idx_edges_adj: "functional" (the adjacency index, which keeps ^KG("out"/"in") with
+    # every row write), "plain" (an ordinary index of that name, which keeps no ^KG: initialize_schema() replaces it),
+    # "absent", or "unknown" when the probe failed (named in `errors`)
+    index: str = "unknown"
 
 
 @dataclass

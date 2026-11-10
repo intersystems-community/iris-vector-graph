@@ -533,10 +533,16 @@ ClassMethod RowUpdate(pGraphId As %String, pSrc As %String, pPred As %String, pD
 }
 
 /// 1 when Graph_KG.rdf_edges carries the adjacency functional index (spec 252): its row writes then
-/// maintain ^KG("out"/"in"), and a writer that also calls Put would do the work twice.
+/// maintain ^KG("out"/"in"), and a writer that also calls Put would do the work twice. 4.7.0: the index of that
+/// name must be a functional one (a TypeClass, Graph.KG.AdjIndex); a plain index named idx_edges_adj maintains no
+/// ^KG, and taking it for the adjacency index left every write's ^KG unwritten.
 ClassMethod Indexed() As %Boolean
 {
-	Quit ##class(%Dictionary.CompiledIndex).%ExistsId("Graph.KG.rdfedges||idxedgesadj")
+	Set tIdx = ##class(%Dictionary.CompiledIndex).%OpenId("Graph.KG.rdfedges||idxedgesadj", 0)
+	If '$IsObject(tIdx) {
+		Quit 0
+	}
+	Quit (tIdx.TypeClass '= "")
 }
 
 /// ADR-0009: the structural row a temporal edge implies, marked {"temporal": true}, with its two endpoint

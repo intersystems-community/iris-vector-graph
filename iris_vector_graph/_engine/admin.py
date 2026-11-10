@@ -522,6 +522,17 @@ class AdminMixin:
             kg_predicates_consistent=kg_predicates_consistent,
             bfs_path="none",
         )
+        try:
+            from iris_vector_graph.schema import GraphSchema
+
+            adjacency.index = GraphSchema.adjacency_index_kind(cursor, schema=self._ivg_schema)
+        except Exception as e:
+            errors.append(f"adjacency index probe failed (%Dictionary.CompiledIndex): {e}")
+        if adjacency.index == "plain":
+            errors.append(
+                f"{self._ivg_schema}.rdf_edges' idx_edges_adj is a plain index, not the adjacency index "
+                "(Graph.KG.AdjIndex): IVG's writers keep ^KG themselves until initialize_schema() replaces it"
+            )
 
         os_classes = []
         try:
