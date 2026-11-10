@@ -21,7 +21,7 @@ class PurgeResult(NamedTuple):
     """Return value of purge_raw_before: counts of deleted and skipped edges.
 
     int(result) == result.deleted for backward-compatible callers. ``nodes_retired`` is the number of
-    endpoint nodes deleted because the purge left them bare; it is 0 unless ``retire_bare_nodes=True``.
+    endpoint nodes deleted because the purge left them bare; it is 0 with ``retire_bare_nodes=False``.
     """
 
     deleted: int
@@ -620,7 +620,7 @@ class TemporalMixin:
             "Graph.KG.TemporalIndex", "RebuildLatest", validate_graph_name(graph),
         ))
 
-    def purge_before(self, ts: int, retire_bare_nodes: bool = False) -> int:
+    def purge_before(self, ts: int, retire_bare_nodes: bool = True) -> int:
         """Delete the default graph's temporal edges older than ``ts``, aggregates included; no other
         graph is touched.
 
@@ -630,9 +630,9 @@ class TemporalMixin:
         and ``purge_bucket_range`` for any named graph.
 
         Deletes structural rows too, as ``purge_raw_before`` does (spec 254): the
-        marked row of every triple none of whose timestamps survive. With
-        ``retire_bare_nodes=True`` it also deletes the endpoint nodes that leaves bare
-        (see ``purge_raw_before``) and returns how many; otherwise it returns 0.
+        marked row of every triple none of whose timestamps survive. It also deletes the endpoint nodes
+        that leaves bare (see ``purge_raw_before``) and returns how many; with ``retire_bare_nodes=False``
+        it keeps them and returns 0 (the default before 4.7.0).
         """
         return int(self._iris_obj().classMethodValue(
             "Graph.KG.TemporalIndex", "PurgeBefore", int(ts),
@@ -655,7 +655,7 @@ class TemporalMixin:
 
     def purge_raw_before(
         self, ts_end: int, ts_start: int = 0, graph: Optional[str] = None,
-        retire_bare_nodes: bool = False,
+        retire_bare_nodes: bool = True,
     ) -> "PurgeResult":
         """Delete one graph's raw temporal edges with ``ts_start <= ts < ts_end``, and the structural
         rows only they asserted; the aggregates and ``^KG("labelset")`` (append-only) stay.
@@ -665,17 +665,18 @@ class TemporalMixin:
         timestamp was purged is deleted too, with its ``^KG("out"/"in")``
         entries, while the row still carries the temporal marker. A row a
         non-temporal write asserted (``create_edge``, ``bulk_create_edges``)
-        stays. Nodes stay by default; the degree of a node left with no edge is 0.
+        stays.
 
-        With ``retire_bare_nodes=True`` each endpoint of a retired triple that the purge left
+        By default (4.7.0; ``retire_bare_nodes=False`` before) each endpoint of a retired triple that the purge left
         BARE in this graph is deleted too: no edge names it (as source or target), and it has
         no label, property, document or embedding. Only endpoints of the retired triples are
         looked at, so a node created on purpose and never used in a temporal edge is never a
         candidate; a node created on purpose, used only by a temporal edge, with nothing else
         on it, is bare when that edge goes and is deleted. The deletion is race-safe (the
-        foreign keys refuse it while a writer's edge exists, committed or not). Off by default
-        because it changes what survives a purge. For nodes an earlier purge already left,
-        use ``erase_bare_nodes``.
+        foreign keys refuse it while a writer's edge exists, committed or not). It was off by default
+        until 4.7.0, so a workload writing a new target node per event grew edgeless nodes without
+        limit (opsreview: 941 nodes to 7.2 million); ``retire_bare_nodes=False`` keeps every endpoint,
+        whose degree is then 0. For nodes an earlier purge already left, use ``erase_bare_nodes``.
 
         Returns PurgeResult(deleted, skipped, nodes_retired). int(result) == result.deleted.
         """
@@ -694,7 +695,7 @@ class TemporalMixin:
         have no label, property, document or embedding.
 
         The sweep for the nodes a temporal workload left behind: every distinct target of a
-        temporal edge is a node, and a purge without ``retire_bare_nodes=True`` leaves it.
+        temporal edge is a node, and a purge before 4.7.0 (or with ``retire_bare_nodes=False``) left it.
         Race-safe against a writer adding an edge, a label or an embedding: the foreign keys
         refuse the delete while a dependant exists, committed or not, and that node is counted
         as ``kept``. A property or document written to a node after the sweep has judged it bare

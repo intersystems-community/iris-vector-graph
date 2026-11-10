@@ -100,10 +100,11 @@ def test_a_purge_without_the_option_leaves_the_nodes(env):
     engine, native, conn, g = env
     _temporal(engine, _span_edges(6), g)
     assert len(_nodes(conn, g)) == 7
-    res = engine.purge_raw_before(T0 + HOUR, graph=g)
+    # 4.7.0 row 6: the option is on by default; turned off, a purge keeps the nodes as every purge did before
+    res = engine.purge_raw_before(T0 + HOUR, graph=g, retire_bare_nodes=False)
     assert res.deleted == 6
     assert getattr(res, "nodes_retired", 0) == 0
-    assert len(_nodes(conn, g)) == 7  # "Nodes stay": the documented behaviour, unchanged when the option is off
+    assert len(_nodes(conn, g)) == 7  # "Nodes stay": the documented behaviour when the option is off
 
 
 # ------------------------------------------------------------------------------------------ purge, option on
@@ -309,7 +310,7 @@ def test_the_sweep_keeps_a_node_an_embedding_in_a_routed_table_holds(env):
 def test_the_sweep_erases_the_backlog_a_temporal_workload_made(env):
     engine, native, conn, g = env
     _temporal(engine, _span_edges(120), g)
-    engine.purge_raw_before(T0 + HOUR, graph=g)  # today's purge: nodes stay
+    engine.purge_raw_before(T0 + HOUR, graph=g, retire_bare_nodes=False)  # a purge before 4.7.0: nodes stay
     assert len(_nodes(conn, g)) == 121
     dry = engine.erase_bare_nodes(graph=g, dry_run=True)
     assert dry.bare == 121

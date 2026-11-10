@@ -75,8 +75,8 @@ class TestPurgeRawBefore:
         store = IRISGraphStore.__new__(IRISGraphStore)
         store._call_classmethod = MagicMock(return_value="5")
         result = store.purge_raw_before(250)
-        store._call_classmethod.assert_called_once_with(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore", "", "250", "0"
+        store._call_classmethod.assert_called_once_with(  # 4.7.0 row 6: retire_bare_nodes is on by default
+            "Graph.KG.TemporalIndex", "PurgeRawBefore", "", "250", "0", 1
         )
         assert result.deleted == 5
 

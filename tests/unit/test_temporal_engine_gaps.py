@@ -73,8 +73,8 @@ class TestPurgeRawBeforeV2:
         store = IRISGraphStore.__new__(IRISGraphStore)
         store._call_classmethod = MagicMock(return_value="5:0")
         store.purge_raw_before(250, ts_start=100)
-        store._call_classmethod.assert_called_once_with(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore", "", "250", "100"
+        store._call_classmethod.assert_called_once_with(  # 4.7.0 row 6: retire_bare_nodes is on by default
+            "Graph.KG.TemporalIndex", "PurgeRawBefore", "", "250", "100", 1
         )
 
     def test_store_calls_classmethod_default_zero(self):
@@ -84,7 +84,7 @@ class TestPurgeRawBeforeV2:
         store._call_classmethod = MagicMock(return_value="3:0")
         store.purge_raw_before(500)
         store._call_classmethod.assert_called_once_with(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore", "", "500", "0"
+            "Graph.KG.TemporalIndex", "PurgeRawBefore", "", "500", "0", 1
         )
 
     def test_negative_tsstart_clamped_to_zero(self):
@@ -109,7 +109,7 @@ class TestPurgeRawBeforeV2:
     def test_engine_passes_tsstart_to_store(self):
         engine, store = _make_engine()
         engine.purge_raw_before(ts_end=500, ts_start=200)
-        store.purge_raw_before.assert_called_once_with(500, ts_start=200, graph=None, retire_bare_nodes=False)
+        store.purge_raw_before.assert_called_once_with(500, ts_start=200, graph=None, retire_bare_nodes=True)
 
 
 # ─── US2: BulkInsert sri key ──────────────────────────────────────────────────

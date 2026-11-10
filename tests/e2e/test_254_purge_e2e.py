@@ -112,7 +112,8 @@ def test_a_48_hour_purge_equals_a_graph_that_only_held_48_hours(env):
     assert _degree(native, g, "inst:old") == 5  # warm the degree cache before the purge
 
     expired = [e for e in load if e["ts"] < CUTOFF] + [{"ts": T0 + 5}]
-    res = engine.purge_raw_before(CUTOFF, graph=g)
+    # scenario 3 is spec 254's purge that keeps the nodes: off since 4.7.0's default (row 6), asked for here
+    res = engine.purge_raw_before(CUTOFF, graph=g, retire_bare_nodes=False)
     assert res.deleted == len(expired) and res.skipped == 0
 
     # every store but the aggregates (kept by design), nodes (scenario 3) and gen (a history counter)

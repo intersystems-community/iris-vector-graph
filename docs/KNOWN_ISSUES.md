@@ -86,25 +86,6 @@ r = engine.execute_cypher(
 # → [{'id': 'co1', 'deg': 2}]
 ```
 
-### A temporal purge keeps the endpoint nodes of the edges it removes
-
-- **Symptom:** `purge_raw_before` and `purge_before` delete the old temporal edges but keep every node at either end, so
-  a workload that creates a new target node per event grows edgeless nodes without limit.
-- **Versions:** 4.4.1 and later (the option exists; the default is unchanged).
-- **Workaround:** pass `retire_bare_nodes=True`. For nodes left by earlier purges, run
-  `engine.erase_bare_nodes(graph, dry_run=True)` to see what would go, then `engine.erase_bare_nodes(graph)`.
-- **Check:** `nodes_retired` in the result.
-
-```python
-t0 = 1_700_000_000
-for i in range(3):
-    engine.create_edge_temporal("sensor", "EMITS", f"reading{i}", timestamp=t0 + i)
-engine.purge_raw_before(t0 + 100, retire_bare_nodes=True).nodes_retired
-# → 4
-```
-
-The sensor and its three readings have no edges left, so all four go.
-
 ### A relationship property computed from the row is refused between matched nodes
 
 - **Symptom:** a `CREATE` or `MERGE` between nodes an earlier `MATCH` bound, whose relationship property is computed

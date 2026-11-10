@@ -2792,7 +2792,7 @@ class IRISGraphStore:
 
     def purge_raw_before(
         self, ts_end: int, ts_start: int = 0, graph: Optional[str] = None,
-        retire_bare_nodes: bool = False,
+        retire_bare_nodes: bool = True,
     ):
         from iris_vector_graph._engine.temporal import PurgeResult
 

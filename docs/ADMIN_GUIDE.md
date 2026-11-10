@@ -1163,12 +1163,13 @@ pair has no route, the widths disagree, or the node is not in that graph. The 4.
 ### Retiring temporal nodes
 
 A temporal edge asserts its two endpoint nodes and a marked structural row (ADR-0009). The purge deletes the row when
-the triple's last timestamp goes and, unless asked, keeps the nodes: one edgeless node per distinct target. A node is
-**bare** when no edge names it and it has no label, property, document or embedding.
+the triple's last timestamp goes, and the endpoint nodes that leaves bare. A node is **bare** when no edge names it
+and it has no label, property, document or embedding.
 
-- **Going forward**, pass the option to the purge: `engine.purge_raw_before(ts_end, graph=g, retire_bare_nodes=True)`
-  (`purge_before(ts, retire_bare_nodes=True)` for the default graph). It costs about 53 µs a retired node.
-- **For nodes already there**, sweep, counting first:
+- **Going forward**, nothing to do: since 4.7.0 `purge_raw_before` and `purge_before` retire the bare endpoints by
+  default (`nodes_retired` in the result), at about 53 µs a retired node. Before 4.7.0 they kept them, one edgeless
+  node per distinct target, unless passed `retire_bare_nodes=True`; `retire_bare_nodes=False` keeps them still.
+- **For nodes an earlier purge left**, sweep, counting first:
 
 ```python
 counted = engine.erase_bare_nodes(graph="g", dry_run=True)

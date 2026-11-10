@@ -42,13 +42,14 @@ def test_purge_raw_before_parses_one_two_or_three_fields(raw, expected):
     assert tuple(store.purge_raw_before(100, retire_bare_nodes=raw.count(":") == 2)) == expected
 
 
-def test_the_option_is_sent_only_when_asked_for():
-    store, calls = _store("1:0")
-    store.purge_raw_before(100, graph="g")
-    assert calls[-1][1] == "PurgeRawBefore" and len(calls[-1][2]) == 3
+def test_the_option_is_sent_unless_turned_off():
+    """4.7.0 row 6: on by default; turned off, the call keeps the three arguments a class older than it takes."""
     store, calls = _store("1:0:1")
-    store.purge_raw_before(100, graph="g", retire_bare_nodes=True)
-    assert len(calls[-1][2]) == 4 and calls[-1][2][3] == 1
+    store.purge_raw_before(100, graph="g")
+    assert calls[-1][1] == "PurgeRawBefore" and len(calls[-1][2]) == 4 and calls[-1][2][3] == 1
+    store, calls = _store("1:0")
+    store.purge_raw_before(100, graph="g", retire_bare_nodes=False)
+    assert len(calls[-1][2]) == 3
 
 
 def test_erase_bare_nodes_sends_the_arguments_in_the_order_the_class_takes_them_and_parses_the_counts():

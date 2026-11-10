@@ -1025,7 +1025,9 @@ mean of the weights 1, 2 and 5 is `2.666667`, not `8 / 3`. For the exact mean, d
 them for every source at once, over exactly the window too (from 4.6.0). `get_edge_velocity` and `find_burst_nodes` count recent
 edges relative to now; pass `now_ts=` to anchor them to your data's time.
 
-**Retention.** `purge_raw_before(ts)` deletes the raw edges older than `ts` and keeps the aggregates:
+**Retention.** `purge_raw_before(ts)` deletes the raw edges older than `ts`, and the endpoint nodes that leaves with
+no edge, label, property, document or embedding (4.7.0; `retire_bare_nodes=False` keeps them), and keeps the
+aggregates:
 
 ```python
 int(engine.purge_raw_before(T + 300))

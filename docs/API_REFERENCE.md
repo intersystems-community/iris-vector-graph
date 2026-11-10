@@ -2098,7 +2098,7 @@ The predicates registered temporal-only in `graph`, sorted.
 #### `purge_before`
 
 ```python
-def purge_before(ts: 'int', retire_bare_nodes: 'bool' = False) -> 'int'
+def purge_before(ts: 'int', retire_bare_nodes: 'bool' = True) -> 'int'
 ```
 
 Delete the default graph's temporal edges older than `ts`, aggregates included; no other graph is touched.
@@ -2122,7 +2122,7 @@ def purge_raw_before(
     ts_end: 'int',
     ts_start: 'int' = 0,
     graph: 'Optional[str]' = None,
-    retire_bare_nodes: 'bool' = False,
+    retire_bare_nodes: 'bool' = True,
 ) -> "'PurgeResult'"
 ```
 
