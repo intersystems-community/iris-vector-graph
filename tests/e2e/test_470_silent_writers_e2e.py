@@ -247,6 +247,7 @@ def held_writer_lock():
     finally:
         try:
             other.unlock("", "^IVG.AdjW", 0)
+            other.kill("^IVG.AdjNoLock")  # the lock-less writes' marker, which sync() would clear (status() reads it)
         finally:
             holder.close()
 

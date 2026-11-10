@@ -59,6 +59,17 @@ def arno_status(native, *, deployed: bool, loaded: bool, version: str, capabilit
                       lib_found=lib_found)
 
 
+def _degree_cache_off(native) -> List[str]:
+    """The names of the graphs ``^IVG.AdjNoLock`` holds (4.7.0 row 17); "" is the default graph (key 0)."""
+    out: List[str] = []
+    key = native.nextSubscript(False, "^IVG.AdjNoLock", "")
+    # a subscript is a graph key: 0 or a graph name; anything else (no Native API answer) ends the walk
+    while isinstance(key, (str, int)) and not isinstance(key, bool) and key != "":
+        out.append("" if str(key) == "0" else str(key))
+        key = native.nextSubscript(False, "^IVG.AdjNoLock", key)
+    return out
+
+
 def _first_adjacency_entry(native):
     """``(graph, s, p, o)`` of the first edge in ``^KG("out", graph key, s, p, o)`` in collation order, or None when
     there is none. ``graph`` is the graph's name ("" for the default graph, whose key is 0; Graph.KG.GraphKey).
@@ -537,6 +548,21 @@ class AdminMixin:
             errors.append(
                 f"{self._ivg_schema}.rdf_edges' idx_edges_adj is a plain index, not the adjacency index "
                 "(Graph.KG.AdjIndex): IVG's writers keep ^KG themselves until initialize_schema() replaces it"
+            )
+        elif adjacency.index == "absent":
+            errors.append(
+                f"{self._ivg_schema}.rdf_edges has no adjacency index (idx_edges_adj): Cypher writes won't maintain "
+                "^KG; run initialize_schema()"
+            )
+        try:
+            adjacency.degree_cache_off = _degree_cache_off(self._iris_obj())
+        except Exception as e:
+            errors.append(f"degree cache probe failed (^IVG.AdjNoLock): {e}")
+        for graph in adjacency.degree_cache_off:
+            where = "the default graph" if graph == "" else f"graph {graph!r}"
+            errors.append(
+                f"the degree cache of {where} is off: a write went in without the adjacency writer lock "
+                "(Graph.KG.Adjacency.WriterLock); run engine.sync() to clear"
             )
 
         os_classes = []

@@ -114,3 +114,52 @@ def test_setup_replaces_the_plain_index(plain_index):
     assert eng2._adjacency_indexed is True
     assert eng2.create_edge(f"{u}a", "R470I", f"{u}b")
     assert _kg_out(conn, f"{u}a", "R470I", f"{u}b") > 0
+
+
+@pytest.fixture
+def no_index():
+    conn = _connect()
+    cur = conn.cursor()
+    assert _type_class(conn) == ["Graph.KG.AdjIndex"], "the namespace does not start with the adjacency index"
+    cur.execute("DROP INDEX idx_edges_adj ON Graph_KG.rdf_edges")
+    assert _type_class(conn) == []
+    yield conn
+    try:
+        if _type_class(conn) != ["Graph.KG.AdjIndex"]:
+            cur.execute(
+                "CREATE INDEX idx_edges_adj ON Graph_KG.rdf_edges (graph_id, s, p, o_id, qualifiers, ekey) "
+                "AS Graph.KG.AdjIndex"
+            )
+    finally:
+        conn.close()
+
+
+def test_status_reports_a_missing_adjacency_index(no_index):
+    """4.7.0: without the index a Cypher write keeps no ^KG (it writes rows only); status() says so."""
+    st = _engine(no_index).status()
+    assert st.adjacency.index == "absent", st.adjacency
+    assert any("idx_edges_adj" in e and "Cypher writes won't maintain ^KG" in e and "initialize_schema()" in e
+               for e in st.errors), st.errors
+
+
+def test_status_reports_a_graph_whose_degree_cache_is_off():
+    """4.7.0 row 17: a write without the writer lock marks the graph in ^IVG.AdjNoLock, which turns its degree cache
+    off until sync(); status() names the graph until then."""
+    import iris
+
+    conn = _connect()
+    try:
+        native = iris.createIRIS(conn)
+        native.set(1, "^IVG.AdjNoLock", 0)  # as Graph.KG.Adjacency.WriterLock leaves it
+        eng = _engine(conn)
+        st = eng.status()
+        assert st.adjacency.degree_cache_off == [""], st.adjacency
+        assert any("degree cache" in e and "run engine.sync() to clear" in e and "default graph" in e
+                   for e in st.errors), st.errors
+        eng.sync()
+        st = eng.status()
+        assert st.adjacency.degree_cache_off == []
+        assert not any("degree cache" in e for e in st.errors), st.errors
+    finally:
+        native.kill("^IVG.AdjNoLock")
+        conn.close()

@@ -35,6 +35,9 @@ class AdjacencyStatus:
     # every row write), "plain" (an ordinary index of that name, which keeps no ^KG: initialize_schema() replaces it),
     # "absent", or "unknown" when the probe failed (named in `errors`)
     index: str = "unknown"
+    # 4.7.0 row 17: the graphs ("" the default graph) a write went into without the adjacency writer lock
+    # (^IVG.AdjNoLock): their degree cache stores nothing until engine.sync() rebuilds ^KG
+    degree_cache_off: List[str] = field(default_factory=list)
 
 
 @dataclass
