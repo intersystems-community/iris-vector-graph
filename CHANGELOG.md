@@ -47,10 +47,10 @@ InvalidArgumentType: * needs two numbers and got a value that is not one`. The P
 0.5)` does not, and `CALL ivg.shortestPath.weighted({from: 'a', to: 'c'})` answered no rows and no error. `ivg.ppr`,
   `ivg.shortestPath.weighted`, `ivg.bm25.search`, `ivg.ivf.search`, `ivg.retrieve` and `ivg.neighbors` now raise
   `ValueError` for a map, naming their arguments as USER_GUIDE does (`ivg.ppr takes positional arguments (seeds, alpha,
-maxIter), not an options map`), and `ivg.shortestPath.weighted` raises without `from` and `to`. `ivg.ppr`'s messages
-  name `seeds` and `maxIter`, and `ivg.retrieve`'s `query`, where they said `seed_ids`, `max_iter` and `query_text`.
-  **What to do:** pass these procedures' values by position, as USER_GUIDE's table lists them: `CALL ivg.ppr(['a'], 0.5,
-20)`.
+maxIter), not an options map`), and `ivg.shortestPath.weighted` raises without `from` and `to`, or for a `$from` or
+  `$to` no parameter supplies (it answered no rows). `ivg.ppr`'s messages name `seeds` and `maxIter`, and
+  `ivg.retrieve`'s `query`, where they said `seed_ids`, `max_iter` and `query_text`. **What to do:** pass these
+  procedures' values by position, as USER_GUIDE's table lists them: `CALL ivg.ppr(['a'], 0.5, 20)`.
 - **A write refused for an old namespace raises the `IVGSchemaError` the docs name.** On a namespace whose classes
   predate 4.6.4, `create_edge` (or any write method) inside your open transaction raised `GraphWriteError`
   ("Graph_KG.Txn_Begin is not in this namespace ..."), not the `IVGSchemaError` that the USER_GUIDE and the v4.6.4 entry

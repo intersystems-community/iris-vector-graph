@@ -187,8 +187,8 @@ def test_an_index_search_with_good_arguments_translates():
     ("CALL ivg.retrieve('q', 'ten') YIELD node RETURN node", r"ivg\.retrieve.*limit"),
     ("CALL ivg.neighbors(['a'], 5) YIELD neighbor RETURN neighbor", r"ivg\.neighbors.*predicate"),
     ("CALL ivg.ppr(['a'], 'x', 3) YIELD node, score RETURN node", r"ivg\.ppr.*alpha"),
-    ("CALL ivg.ppr(['a'], 0.85, 'x') YIELD node, score RETURN node", r"ivg\.ppr.*max_iter"),
-    ("CALL ivg.ppr(['a'], 0.85, 2.5) YIELD node, score RETURN node", r"ivg\.ppr.*max_iter"),
+    ("CALL ivg.ppr(['a'], 0.85, 'x') YIELD node, score RETURN node", r"ivg\.ppr: maxIter must be"),
+    ("CALL ivg.ppr(['a'], 0.85, 2.5) YIELD node, score RETURN node", r"ivg\.ppr: maxIter must be"),
 ])
 def test_a_procedure_argument_of_the_wrong_type_is_named(query, message):
     with pytest.raises(ValueError, match=message):

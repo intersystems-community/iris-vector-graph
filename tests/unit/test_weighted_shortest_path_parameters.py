@@ -6,6 +6,8 @@ node, and the CALL answered zero rows with no error (bench.py Q6 timed exactly t
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from iris_vector_graph import engine as engine_module
 from iris_vector_graph.engine import IRISGraphEngine
 
@@ -37,5 +39,6 @@ def test_literal_arguments_still_work():
 
 
 def test_a_missing_parameter_is_an_error_not_a_node_named_after_it():
-    _, result = _run(QUERY, {"a": "node_1"})
-    assert not result.rows  # no search for a node literally called "b"
+    """4.6.5: it raises, where it answered no rows and no error (no search for a node literally called "b")."""
+    with pytest.raises(ValueError, match=r"^ivg\.shortestPath\.weighted: to parameter not supplied$"):
+        _run(QUERY, {"a": "node_1"})
