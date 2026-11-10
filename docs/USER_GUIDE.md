@@ -272,8 +272,16 @@ The write runs in IRIS as a nested ObjectScript transaction level (`TSTART` unde
 predate 4.6.4 has none: run `initialize_schema()`. Until then a write inside your transaction raises `IVGSchemaError`
 before writing anything, rather than commit your work.
 
-Not part of your transaction: `bulk_load_session` (it drops and rebuilds indexes), `embed_nodes` and `embed_edges`
-(they commit each batch), the ledger's `commit` (it refuses to run inside one), and schema setup and upgrades. A
+`bulk_load_session` and `embed_nodes` join your transaction too (4.7.0; they used to commit it). Inside one,
+`bulk_load_session` leaves the indexes in place instead of dropping and rebuilding them, tunes no tables, does not
+retry on a dropped connection, and leaves the adjacency to `sync()` after your commit (`status().pending_sync` is True
+until then). The first vector `embed_nodes` (or `store_embeddings`) stores for a named graph or a new `model_key` makes
+that route's table, which cannot wait for your commit: inside your transaction that raises `CallerTransactionOpenError`
+before anything is written, so store the first one outside it. `initialize_schema()` raises `CallerTransactionOpenError`
+inside your transaction, before doing anything: setup commits as it goes and compiles classes.
+
+Not part of your transaction: `embed_edges` (it commits each batch), the ledger's `commit` (it refuses to run inside
+one), and upgrades. A
 write that IVG sends over a Native API connection of its own (an engine made with `from_connect`: the temporal edge
 stores, `^KG` on a namespace without the adjacency index) runs in another IRIS process, outside your transaction.
 

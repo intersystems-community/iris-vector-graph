@@ -17,6 +17,9 @@ import pytest
 from iris_vector_graph import IRISGraphEngine, IVGSchemaError
 
 MARKER_GRAPH_KG = "Graph.KG.funcCYCMP"
+#: the mock's cursor answers (5,) to every SELECT, $TLEVEL too, which setup (4.7.0) reads as a caller's open
+#: transaction and refuses: these tests are of the namespace check, with no caller transaction
+_NO_CALLER_TXN = patch("iris_vector_graph._write_txn.caller_transaction_level", return_value=None)
 
 
 class FakeNative:
@@ -172,7 +175,8 @@ def test_initialize_schema_dry_run_is_not_blocked_on_a_not_upgraded_namespace(na
     eng = _engine(conn, native)
     with patch("iris_vector_graph._engine.legacy.present_legacy_objects", return_value=[]), \
             patch("iris_vector_graph._engine.legacy.grant_read_path", return_value=[]), \
-            patch.object(IRISGraphEngine, "_ivg_table_schemas", return_value={}, create=False):
+            patch.object(IRISGraphEngine, "_ivg_table_schemas", return_value={}, create=False), \
+            _NO_CALLER_TXN:
         out = eng.initialize_schema(dry_run=True)
     assert out["dry_run"] is True and out["schema"] == "Graph_KG" and out["schema_recorded"] == "new"
 
@@ -205,7 +209,7 @@ def test_setup_releases_the_wrappers(native_patch):
     eng = _engine(conn, native)
     assert "create_node" in vars(eng)
     with patch.object(IRISGraphEngine, "_record_and_initialize", return_value={"schema": "Graph_KG"}), \
-            patch.object(IRISGraphEngine, "_build_index_registry", return_value={}):
+            patch.object(IRISGraphEngine, "_build_index_registry", return_value={}), _NO_CALLER_TXN:
         eng.initialize_schema()
     assert "create_node" not in vars(eng) and "write_temporal_edge" not in vars(eng._store)
     assert eng.get_node_count() == 5

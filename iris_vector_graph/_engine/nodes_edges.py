@@ -15,7 +15,7 @@ from iris_vector_graph.constants import BULK_CHUNK_SIZE as _BULK_CHUNK_SIZE
 from iris_vector_graph.constants import DEFAULT_GRAPH
 from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED_ROW
 from iris_vector_graph._write_txn import is_duplicate as _is_duplicate
-from iris_vector_graph._write_txn import WriteTxn, write_txn
+from iris_vector_graph._write_txn import WriteTxn, caller_transaction_level, write_txn
 from iris_vector_graph.errors import GraphWriteError, IVGError
 from iris_vector_graph.prop_values import decode_typed_text, prop_value, read_node_value
 from iris_vector_graph.routing import graph_scope_predicate
@@ -371,6 +371,14 @@ class NodesEdgesMixin:
         ``incremental`` the ``^NKG`` built during the load is kept, else ``sync`` runs. The
         session's ``stats`` dict holds counts and timings, and ``indexes_not_rebuilt``: the indexes
         that did not come back, each also named in a WARNING (4.6.0 R257).
+
+        4.7.0: inside a transaction of the caller's (``START TRANSACTION``, or the driver's autocommit off) the load is
+        part of it, as each ``bulk_create_nodes`` and ``bulk_ingest_edges`` call is: the caller's rollback takes it
+        back and the caller's commit keeps it. The session then leaves the indexes in place (no drop and rebuild),
+        tunes no tables, does not retry on a dropped connection (a new connection is outside the caller's
+        transaction), and leaves the adjacency to rebuild after the caller's commit: ``status().pending_sync`` is
+        True until ``sync()``, as after ``bulk_ingest_edges(auto_sync=False)``. ``stats["in_caller_transaction"]``
+        says which way it ran. It used to call ``conn.commit()``, which committed the caller's work.
         """
         _ledger_check(self, "bulk_load_session")
         from contextlib import contextmanager
@@ -390,14 +398,19 @@ class NodesEdgesMixin:
                 "sync_seconds": 0.0,
                 "incremental": incremental,
             }
-            if rebuild_indexes:
+            # 4.7.0: inside the caller's transaction, nothing here may commit it (see the docstring)
+            in_caller = caller_transaction_level(self.conn) is not None
+            stats["in_caller_transaction"] = in_caller
+            drop_indexes = rebuild_indexes and not in_caller
+            retries = 0 if in_caller else max_retries
+            if drop_indexes:
                 try:
                     GraphSchema.disable_indexes(self.conn.cursor(), schema=self._ivg_schema)
                     self.conn.commit()
                 except Exception as e:
                     logger.warning("bulk_load_session: disable_indexes skipped: %s", str(e)[:120])
 
-            if incremental:
+            if incremental and not in_caller:
                 try:
                     self._iris_obj().classMethodValue("Graph.KG.Traversal", "InitNKGSkeleton")
                 except Exception as e:
@@ -411,7 +424,7 @@ class NodesEdgesMixin:
             else:
                 incremental_ok = False
 
-            session = _BulkLoadSession(self, stats, max_retries)
+            session = _BulkLoadSession(self, stats, retries)
             self._in_bulk_load = True
             t0 = _time.perf_counter()
             try:
@@ -419,54 +432,59 @@ class NodesEdgesMixin:
             finally:
                 self._in_bulk_load = False
                 stats["load_seconds"] = round(_time.perf_counter() - t0, 2)
-                if rebuild_indexes:
-                    tr = _time.perf_counter()
-                    try:
-                        stats["indexes_not_rebuilt"] = _rebuild_after_load(
-                            self.conn.cursor(), self._ivg_schema, "bulk_load_session"
-                        )
-                        self.conn.commit()
-                    except Exception as e:
-                        logger.warning(
-                            "bulk_load_session: rebuild_indexes failed: %s", str(e)[:120]
-                        )
-                    stats["index_rebuild_seconds"] = round(_time.perf_counter() - tr, 2)
-                if stats["nodes"] + stats["edges"] >= TUNE_AFTER_ROWS:
-                    # schema setup tuned the tables while they were empty, so the optimizer planned every read after
-                    # a load for empty tables (DRKG: MIN/MAX(graph_id) read all 97,238 nodes, 90 ms, against 0.3 ms
-                    # tuned); tuning also drops the namespace's cached plans, which a small load is not worth
-                    tt = _time.perf_counter()
-                    try:
-                        GraphSchema.tune_tables(self.conn.cursor(), schema=self._ivg_schema)
-                        self.conn.commit()
-                    except Exception as e:
-                        logger.warning("bulk_load_session: tune_tables failed: %s", str(e)[:120])
-                    stats["tune_seconds"] = round(_time.perf_counter() - tt, 2)
-                ts = _time.perf_counter()
-                if incremental_ok and not self._bulk_load_drifted():
-                    self._nkg_dirty = False
-                    # The load wrote adjacency through Graph.KG.Adjacency, which bumps generations and fills no
-                    # cache. Warm it once now (one pass over the sources) so the first reader and Build2HopStats
-                    # find every degree ready, as they found the stored counters before ADR-0012. Answers are
-                    # exact either way; a failure only leaves the cache cold, so say so and carry on.
-                    try:
-                        self._iris_obj().classMethodValue("Graph.KG.Adj", "WarmCache")
-                    except Exception as e:
-                        logger.warning("bulk_load_session: degree cache warm-up failed (readers recount): %s", str(e)[:120])
-                    try:
-                        self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopStats")
-                    except Exception:
-                        pass
+                if in_caller:
+                    # the rows are the caller's until it commits: the adjacency is rebuilt after (sync()). No return
+                    # here: in a finally it would swallow the load's own error
+                    self._nkg_dirty = True
                 else:
-                    if incremental_ok:
-                        logger.warning(
-                            "bulk_load_session: ^NKG drift detected — running full sync()"
-                        )
-                    try:
-                        self.sync()
-                    except Exception as e:
-                        logger.warning("bulk_load_session: final sync() failed: %s", str(e)[:120])
-                stats["sync_seconds"] = round(_time.perf_counter() - ts, 2)
+                    if drop_indexes:
+                        tr = _time.perf_counter()
+                        try:
+                            stats["indexes_not_rebuilt"] = _rebuild_after_load(
+                                self.conn.cursor(), self._ivg_schema, "bulk_load_session"
+                            )
+                            self.conn.commit()
+                        except Exception as e:
+                            logger.warning(
+                                "bulk_load_session: rebuild_indexes failed: %s", str(e)[:120]
+                            )
+                        stats["index_rebuild_seconds"] = round(_time.perf_counter() - tr, 2)
+                    if stats["nodes"] + stats["edges"] >= TUNE_AFTER_ROWS:
+                        # schema setup tuned the tables while they were empty, so the optimizer planned every read after
+                        # a load for empty tables (DRKG: MIN/MAX(graph_id) read all 97,238 nodes, 90 ms, against 0.3 ms
+                        # tuned); tuning also drops the namespace's cached plans, which a small load is not worth
+                        tt = _time.perf_counter()
+                        try:
+                            GraphSchema.tune_tables(self.conn.cursor(), schema=self._ivg_schema)
+                            self.conn.commit()
+                        except Exception as e:
+                            logger.warning("bulk_load_session: tune_tables failed: %s", str(e)[:120])
+                        stats["tune_seconds"] = round(_time.perf_counter() - tt, 2)
+                    ts = _time.perf_counter()
+                    if incremental_ok and not self._bulk_load_drifted():
+                        self._nkg_dirty = False
+                        # The load wrote adjacency through Graph.KG.Adjacency, which bumps generations and fills no
+                        # cache. Warm it once now (one pass over the sources) so the first reader and Build2HopStats
+                        # find every degree ready, as they found the stored counters before ADR-0012. Answers are
+                        # exact either way; a failure only leaves the cache cold, so say so and carry on.
+                        try:
+                            self._iris_obj().classMethodValue("Graph.KG.Adj", "WarmCache")
+                        except Exception as e:
+                            logger.warning("bulk_load_session: degree cache warm-up failed (readers recount): %s", str(e)[:120])
+                        try:
+                            self._iris_obj().classMethodValue("Graph.KG.Traversal", "Build2HopStats")
+                        except Exception:
+                            pass
+                    else:
+                        if incremental_ok:
+                            logger.warning(
+                                "bulk_load_session: ^NKG drift detected — running full sync()"
+                            )
+                        try:
+                            self.sync()
+                        except Exception as e:
+                            logger.warning("bulk_load_session: final sync() failed: %s", str(e)[:120])
+                    stats["sync_seconds"] = round(_time.perf_counter() - ts, 2)
 
         return _session()
 
@@ -1714,7 +1732,8 @@ class NodesEdgesMixin:
                         # params: [s, label, s, label]
                         all_labels.append((node_id, label, node_id, label))
 
-                props = node.get("properties", {})
+                # a copy: the `id` added below went into the caller's own dict (4.7.0; create_node copies too)
+                props = dict(node.get("properties") or {})
                 if "id" not in props:
                     props["id"] = node_id
 

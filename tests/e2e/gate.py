@@ -127,6 +127,11 @@ GROUPS: Dict[str, Group] = {
     # 4.6.4: test_464_caller_txn_e2e makes a table of its own (the caller's rows) beside IVG's and opens transactions
     # on several connections at once, so it has a namespace to itself.
     "r464txn": Group("IVG_R464_TXN_NS", "464T", "graph_kg"),
+    # 4.7.0: test_470_caller_txn_e2e is 4.6.4's pattern for the writers 4.6.4 left out (a caller table of its own);
+    # test_470_ledger_caller_txn_e2e enables the ledger and verifies it against the whole graph, so no other file may
+    # write there.
+    "r470txn": Group("IVG_R470_TXN_NS", "470T", "graph_kg"),
+    "r470ledger": Group("IVG_R470_LEDGER_NS", "470L", "graph_kg"),
     # 4.6.5: test_465_write_schema_error_e2e deletes Txn_Begin from the classes of a namespace of its own (and puts
     # them back); test_465_stale_error_text_e2e makes a user holding the reading role there and runs failing writes.
     "r465legacy": Group("IVG_R465_LEGACY_NS", "465L", "name"),

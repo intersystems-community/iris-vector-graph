@@ -2083,8 +2083,20 @@ class SchemaMixin:
         (``needs_manual_migration``; 4.6.0 R207). On a schema other than ``Graph_KG`` whose ledger tables are empty,
         setup copies the 4.5.x ledger rows from ``Graph_KG.ledger_revisions`` and ``ledger_stats`` into them
         (``ledger_history_copied``: rows per table; 4.6.0 R114).
+
+        4.7.0: with a transaction of the caller's open on the connection (``$TLEVEL`` above 0, or the driver's
+        autocommit off), setup raises ``CallerTransactionOpenError`` before doing anything, ``dry_run`` included: it
+        commits as it goes and compiles classes, which no rollback takes back, and it committed the caller's work.
         """
+        from iris_vector_graph._write_txn import refuse_in_caller_transaction
+
         with self._schema_check_suspended():
+            # inside: reading self.conn outside runs the first-access check, which setup is how to put right
+            refuse_in_caller_transaction(
+                self.conn, "initialize_schema()",
+                "setup commits as it goes (which would commit the caller's work) and compiles classes, which no "
+                "rollback takes back",
+            )
             status = self._record_and_initialize(auto_deploy_objectscript, dry_run)
         if not dry_run:
             self._schema_check_passed()

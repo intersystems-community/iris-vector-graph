@@ -43,6 +43,7 @@ from ._engine.embeddings import EmbeddingRoute
 from ._engine.fhir_graph import CLINICAL_PARAMS, FHIR_PPR_EXCLUDE
 from ._engine.schema import EmbeddingInventoryRow, QuarantinedVector
 from .errors import (
+    CallerTransactionOpenError,
     EmbeddingsMissingError,
     GraphWriteError,
     IndexNotBuiltError,
@@ -160,6 +161,7 @@ __all__ = [
     "IVGRecord",
     "IVGError",
     "GraphWriteError",
+    "CallerTransactionOpenError",
     "ClassesUnreadable",
     "IVGClientError",
     "IVGServerError",

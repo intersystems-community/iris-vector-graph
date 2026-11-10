@@ -3008,6 +3008,12 @@ An AQL query parses but uses a construct IVG does not translate to Cypher (a nes
 
 Raised when a bulk-load batch is rejected for anything but a duplicate row.
 
+### `CallerTransactionOpenError`
+
+`from iris_vector_graph import CallerTransactionOpenError`; subclass of `IVGError`, `RuntimeError`.
+
+A call that cannot run inside the caller's open transaction was refused before it did anything (4.7.0).
+
 ### `ClassesUnreadable`
 
 `from iris_vector_graph import ClassesUnreadable`; subclass of `RuntimeError`.

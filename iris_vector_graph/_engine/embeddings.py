@@ -5,13 +5,14 @@ import logging
 import threading
 import time
 
-from iris_vector_graph._write_txn import write_txn
+from iris_vector_graph._write_txn import refuse_in_caller_transaction, write_txn
 from iris_vector_graph.constants import DEFAULT_GRAPH, VECTOR_TABLE_NAMES
 from iris_vector_graph.embedding_identity import (
     EmbeddingIdentity,
     identity_from_config,
     normalize_model_key,
 )
+from iris_vector_graph.errors import CallerTransactionOpenError
 from iris_vector_graph.exceptions import EmbeddingIdentityConflict
 from iris_vector_graph.prop_values import decode_typed_text
 from iris_vector_graph.routing import (
@@ -489,6 +490,13 @@ class EmbeddingsMixin:
         element = str(dtype or getattr(self, "vector_dtype", None) or "DOUBLE").upper()
         derive = edge_route_table_name if kind == ROUTE_KIND_EDGE else route_table_name
         table_name = derive(graph_id, model_key)
+        # 4.7.0: the route is committed below, with the caller's work: refused inside the caller's transaction
+        refuse_in_caller_transaction(
+            self.conn, f"making the embedding route {table_name} (graph {graph_id!r}, model_key {model_key!r})",
+            "a new route's table, index and registry row are committed together when it is made, and the engine "
+            "keeps it for later writes, so it cannot wait for the caller's commit or rollback. Store the first vector "
+            "of this graph and model_key outside the transaction",
+        )
 
         cursor = self.conn.cursor()
         try:
@@ -1415,7 +1423,6 @@ class EmbeddingsMixin:
                     valid_ids.append(node_id)
 
                 if not texts:
-                    self.conn.commit()
                     n_done = batch_start + len(batch_ids)
                     if progress_callback:
                         progress_callback(n_done, n_to_embed)
@@ -1462,6 +1469,8 @@ class EmbeddingsMixin:
                             items, graph=graph_id, model_key=model_key
                         )
                         embedded += len(items)
+                    except CallerTransactionOpenError:
+                        raise  # refused before anything was written: not a batch's error to count
                     except Exception as ex2:
                         logger.warning(
                             "embed_nodes: batch store failed (%d nodes): %s",
@@ -1470,7 +1479,8 @@ class EmbeddingsMixin:
                         )
                         errors += len(items)
 
-                self.conn.commit()
+                # 4.7.0: no conn.commit() here. store_embeddings commits its own part (nested in the caller's
+                # transaction when there is one); this commit ended the caller's transaction, committing its work.
                 n_done = batch_start + len(batch_ids)
                 logger.info(
                     f"embed_nodes: {n_done}/{n_to_embed} processed ({embedded} embedded)"

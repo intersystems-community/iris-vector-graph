@@ -61,6 +61,42 @@ def _driver_autocommit_off(conn) -> bool:
     return getattr(conn, "autocommit", True) is False
 
 
+def caller_transaction_level(conn) -> Optional[int]:
+    """The caller's open transaction on ``conn``: its ``$TLEVEL`` (0 when the driver's autocommit is off and the
+    caller has not written yet, which is the caller's transaction all the same), or None when there is none (4.7.0).
+
+    A connection that is not IRIS's (a stand-in) has no ``$TLEVEL`` and answers None. On IRIS's, a ``SELECT $TLEVEL``
+    that fails raises: a call that would commit the caller's work must not guess that there is none."""
+    from iris_vector_graph.schema_name import is_iris_connection
+
+    if not is_iris_connection(conn):
+        return None
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT $TLEVEL")
+        row = cur.fetchone()
+        # read before close: the driver's row dies with its cursor
+        value = None if row is None else row[0]
+    finally:
+        cur.close()
+    if value is None:
+        raise RuntimeError("SELECT $TLEVEL answered nothing")
+    level = int(value)
+    if level > 0:
+        return level
+    return 0 if _driver_autocommit_off(conn) else None
+
+
+def refuse_in_caller_transaction(conn, operation: str, why: str) -> None:
+    """Raise :class:`~iris_vector_graph.errors.CallerTransactionOpenError` when the caller has a transaction open on
+    ``conn``; nothing is sent but the ``$TLEVEL`` probe, so the caller's transaction is as it was."""
+    level = caller_transaction_level(conn)
+    if level is not None:
+        from iris_vector_graph.errors import CallerTransactionOpenError
+
+        raise CallerTransactionOpenError(operation, level, why)
+
+
 class WriteTxn:
     """IVG's own part of one write on ``conn``: ``begin()``, then ``commit()`` or ``rollback()`` (or ``with``).
 
