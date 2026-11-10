@@ -11,7 +11,12 @@ from iris_vector_graph.cypher.native_route import NativeRoute
 from iris_vector_graph.cypher.parser import parse_query
 from iris_vector_graph.cypher.read_only import split_statements, writes_cypher
 from iris_vector_graph.cypher.row_where import handler_tail, where_rows, yield_names
-from iris_vector_graph.cypher.translator import properties_subquery, translate_to_sql, unwind_by_index
+from iris_vector_graph.cypher.translator import (
+    properties_subquery,
+    rewrite_ambiguous_param_unwind,
+    translate_to_sql,
+    unwind_by_index,
+)
 from iris_vector_graph.cypher.merge_rows import plan_row_create, plan_row_merge
 from iris_vector_graph.cypher.count_create import plan_count_create
 from iris_vector_graph.result import IVGResult
@@ -1972,6 +1977,8 @@ class QueryMixin:
         last.rows = out_rows
         return last
     def _execute_parsed(self, parsed, parameters, procedures=None):
+        # before every route, so the native translation cache (keyed by repr(parsed)) keys the two reads apart
+        parsed = rewrite_ambiguous_param_unwind(parsed, parameters)
         if parsed.procedure_call is not None:
             if _handler_may_answer(parsed):
                 # `USE GRAPH` and the query's parameters live on the parsed query, not on

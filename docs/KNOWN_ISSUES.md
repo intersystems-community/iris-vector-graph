@@ -420,27 +420,34 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
 
 <a id="an-unwind-of-a-list-built-while-the-query-runs-can-read-a-nested-list-or-a-boolean-as-a-string"></a>
 
-### An UNWIND of a parameter list can read a string that spells a list as the list, and a boolean as `'1'`
+### An UNWIND of a parameter list in a query that writes can read a string that spells a list as the list
 
-- **Symptom:** over a parameter list that holds a list or map beside other kinds, an `UNWIND` variable reads a
-  string that is the same text as another element as that element: with `$p = ['[2]', [2], true, '1']`,
-  `UNWIND $p AS e RETURN e` answers `[2], [2], '1', '1'` and `RETURN collect(e)` answers
-  `['[2]', '[2]', '1', '1']` (openCypher: `'[2]', [2], true, '1'`). A list built while the query runs (a property,
-  a `collect()`, a function's answer) and a list literal answer each element as itself since 4.7.0, and so does a
-  parameter list of one kind of scalar, or one with no list or map in it.
-- **Also:** an ordering comparison (`<`, `<=`, `>`, `>=`) of an element of a list built while the query runs with
-  a date, time or duration reads the element as text, because such a list holds a temporal value as its ISO text:
-  over `collect()` of `[date('2020-01-01'), 'b']`, `x < 'c'` answers true for the date (openCypher: null). Against a
-  number, a string or a boolean, an element of another kind answers null, as openCypher does (4.7.0).
+- **Symptom:** over a parameter list that holds a list or map beside a scalar, an `UNWIND` variable reads a string
+  that is the same text as another element as that element, and a boolean as `'1'`, where the query writes (`CREATE`,
+  `MERGE`, `SET`, `DELETE`) or the `UNWIND` follows another clause: with `$p = ['[2]', [2], true, '1']`,
+  `MATCH (n:X) UNWIND $p AS e RETURN e` answers `[2], [2], '1', '1'` (openCypher: `'[2]', [2], true, '1'`). A read
+  that opens with the `UNWIND` answers each element as itself since 4.7.0, and so does a parameter list of one kind,
+  or of scalars and booleans only.
+- **Also:**
+  - an element compared with a stored property reads as its text:
+    `UNWIND $p AS e MATCH (n:X) WHERE n.id = e RETURN n.id` with `$p = ['x', [1], true]` matches a node whose `id` is
+    `'1'` for `true`;
+  - a property of a map in a parameter list reads a list as its text and a boolean as `1`: `UNWIND $p AS m RETURN m.v`
+    with `$p = [{v: [2]}, {v: true}]` answers `'[2]', 1`;
+  - an ordering comparison (`<`, `<=`, `>`, `>=`) of an element of a list built while the query runs with a date,
+    time or duration reads the element as text, because such a list holds a temporal value as its ISO text: over
+    `collect()` of `[date('2020-01-01'), 'b']`, `x < 'c'` answers true for the date (openCypher: null). Against a
+    number, a string or a boolean, an element of another kind answers null, as openCypher does (4.7.0).
 - **Cause:** IRIS's `JSON_TABLE` reads each element into one text column: a nested list as its JSON text and a
-  boolean as `'1'` or `'0'`, the same text as the string `'[1]'` or `'1'`. A list literal or one built at run time
-  goes through `CY_LIST_KINDS`, which puts each element's kind and JSON text beside it; an `UNWIND` straight from a
-  parameter cannot, because a `?` inside `JSON_TABLE(fn(...))` fails the statement on IRIS, so its elements are read
-  by their text.
-- **Versions:** 4.6.0 and earlier for every list built at run time and every literal holding a list or map; 4.7.0
-  for a parameter list.
-- **Workaround:** bind the parameter in a `WITH` first: `WITH $p AS l UNWIND l AS e RETURN e` answers
-  `'[2]', [2], true, '1'` (measured 2026-11-10, both routes), or return the list itself (`RETURN $p`).
+  boolean as `'1'` or `'0'`, the same text as the string `'[1]'` or `'1'`. A list literal, a list built at run time
+  and (since 4.7.0) a read opening with `UNWIND $p` go through `CY_LIST_KINDS`, which puts each element's kind and JSON
+  text beside it (the read is `WITH $p AS __l0 UNWIND __l0 AS e`). A `?` inside `JSON_TABLE(fn(...))` fails the
+  statement on IRIS, so the parameter is held in a `WITH` first; IVG does not do that for a query that writes, where
+  the `WITH` form's `CREATE (:X {v: e})` fails with SQLCODE -119 on `rdf_props`.
+- **Versions:** 4.6.0 and earlier for every such list; 4.7.0 for the cases above.
+- **Workaround:** for a read, open the query with the `UNWIND` (`UNWIND $p AS e MATCH (n:X) RETURN e`), or bind the
+  parameter in a `WITH` first: `WITH $p AS l UNWIND l AS e RETURN e` answers `'[2]', [2], true, '1'` (measured
+  2026-11-10, both routes). For a write, keep a list of one kind per parameter.
 - **Check:** the answer holds a list where you passed a string, or `'1'` where you passed `true`.
 
 ### A query that reads many properties prepares slowly

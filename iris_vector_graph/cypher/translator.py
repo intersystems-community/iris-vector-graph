@@ -6989,6 +6989,44 @@ def _vlp_ends_target(cypher_query) -> Optional[str]:
     return target.variable
 
 
+def _ambiguous_list(value) -> bool:
+    """A parameter list read by text where two kinds share it: a list or map beside a scalar (the string '[2]' beside
+    [2]; a boolean beside a list reads as '1'). Scalars and booleans alone carry a flag already (R273)."""
+    if not isinstance(value, (list, tuple)):
+        return False
+    kinds = {"b" if isinstance(v, bool) else "l" if isinstance(v, (list, tuple)) else "m" if isinstance(v, dict)
+             else "s" if isinstance(v, str) else "n" for v in value if v is not None}
+    return bool(kinds & {"l", "m"}) and bool(kinds & {"b", "s", "n"})
+
+
+def rewrite_ambiguous_param_unwind(cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> ast.CypherQuery:
+    """``UNWIND $p AS e ...`` opening the query, over an ambiguous list (``_ambiguous_list``), as
+    ``WITH $p AS __lN UNWIND __lN AS e ...``, which reads each element as itself through CY_LIST_KINDS (4.7.0 row 22:
+    `$p = ['[2]', [2], true, '1']` answered `[2], [2], '1', '1'`). Left alone: an UNWIND after another clause (the
+    WITH would drop that clause's variables); a query that writes (the WITH form's `CREATE (:X {v: e})` fails -119 on
+    rdf_props, where this one stores each element); a list of one kind, whose JSON_TABLE read is the fast one (the WITH
+    form reads a long list by position). A new tree: the parsed query is cached. The same tree when nothing applies,
+    so a second call is a no-op."""
+    parts = cypher_query.query_parts
+    if not parts or not parts[0].clauses or getattr(cypher_query, "writes", True):
+        return cypher_query
+    first = parts[0].clauses[0]
+    expr = getattr(first, "expression", None)
+    if not (isinstance(first, ast.UnwindClause) and isinstance(expr, ast.Variable) and expr.is_parameter
+            and _ambiguous_list((params or {}).get(expr.name))):
+        return cypher_query
+    text = repr(cypher_query)
+    n = 0
+    while f"__l{n}" in text:
+        n += 1
+    name = f"__l{n}"
+    holder = ast.QueryPart(clauses=[], with_clause=ast.WithClause(
+        items=[ast.ReturnItem(expression=ast.Variable(name=expr.name, is_parameter=True), alias=name)]))
+    rest = dataclasses.replace(parts[0], clauses=[dataclasses.replace(
+        first, expression=ast.Variable(name=name, is_parameter=False))] + list(parts[0].clauses[1:]))
+    return dataclasses.replace(cypher_query, query_parts=[holder, rest] + list(parts[1:]))
+
+
 def translate_to_sql(
     cypher_query: ast.CypherQuery,
     params: Optional[Dict[str, Any]] = None,
@@ -7001,7 +7039,7 @@ def translate_to_sql(
     prop_set = _translation_prop_set.set(getattr(engine, "_prop_set_deployed", True) is not False)
     schema_token = _translation_schema.set(schema) if isinstance(schema, str) and schema else None
     try:
-        return _translate_to_sql(cypher_query, params, engine, procedures)
+        return _translate_to_sql(rewrite_ambiguous_param_unwind(cypher_query, params), params, engine, procedures)
     finally:
         if schema_token is not None:
             _translation_schema.reset(schema_token)

@@ -72,9 +72,11 @@ def test_a_long_parameter_list_marks_its_empty_strings():
     assert "CHAR(1) || 'E'" in sq.sql, sq.sql
 
 
-def test_a_parameter_list_holding_a_list_marks_its_empty_strings():
+def test_a_parameter_list_holding_a_list_is_read_with_its_kinds():
+    """4.7.0 row 22: a list beside a scalar is read as `WITH $l AS __l0 UNWIND __l0` (CY_LIST_KINDS), which reads ''
+    as '' itself, so it is sent unmarked. Live: ['', [1, '']] answers '', [1, ''] on both routes."""
     sq = _sq("UNWIND $l AS x RETURN x", {"l": ["", [1, ""]]})
-    assert _marked(sq) == ["\x01E", [1, ""]], sq.sql  # only the list's own elements: the nested '' is JSON text
+    assert _marked(sq) == ["", [1, ""]] and "CY_LIST_KINDS" in sq.sql and "CHAR(1) || 'E'" not in sq.sql, sq.sql
 
 
 def test_a_parameter_list_without_an_empty_string_is_sent_as_it_is():
