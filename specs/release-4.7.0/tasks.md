@@ -72,6 +72,8 @@ Rows are `~/.cache/ivg-bench/rel-470/ranked.md`'s. Each row has a test task, wri
 - [ ] T040 [W2-TIME] Row 20 test: `MATCH p = (a)-[:R]->(b) RETURN nodes(p), relationships(p)` answers the nodes and relationships
 - [ ] T041 [W2-TIME] Row 20 fix: `nodes(p)` answers node ids and `relationships(p)` types
 
+- [ ] T087 [W2-TIME] Row 20b (found during 4.7.0, silent): `reverse(relationships(p))` reverses the JSON text; `rs[0]` of a WITH-collected relationship list answers the type; `datetime({..., timezone: 'Europe/Stockholm'})` drops the offset's seconds; `_iana_tz_offset` reads the offset at midnight, not the wall time; tests first
+
 ## Wave 2: the reporters' environment
 
 - [ ] T042 [W2-ENV] Row 1 test: #13's own script on Community 2026.1 (a throwaway container) and enterprise 2026.3: both engines answer `[['InterSystems', 2]]`; reproduce on 2026.1 first
@@ -88,7 +90,7 @@ Rows are `~/.cache/ivg-bench/rel-470/ranked.md`'s. Each row has a test task, wri
 - [ ] T050 [W3-VAL] Row 21 test: `collect(n.on)` then `UNWIND`: `true`, `false` and `''` come back as themselves
 - [ ] T051 [W3-VAL] Row 21 fix (also `collect(exists(n.p))` and `collect(x IS NOT NULL)` answering [1, 0], found during 4.7.0): An unwound boolean or `''` of a list built at run time reads as `1`, `0` or null
 - [ ] T052 [W3-VAL] Row 22 test: `collect(e)` over `[[1], true]` answers `[[1], true]`
-- [ ] T053 [W3-VAL] Row 22 fix: An UNWIND of a run-time list reads a nested list, map or boolean as a string
+- [ ] T053 [W3-VAL] Row 22 fix (also `UNWIND [date(...), 'b'] AS e RETURN e < 'c'` answering true, not null, found during 4.7.0): An UNWIND of a run-time list reads a nested list, map or boolean as a string
 - [ ] T054 [W3-VAL] Row 23 test: store `'true'`, `'[1, 2]'` and `"\u0000"` through each writer: each reads back as the same string
 - [ ] T055 [W3-VAL] Row 23 fix: A stored string spelling a boolean, list or map reads as one; `"\u0000"` reads as `''`
 
