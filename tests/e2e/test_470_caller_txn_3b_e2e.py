@@ -168,7 +168,29 @@ def _ttl(u) -> str:
     return str(path)
 
 
+def _edge_id(e, u):
+    cur = e.conn.cursor()
+    cur.execute("SELECT edge_id FROM Graph_KG.rdf_edges WHERE s = ? AND p = 'R470B'", [f"{u}a"])
+    return int(cur.fetchone()[0])
+
+
+def _reified(o, u) -> bool:
+    return _count(o, "SELECT COUNT(*) FROM Graph_KG.rdf_reifications WHERE reifier_id = ?", [f"{u}r"]) == 1 \
+        and _node(o, f"{u}r") == 1
+
+
 JOINS = {
+    # 4.7.0 (3b): reify_edge and delete_reification called conn.commit()
+    "reify_edge": dict(
+        setup=lambda e, u: e.create_edge(f"{u}a", "R470B", f"{u}b"),
+        call=lambda e, u: e.reify_edge(_edge_id(e, u), reifier_id=f"{u}r", props={"k": "v"}),
+        done=lambda o, u: _reified(o, u),
+    ),
+    "delete_reification": dict(
+        setup=lambda e, u: (e.create_edge(f"{u}a", "R470B", f"{u}b"), e.reify_edge(_edge_id(e, u), f"{u}r")),
+        call=lambda e, u: e.delete_reification(f"{u}r"),
+        done=lambda o, u: not _reified(o, u),
+    ),
     "embed_edges": dict(
         setup=lambda e, u: e.create_edge(f"{u}a", "R470B", f"{u}b"),
         call=lambda e, u: e.embed_edges(model=Fake(), text_fn=lambda s, p, o: s, predicate="R470B", force=True),
@@ -327,3 +349,26 @@ def test_arno_wrappers_with_nothing_to_create_neither_refuse_nor_commit(observer
     assert _level(caller) == 1
     caller.cursor().execute("ROLLBACK")
     assert not _has_caller_row(observer, u)
+
+
+@pytest.mark.parametrize("in_caller_txn", (False, True))
+def test_a_refused_reify_edge_leaves_no_reifier_node(observer, caller, in_caller_txn):
+    """A label wider than rdf_labels.label is refused after the reifier node is created: the node goes with the
+    refusal (4.7.0: create_node's transaction is nested in reify_edge's), and a caller's earlier row stays in its
+    open transaction."""
+    from iris_vector_graph.errors import GraphWriteError
+
+    u = _uid()
+    eng = _engine(caller)
+    assert eng.create_edge(f"{u}a", "R470B", f"{u}b")
+    eid = _edge_id(eng, u)
+    if in_caller_txn:
+        _open(caller, u)
+    with pytest.raises(GraphWriteError):
+        eng.reify_edge(eid, reifier_id=f"{u}r", label="L" * 129)
+    if in_caller_txn:
+        assert _level(caller) == 1
+        caller.cursor().execute("COMMIT")
+        assert _has_caller_row(observer, u)
+    assert _node(observer, f"{u}r") == 0
+    assert _count(observer, "SELECT COUNT(*) FROM Graph_KG.rdf_reifications WHERE reifier_id = ?", [f"{u}r"]) == 0

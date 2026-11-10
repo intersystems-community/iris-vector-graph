@@ -103,36 +103,37 @@ def test_reify_edge_raises_on_a_refused_insert():
     _assert_refusal(raised, "reify_edge")
 
 
-def test_reify_edge_takes_back_the_node_it_created_when_a_later_insert_is_refused():
-    """create_node commits on its own; a refused link must not leave its reifier node behind."""
-    eng, conn, cursor, log = _engine(refuse=())
+def _modelled(cursor, conn, refuse):
+    """A tests/unit/_txn_model.TxnModel on the fake, which also refuses (REFUSED) a statement `refuse(sql)` names."""
+    from tests.unit._txn_model import TxnModel
+
+    model = TxnModel(cursor, conn)
+    record = cursor.execute.side_effect
 
     def execute(sql, *a, **k):
-        log.append(sql)
-        if "rdf_reifications" in str(sql) and str(sql).startswith("INSERT"):
+        if refuse(str(sql)):
             raise RuntimeError(REFUSED)
+        return record(sql, *a, **k)
 
     cursor.execute.side_effect = execute
+    cursor.executemany.side_effect = lambda sql, rows: [execute(sql, r) for r in rows]
+    return model
+
+
+def test_reify_edge_takes_back_the_node_it_created_when_a_later_insert_is_refused():
+    """A refused link leaves nothing, its reifier node included. 4.7.0: create_node's transaction is nested in the
+    call's own, and the refusal takes that back (it committed on its own, and a delete_node took it back after).
+    Here IVG's transactions are tests/unit/conftest.py's plain START TRANSACTION / COMMIT / ROLLBACK, which do not
+    nest, so what this shows is the refusal and that no delete_node runs; the node gone is
+    tests/e2e/test_470_caller_txn_3b_e2e.py::test_a_refused_reify_edge_leaves_no_reifier_node."""
+    eng, conn, cursor, log = _engine(refuse=())
+    _modelled(cursor, conn, lambda sql: "rdf_reifications" in sql and sql.startswith("INSERT"))
     eng.delete_node = MagicMock(return_value=True)
     with pytest.raises(GraphWriteError) as raised:
         eng.reify_edge(7, "r9")
     _assert_refusal(raised, "reify_edge")
-    eng.delete_node.assert_called_once_with("r9", graph=None)
-
-
-def test_reify_edge_says_which_node_remains_when_it_cannot_take_it_back():
-    eng, conn, cursor, log = _engine(refuse=())
-
-    def execute(sql, *a, **k):
-        if "rdf_reifications" in str(sql) and str(sql).startswith("INSERT"):
-            raise RuntimeError(REFUSED)
-
-    cursor.execute.side_effect = execute
-    eng.delete_node = MagicMock(side_effect=RuntimeError("<PROTECT> erase"))
-    with pytest.raises(GraphWriteError) as raised:
-        eng.reify_edge(7, "r9")
-    assert "nothing written" not in str(raised.value)
-    assert "its node 'r9' remains" in str(raised.value) and "<PROTECT> erase" in str(raised.value)
+    eng.delete_node.assert_not_called()
+    conn.rollback.assert_not_called()
 
 
 def test_reify_edge_of_an_existing_reifier_node_does_not_delete_it():
@@ -159,11 +160,14 @@ def test_reify_edge_of_a_missing_edge_still_answers_none():
 
 
 def test_delete_reification_raises_on_a_refused_delete():
-    eng, conn, cursor, log = _engine()
+    eng, conn, cursor, log = _engine(refuse=())
+    model = _modelled(cursor, conn, lambda sql: sql.startswith("DELETE FROM") and "rdf_labels" in sql)
     with pytest.raises(GraphWriteError) as raised:
         eng.delete_reification("r0")
     _assert_refusal(raised, "delete_reification")
-    conn.rollback.assert_called()
+    # the two deletes before the refused one are taken back with it (4.7.0: IVG's own transaction, not
+    # conn.rollback(), which took a caller's work too)
+    assert model.committed == [] and model.pending == [], model.committed
 
 
 def test_create_edge_temporal_raises_when_the_temporal_write_is_refused():

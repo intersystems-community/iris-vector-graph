@@ -3199,26 +3199,34 @@ class SchemaMixin:
         ``label``, records the link in ``rdf_reifications`` and sets each of ``props`` the node does
         not already have. Returns the reifier ID, or None when the edge does not exist.
 
-        A write IRIS refuses raises ``GraphWriteError`` and leaves nothing behind: the reifier node,
-        which ``create_node`` commits on its own, is deleted again when this call created it (before
-        4.6.0 a refusal answered None, like a missing edge).
+        A write IRIS refuses raises ``GraphWriteError`` and leaves nothing behind: the reifier node goes
+        with the rest, in one transaction of IVG's (before 4.6.0 a refusal answered None, like a missing
+        edge). 4.7.0: inside a transaction the caller opened, that transaction is nested in it (it
+        committed the caller's work).
         """
         from iris_vector_graph.errors import GraphWriteError
+
+        from iris_vector_graph._write_txn import WriteTxn
 
         _ledger_check(self, "reify_edge")
         if reifier_id is None:
             reifier_id = f"reif:{edge_id}"
         cursor = self.conn.cursor()
-        created = False
+        # 4.7.0: one transaction of IVG's, nested in the caller's when there is one; create_node's nests in it, so a
+        # refusal takes the node back with the rest (conn.commit() committed the caller's work, conn.rollback()
+        # took it back)
+        txn = WriteTxn(self.conn, self._ivg_schema, cursor)
         try:
+            txn.begin()  # in the try: a refused start is the call's GraphWriteError too
             cursor.execute(
                 f"SELECT edge_id FROM {self._t('rdf_edges')} WHERE edge_id = ?",
                 [edge_id],
             )
             if not cursor.fetchone():
+                txn.rollback()
                 logger.warning(f"reify_edge: edge_id={edge_id} not found")
                 return None
-            created = self.create_node(reifier_id)
+            self.create_node(reifier_id)
             cursor.execute(
                 f"INSERT INTO {self._t('rdf_labels')} (s, label) "
                 f"SELECT ?, ? WHERE NOT EXISTS "
@@ -3237,21 +3245,13 @@ class SchemaMixin:
                         f'(SELECT 1 FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?)',
                         [reifier_id, key, prop_value(val), reifier_id, key],  # 4.6.4: a number as itself
                     )
-            self.conn.commit()
+            txn.commit()
             return reifier_id
         except GraphWriteError as e:
-            # create_node's, which rolled its node back: this call wrote nothing
+            txn.rollback()
             raise GraphWriteError("reify_edge", e.__cause__ or e) from e
         except Exception as e:
-            self.conn.rollback()
-            if created:
-                # Not swallowed: a reifier node left behind is reported in the error this raises.
-                try:
-                    self.delete_node(reifier_id, graph=None)
-                except Exception as cleanup:
-                    raise GraphWriteError(
-                        "reify_edge", e,
-                        left=f"its node {reifier_id!r} remains (deleting it again failed: {cleanup})") from e
+            txn.rollback()  # the reifier node too: create_node's transaction is nested in this one
             raise GraphWriteError("reify_edge", e) from e
         finally:
             cursor.close()
@@ -3292,9 +3292,14 @@ class SchemaMixin:
         """
         from iris_vector_graph.errors import GraphWriteError
 
+        from iris_vector_graph._write_txn import WriteTxn
+
         _ledger_check(self, "delete_reification")
         cursor = self.conn.cursor()
+        # 4.7.0: nested in the caller's transaction when there is one (conn.commit() committed the caller's work)
+        txn = WriteTxn(self.conn, self._ivg_schema, cursor)
         try:
+            txn.begin()  # in the try: a refused start is the call's GraphWriteError too
             cursor.execute(
                 f"DELETE FROM {self._t('rdf_reifications')} WHERE reifier_id = ?",
                 [reifier_id],
@@ -3308,10 +3313,10 @@ class SchemaMixin:
             cursor.execute(
                 f"DELETE FROM {self._t('nodes')} WHERE node_id = ?", [reifier_id]
             )
-            self.conn.commit()
+            txn.commit()
             return True
         except Exception as e:
-            self.conn.rollback()
+            txn.rollback()
             raise GraphWriteError("delete_reification", e) from e
         finally:
             cursor.close()
