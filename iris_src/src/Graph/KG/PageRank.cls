@@ -77,11 +77,42 @@ ClassMethod RunJson(seedJson As %String, alpha As %Double = 0.85, maxIter As %In
 ClassMethod CheckArgs(alpha As %String, maxIter As %String)
 {
 	If ('$IsValidNum(alpha)) || ((+alpha) '> 0) || ((+alpha) '< 1) {
-		Throw ##class(%Exception.General).%New("IVG", 5001, , "personalized PageRank: alpha must be in the open interval (0, 1), got "_alpha)
+		Throw ##class(%Exception.General).%New("IVG", 5001, , "PageRank: alpha (the damping factor) must be in the open interval (0, 1), got "_alpha)
 	}
 	If ('$IsValidNum(maxIter)) || ((+maxIter) '= ((+maxIter) \ 1)) || ((+maxIter) < 1) {
-		Throw ##class(%Exception.General).%New("IVG", 5001, , "personalized PageRank: maxIter must be a whole number of at least 1, got "_maxIter)
+		Throw ##class(%Exception.General).%New("IVG", 5001, , "PageRank: maxIter must be a whole number of at least 1, got "_maxIter)
 	}
+}
+
+/// seedJson's seeds that are nodes of graph pGraph (a name; "" the default graph), each once, in their order, as a
+/// JSON array; "[]" when none is. A seed outside the graph scores nothing (4.7.0 row 8b: Run started the walk there,
+/// and the seed, having no out-edge, kept the whole score, 1.0). Graph_KG is the IVG schema (the deploy rewrites it).
+/// A seedJson that is not a JSON array is returned as it is, for Run to refuse.
+ClassMethod NodeSeeds(seedJson As %String, pGraph As %String = "") As %String
+{
+	Try {
+		Set tIn = ##class(%DynamicArray).%FromJSON(seedJson)
+	} Catch {
+		Return seedJson
+	}
+	Return:'tIn.%IsA("%DynamicArray") seedJson
+	If pGraph = $Char(0) Set pGraph = ""
+	Set tStmt = ##class(%SQL.Statement).%New()
+	// an empty host variable binds as NULL, hence COALESCE(?, '')
+	Set tSC = tStmt.%Prepare("SELECT 1 FROM Graph_KG.nodes WHERE graph_id = COALESCE(?, '') AND node_id = ?")
+	$$$ThrowOnError(tSC)
+	Set tOut = ##class(%DynamicArray).%New()
+	Set tIter = tIn.%GetIterator()
+	While tIter.%GetNext(.tI, .tSeed) {
+		Continue:$IsObject(tSeed)||(tSeed="")||$Data(tSeen(tSeed))
+		Set tSeen(tSeed) = ""
+		Set tRS = tStmt.%Execute(pGraph, tSeed)
+		If tRS.%SQLCODE < 0 {
+			Throw ##class(%Exception.SQL).CreateFromSQLCODE(tRS.%SQLCODE, tRS.%Message)
+		}
+		Do:tRS.%Next() tOut.%Push(tSeed)
+	}
+	Return tOut.%ToJSON()
 }
 
 /// pJson, an answer of RunJson, with a row of score 0 for each node of graph pGraph it lacks, after the scored rows
@@ -140,6 +171,8 @@ ClassMethod Run(seedJson As %String, alpha As %Double, maxIter As %Integer, bidi
 {
 	Kill ranks
 	Do ..CheckArgs(alpha, maxIter)
+	// the seeds that are nodes of the graph: another seed scores nothing (4.7.0 row 8b)
+	Set:seedJson'="" seedJson = ..NodeSeeds(seedJson, pGraph)
 	// Until 4.0.1 pGraph was hardwired to 0: every PPR walked the default graph
 	// whatever graph its seeds lived in (spec 231, FR-016).
 	Set pGraph = ##class(Graph.KG.GraphKey).ForIndex(pGraph)
@@ -372,6 +405,8 @@ ClassMethod Excluded(ByRef excl, source As %String, pred As %String) As %Boolean
 /// node_count() nodes, networkx's pagerank(G). Before R306 they were left out.
 ClassMethod PageRankGlobalJson(damping As %Double = 0.85, maxIter As %Integer = 20, pEdgeless As %String = "") As %String
 {
+	// 4.7.0 row 8b: damping 2.0 answered negative scores
+	Do ..CheckArgs(damping, maxIter)
 	Set pGraph = 0
 	// One pass over the adjacency, before the iteration loop: the node set and each source's out-weight, O(E) once.
 	Set node = ""

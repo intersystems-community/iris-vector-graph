@@ -68,7 +68,9 @@ def test_the_fast_path_answers_networkx(world, fast_path):
         fast_path, "_kg_PERSONALIZED_PAGERANK_python_fallback", side_effect=AssertionError("fell back")
     ):
         got = fast_path.kg_PERSONALIZED_PAGERANK([prefix + "a"], max_iterations=1000, tolerance=1e-10)
-    assert {k[len(prefix):]: v for k, v in got.items()} == pytest.approx(want, abs=1e-6)
+    assert {k[len(prefix):]: v for k, v in got.items() if k.startswith(prefix)} == pytest.approx(want, abs=1e-6)
+    # the namespace's other nodes answer 0.0 (4.7.0 row 9: every node of the graph has a row)
+    assert all(v == 0.0 for k, v in got.items() if not k.startswith(prefix))
 
 
 def test_a_real_parameter_error_raises(world, fast_path):

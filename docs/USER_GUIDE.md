@@ -588,9 +588,13 @@ score back to the seeds, so the scores sum to 1 and are networkx's
 after `max_iterations`, or once the scores change by less than N × `tolerance` in total in one iteration (N: the
 nodes holding a score), networkx's rule. Every route gives this answer, whether or not the Arno library is loaded.
 Every node of the graph has a row, those the walk never reaches at 0.0 after the others, within the `top_k` (or
-`CALL ivg.ppr`'s 1000-row) cut. The damping factor (`alpha` in `ppr()` and `CALL ivg.ppr`) must be in the open
-interval (0, 1) and the iteration count at least 1, or the call raises `ValueError` naming the argument; before 4.7.0
-alpha 2.0 answered scores of 22.0 and -21.0.
+`CALL ivg.ppr`'s 1000-row) cut. `CALL ivg.ppr(...) YIELD node, score RETURN ... ORDER BY score DESC LIMIT k` (or
+`LIMIT k` alone, with nothing between the `CALL` and the `LIMIT`) reads only the first k rows of the walk's answer, so
+the zeros stop there. A seed that is not a node of the graph scores nothing: `['zz']` answers no row, and
+`['a', 'zz']` the answer of `['a']` (before 4.7.0 such a seed scored 1.0). The damping factor (`alpha` in `ppr()` and
+`CALL ivg.ppr`, `damping` in `kg_PAGERANK`, `dampingFactor` in `gds.pageRank.stream`) must be in the open interval
+(0, 1) and the iteration count at least 1, or the call raises `ValueError` naming the argument; before 4.7.0 alpha
+2.0 answered scores of 22.0 and -21.0, and the global PageRank negative scores.
 
 ### Shortest path
 

@@ -253,7 +253,8 @@ class AlgorithmsMixin:
             bidirectional: Enable reverse edge traversal (default False)
             reverse_edge_weight: Weight multiplier for reverse edges (default 1.0)
             graph: The one graph to walk. ``None`` or ``""`` is the default graph, never
-                every graph. A seed outside it scores nothing.
+                every graph. A seed outside it scores nothing, on every route: no seed in it answers
+                ``{}`` (before 4.7.0 the ObjectScript walk scored such a seed 1.0).
             exclude_predicates: Edges left out of both the walk and every divisor, as
                 ``"p"`` (any source) or ``"Type.p"`` (source key starts ``Type/``).
                 ``None`` is the pre-235 walk, unchanged; a list, even empty, also lifts
@@ -400,6 +401,9 @@ class AlgorithmsMixin:
         table's ``(graph_id, node_id)`` index, ``%EXACT``: IRIS collation, which ``collation_key`` is (canonical
         numbers first by value, then text by code point), so the read stops at the rows it can use rather than reading
         every node of the graph. Every node is read only without a limit, when every node is the answer."""
+        if not scores:
+            # no seed is a node of the graph: no walk, and nothing scores (4.7.0 row 8b), as WithUnscored answers
+            return {}
         ranked = sorted(scores.items(), key=lambda x: rank_key(x[0], x[1]))
         limit = top_k if top_k is not None and top_k > 0 else (cap or 0)
         if limit and len(ranked) >= limit:
@@ -760,8 +764,9 @@ class AlgorithmsMixin:
             >>> engine.kg_PAGERANK(seed_entities=["a"]) == engine.kg_PERSONALIZED_PAGERANK(["a"], max_iterations=20)
             True
         """
+        # both forms (4.7.0 rows 8 and 8b: a damping of 2.0 answered negative scores, the global form too)
+        check_ppr_args("kg_PAGERANK", damping, max_iterations, "damping", "max_iterations")
         if seed_entities is not None:
-            check_ppr_args("kg_PAGERANK", damping, max_iterations, "damping", "max_iterations")
             return self.kg_PERSONALIZED_PAGERANK(
                 seed_entities, damping_factor=damping, max_iterations=max_iterations,
             )

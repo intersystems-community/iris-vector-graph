@@ -1169,7 +1169,7 @@ def vec_create_index(
 ) -> dict
 ```
 
-Create (or reset the settings of) a `Graph.KG.VecIndex` random-projection-tree index named `name` for `dim`-wide vectors, and register it in this engine as type `vec`. Returns the class method's `{"name", "dim", "metric"}`. Writes the index configuration; vectors are added with `vec_insert` and indexed by `vec_build`.
+Create (or reset the settings of) a `Graph.KG.VecIndex` random-projection-tree index named `name` for `dim`-wide vectors, and register it in this engine as type `vec`. Returns the class method's `{"name", "dim", "metric"}`. Writes the index configuration; vectors are added with `vec_insert` and indexed by `vec_build`. `metric` is one of cosine, l2, l1, dot and chebyshev (any case); another raises `ValueError` before anything is written (4.7.0: one the index does not compute, mahalanobis among them, was measured as cosine distance and scored as a distance).
 
 #### `vec_drop`
 

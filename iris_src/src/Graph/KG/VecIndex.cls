@@ -23,10 +23,28 @@ Class Graph.KG.VecIndex Extends %RegisteredObject
 // Configuration
 // ================================================================
 
+/// The metrics Distance computes, as a list. Before 4.7.0 another (mahalanobis among them: Mahalanobis needs an
+/// inverse covariance no search reads) was measured as cosine distance, and TopK scored it as a distance.
+ClassMethod Metrics() As %List
+{
+    Return $ListBuild("cosine", "l2", "l1", "dot", "chebyshev")
+}
+
+/// Throws unless metric is one Distance computes (4.7.0 row 8b). Create checks the metric asked for, and each search
+/// the metric an index holds, which an index made before 4.7.0 can hold.
+ClassMethod CheckMetric(metric As %String)
+{
+    If '$ListFind(..Metrics(), metric) {
+        Throw ##class(%Exception.General).%New("IVG", 5001, , "VecIndex: metric must be one of "_$ListToString(..Metrics(), ", ")_", got '"_metric_"'")
+    }
+}
+
 ClassMethod Create(name As %String, dim As %Integer, metric As %String = "cosine", numTrees As %Integer = 4, leafSize As %Integer = 50) As %String
 {
+    Set metric = $ZConvert(metric, "L")
+    Do ..CheckMetric(metric)
     Set ^VecIdx(name, "cfg", "dim") = dim
-    Set ^VecIdx(name, "cfg", "metric") = $ZConvert(metric, "L")
+    Set ^VecIdx(name, "cfg", "metric") = metric
     Set ^VecIdx(name, "cfg", "numTrees") = numTrees
     Set ^VecIdx(name, "cfg", "leafSize") = leafSize
     Set ^VecIdx(name, "meta", "count") = 0
@@ -229,6 +247,7 @@ ClassMethod InsertBatchJSON(name As %String, batchJson As %String) As %String
 ClassMethod BruteForceSearch(name As %String, queryVec As %Binary, k As %Integer = 10) As %String
 {
     Set metric = $Get(^VecIdx(name, "cfg", "metric"), "cosine")
+    Do ..CheckMetric(metric)
     Kill ^||ranked
     Set docId = ""
     For {
@@ -354,6 +373,7 @@ ClassMethod SearchTree(name As %String, treeId As %Integer, queryVec As %Binary,
 ClassMethod RankCandidates(name As %String, queryVec As %Binary, k As %Integer) As %String [ Private ]
 {
     Set metric = $Get(^VecIdx(name, "cfg", "metric"), "cosine")
+    Do ..CheckMetric(metric)
     Kill ^||ranked
     Set docId = ""
     For {

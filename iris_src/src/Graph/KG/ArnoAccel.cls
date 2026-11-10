@@ -257,6 +257,8 @@ ClassMethod NativeResult(fn As %String, a1 As %String = "", a2 As %String = "", 
 /// refusal is a throw, so the caller's Owner answers.
 ClassMethod PageRankNativeJson(damping As %Double = 0.85, maxIter As %Integer = 20) As %String
 {
+	// 4.7.0 row 8b: the library walked with any damping and iteration count
+	Do ##class(Graph.KG.PageRank).CheckArgs(damping, maxIter)
 	If ##class(Graph.KG.GraphMode).IsMulti("") {
 		$$$ThrowStatus($$$ERROR($$$GeneralError, "arno kg_pagerank_global: the default graph is a multigraph, and the library weighs a parallel edge once"))
 	}
@@ -267,6 +269,9 @@ ClassMethod PPRNativeJson(seedJson As %String, damping As %Double = 0.85, maxIte
 {
 	// 4.7.0 row 8: the library walked with any damping and iteration count
 	Do ##class(Graph.KG.PageRank).CheckArgs(damping, maxIter)
+	// row 8b: and from a seed that is no node of the default graph (the library's walk is the default graph's)
+	Set seedJson = ##class(Graph.KG.PageRank).NodeSeeds(seedJson, "")
+	Return:seedJson="[]" "[]"
 	Quit ..NativeResult("kg_ppr_global", "^KG", seedJson, damping, maxIter)
 }
 

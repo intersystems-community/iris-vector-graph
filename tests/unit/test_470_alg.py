@@ -252,3 +252,23 @@ def test_any_other_shape_keeps_the_full_answer(tail):
 def test_a_yield_alias_is_the_score():
     q = "CALL ivg.ppr(['a']) YIELD node, score AS rank RETURN node, rank ORDER BY rank DESC LIMIT 4"
     assert _ppr_row_limit(q) == 4
+
+
+# ------------------------------------------------------------------------------------------------ row 8b
+
+
+@pytest.mark.parametrize("kw, named", [({"damping": 2.0}, "damping"), ({"damping": -0.5}, "damping"),
+                                       ({"damping": 1.0}, "damping"), ({"max_iterations": 0}, "max_iterations")])
+def test_global_pagerank_refuses_out_of_range(kw, named):
+    """kg_PAGERANK without seeds: damping 2.0 gave negative scores (4.7.0 row 8b)."""
+    with pytest.raises(ValueError, match=rf"^kg_PAGERANK: {named} must be"):
+        AlgorithmsMixin.kg_PAGERANK(_NoDatabase(), **kw)
+
+
+@pytest.mark.parametrize("metric", ["bogus", "mahalanobis", "", "cos"])
+def test_vec_create_index_refuses_an_unknown_metric(metric):
+    """Graph.KG.VecIndex.Distance read any other metric as cosine, and TopK then answered score = +distance."""
+    from iris_vector_graph._engine.vector import VectorMixin
+
+    with pytest.raises(ValueError, match=r"^vec_create_index: metric must be one of cosine, l2, l1, dot, chebyshev"):
+        VectorMixin.vec_create_index(_NoDatabase(), "idx", 2, metric=metric)

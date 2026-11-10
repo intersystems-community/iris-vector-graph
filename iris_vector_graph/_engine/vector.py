@@ -48,6 +48,10 @@ class RouteRecall:
     recorded: bool = False
 
 
+#: The metrics Graph.KG.VecIndex computes (VecIndex.cls, Metrics).
+VEC_METRICS = ("cosine", "l2", "l1", "dot", "chebyshev")
+
+
 class VectorMixin:
     def _detect_stored_vector_dtype(self) -> str:
         try:
@@ -1553,7 +1557,12 @@ class VectorMixin:
         index named ``name`` for ``dim``-wide vectors, and register it in this engine as
         type ``vec``. Returns the class method's ``{"name", "dim", "metric"}``. Writes the
         index configuration; vectors are added with ``vec_insert`` and indexed by ``vec_build``.
+        ``metric`` is one of cosine, l2, l1, dot and chebyshev (any case); another raises
+        ``ValueError`` before anything is written (4.7.0: one the index does not compute,
+        mahalanobis among them, was measured as cosine distance and scored as a distance).
         """
+        if not isinstance(metric, str) or metric.lower() not in VEC_METRICS:
+            raise ValueError(f"vec_create_index: metric must be one of {', '.join(VEC_METRICS)}, got {metric!r}")
         result = self._iris_obj().classMethodValue(
             "Graph.KG.VecIndex",
             "Create",

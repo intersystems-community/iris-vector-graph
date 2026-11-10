@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from iris_vector_graph._engine.admin import AdminMixin
-from iris_vector_graph._engine.algorithms import AlgorithmsMixin
+from iris_vector_graph._engine.algorithms import AlgorithmsMixin, check_ppr_args
 from iris_vector_graph._engine.embeddings import EmbeddingsMixin
 from iris_vector_graph._engine.fhir import FhirMixin
 from iris_vector_graph._engine.fhir_graph import FhirGraphMixin
@@ -1000,6 +1000,8 @@ class IRISGraphEngine(
         # a value of the wrong type is named (4.6.5): float() and int() truncated 2.5 and said "invalid literal" for 'x'
         damping = _number_argument(name, "dampingFactor", kw["damping"]) if "damping" in kw else 0.85
         max_iterations = _int_argument(name, "maxIterations", kw["max_iterations"]) if "max_iterations" in kw else 20
+        # GDS's names (4.7.0 row 8b: a dampingFactor of 2.0 answered negative scores)
+        check_ppr_args(name, damping, max_iterations, "dampingFactor", "maxIterations")
         ranks = self.kg_PAGERANK(damping=damping, max_iterations=max_iterations)
         return IVGResult(columns=["nodeId", "score"], rows=[[n, float(s)] for n, s in ranks])
 
