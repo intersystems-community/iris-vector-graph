@@ -6994,9 +6994,9 @@ def _ambiguous_list(value) -> bool:
     [2]; a boolean beside a list reads as '1'). Scalars and booleans alone carry a flag already (R273)."""
     if not isinstance(value, (list, tuple)):
         return False
-    kinds = {"b" if isinstance(v, bool) else "l" if isinstance(v, (list, tuple)) else "m" if isinstance(v, dict)
-             else "s" if isinstance(v, str) else "n" for v in value if v is not None}
-    return bool(kinds & {"l", "m"}) and bool(kinds & {"b", "s", "n"})
+    present = [v for v in value if v is not None]
+    nested = [isinstance(v, (list, tuple, dict)) for v in present]
+    return any(nested) and not all(nested)
 
 
 def rewrite_ambiguous_param_unwind(cypher_query: ast.CypherQuery, params: Optional[Dict[str, Any]]) -> ast.CypherQuery:
@@ -7459,9 +7459,8 @@ def _rel_prop_text_columns(cypher_query, context) -> List[int]:
 
 #: The RETURN column of an UNWIND row of a known list (translate_return_clause, 4.6.0 R308), whose group 1 is the row
 _UNWOUND_KNOWN_ROW = re.compile(r"^CASE WHEN (\w+\.\w+) IS NULL THEN NULL WHEN \S*CY_JSON_NUM\(\1\) IS NOT NULL ")
-#: A RETURN column of a run-time list's UNWIND row, its JSON text marked (4.7.0 rows 21, 22): the row's alias and
-#: column are groups 1 and 2.
-_UNWOUND_RUN_TIME_ROW = re.compile(r"^CHAR\(1\) \|\| 'J' \|\| (\w+)\.(\w+)__j$")
+#: A RETURN column of a run-time list's UNWIND row, its JSON text marked (4.7.0 rows 21, 22): the row is group 1.
+_UNWOUND_RUN_TIME_ROW = re.compile(r"^CHAR\(1\) \|\| 'J' \|\| (\w+\.\w+)__j$")
 
 
 def _unwrap_typed(sql_expr: str) -> str:
@@ -7472,7 +7471,7 @@ def _unwrap_typed(sql_expr: str) -> str:
         return known.group(1)  # TCK ReturnOrderBy1 [9]/[10]: CY_SORT_KEY read the marked text, sorting lists as strings
     run_time = _UNWOUND_RUN_TIME_ROW.match(sql_expr)
     if run_time:
-        return f"{run_time.group(1)}.{run_time.group(2)}"  # the row, not its J-marked boolean (4.7.0 row 21)
+        return run_time.group(1)  # the row, not its J-marked boolean (4.7.0 row 21)
     head = next((h for h in (f"{_fn('CY_TYPED')}(", f"{_fn('CY_JSON_TYPED')}(") if sql_expr.startswith(h)), None)
     if head and sql_expr.endswith(")"):
         inner = sql_expr[len(head) : -1]
@@ -8583,11 +8582,11 @@ def translate_unwind_clause(unwind, context):
     _run_time = _known_list is None and (
         _is_run_time_list(unwind.expression, context) or _literal_holding_a_nested_value(unwind.expression)) and not (
         _is_range or _mixed_src or _unwind_kind) and unwind.alias not in context.collected_node_variables
+    if _run_time:
+        _register_run_time_kinds(unwind.alias, alias, _bool_flags, context)
     by_position = _unwind_by_position(expr, alias, f"{_safe_alias(unwind.alias)} {col_type}", context, kinds=_run_time)
     if by_position is not None:
         context.join_clauses.append(f"CROSS JOIN {by_position}")
-        if _run_time:
-            _register_run_time_kinds(unwind.alias, alias, _bool_flags, context)
         return
     if _run_time:
         # 4.7.0 row 21: a list built at run time goes through CY_LIST_KINDS, so a boolean element carries a flag
@@ -8596,14 +8595,10 @@ def translate_unwind_clause(unwind, context):
         # JSON_TABLE argument stays one stage column (R310)
         expr = f"{_fn('CY_LIST_KINDS')}({expr})"
     expr = _hoist_unwind_list(expr, alias, context)
-    json_table_sql = f"JSON_TABLE({expr}, '$[*]' COLUMNS ({_safe_alias(unwind.alias)} {col_type} PATH '$')) {alias}"
     if _run_time:
-        col = _safe_alias(unwind.alias)
-        json_table_sql = (
-            f"JSON_TABLE({expr}, '$[*]' COLUMNS ({col} {col_type} PATH '$.v', "
-            f"{col}__k VARCHAR(1) PATH '$.k', {col}__j VARCHAR(32000) PATH '$.j')) {alias}"
-        )
-        _register_run_time_kinds(unwind.alias, alias, _bool_flags, context)
+        json_table_sql = f"JSON_TABLE({expr}, {_list_kinds_columns(f'{_safe_alias(unwind.alias)} {col_type}')}) {alias}"
+    else:
+        json_table_sql = f"JSON_TABLE({expr}, '$[*]' COLUMNS ({_safe_alias(unwind.alias)} {col_type} PATH '$')) {alias}"
     if _mark_empty:
         col, inner = _safe_alias(unwind.alias), f"{alias}j"
         json_table_sql = (
@@ -8699,6 +8694,13 @@ def _kind_guarded_ordering(expr, context) -> Optional[str]:
             context._row_kind_guard = False
         return f"(CASE WHEN {col} <> '{tag}' THEN NULL WHEN {inner} THEN 1 ELSE 0 END = 1)"
     return None
+
+
+def _list_kinds_columns(column: str) -> str:
+    """The JSON_TABLE path and columns over CY_LIST_KINDS's answer: `column` (name and type) from $.v, its kind and its
+    JSON text beside it (4.7.0 rows 21, 22)."""
+    col = column.split()[0]
+    return f"'$[*]' COLUMNS ({column} PATH '$.v', {col}__k VARCHAR(1) PATH '$.k', {col}__j VARCHAR(32000) PATH '$.j')"
 
 
 def _register_run_time_kinds(var: str, alias: str, bool_flags, context) -> None:
@@ -8903,17 +8905,16 @@ def _unwind_by_position(expr: str, alias: str, column: str, context, kinds: bool
     )
     used.append(alias)
     element = f"REPLACE({_fn('CY_LIST_ELEM')}({stage}.{lst}, {stage}.{i}), CHAR(1) || 'J', '')"
-    join = (
-        f"JSON_TABLE('{{\"v\":' || COALESCE(NULLIF({element}, ''), 'null') || '}}', "
-        f"'$' COLUMNS ({column} PATH '$.v')) {alias}"
-    )
     if kinds:
         # 4.7.0 row 21: the element beside its kind, as the usual route reads a run-time list's (CY_LIST_KINDS)
-        col = column.split()[0]
         join = (
             f"JSON_TABLE({_fn('CY_LIST_KINDS')}('[' || COALESCE(NULLIF({element}, ''), 'null') || ']'), "
-            f"'$[*]' COLUMNS ({column} PATH '$.v', {col}__k VARCHAR(1) PATH '$.k', {col}__j VARCHAR(32000) PATH '$.j')) "
-            f"{alias}"
+            f"{_list_kinds_columns(column)}) {alias}"
+        )
+    else:
+        join = (
+            f"JSON_TABLE('{{\"v\":' || COALESCE(NULLIF({element}, ''), 'null') || '}}', "
+            f"'$' COLUMNS ({column} PATH '$.v')) {alias}"
         )
     positioned.update({"from": context.from_clauses[0], "stage": stage,
                        "joins": list(context.join_clauses) + [f"CROSS JOIN {join}"]})
@@ -20919,14 +20920,18 @@ def _register_stage_bool_flags(context, stage) -> None:
         flags = context.unwind_bool_flags = {}
     for alias, kind in pending.items():
         if context.variable_aliases.get(alias) == stage:
-            flags[alias] = (stage, f"{stage}.{_bool_flag_column(alias)}", kind) + (
-                (f"{stage}.{_json_text_column(alias)}",) if alias in texts else ())
+            entry = (stage, f"{stage}.{_bool_flag_column(alias)}", kind)
+            if alias in texts:
+                entry += (f"{stage}.{_json_text_column(alias)}",)
+            flags[alias] = entry
 
 
 def _unwind_json_text(expr, context) -> Optional[str]:
     """The JSON text column of a run-time list's UNWIND row (CY_LIST_KINDS' "j", 4.7.0 row 21), while the variable is
     still read from its UNWIND rows; else None."""
-    entry = (getattr(context, "unwind_bool_flags", None) or {}).get(getattr(expr, "name", None))
+    if not isinstance(expr, ast.Variable):
+        return None
+    entry = (getattr(context, "unwind_bool_flags", None) or {}).get(expr.name)
     if entry is None or len(entry) < 4 or context.variable_aliases.get(expr.name) != entry[0]:
         return None
     return entry[3]
@@ -20959,11 +20964,11 @@ def _list_element_text(expr, sql, context=None) -> Optional[str]:
     _bool_flag = _unwind_bool_flag(expr, context) if context is not None else None
     if _bool_flag is not None:
         # 4.6.0 R273: collect() of an UNWIND boolean listed 1 (R227's open item): the flag tells it from a number
-        kind = _bool_flag_kind(expr, context)
         json_text = _unwind_json_text(expr, context)
         if json_text is not None:
             # 4.7.0 row 21: a run-time list's element, its own JSON text (CY_LIST_KINDS): true, '', [1] as themselves
             return json_text
+        kind = _bool_flag_kind(expr, context)
         other = _json_scalar_text(sql)
         if kind == "text":
             # R286: a row list's element through a WITH (CY_LIST_VAL): a number as CY_JSON_NUM spells a stored one
@@ -27771,11 +27776,12 @@ def _eval_truncate(fn, args_exprs):
             # the truncation answered 'Z'. A datetime's offset is the zone's at the truncated time (below); a time's
             # the zone's as time() reads it, at its reference date, at the truncated time too.
             _bare = _re.search(r"\[([\w/+-]+)\]$", temporal_str or "")
-            if _bare and ("/" in _bare.group(1) or _bare.group(1) in ("UTC", "GMT")):
+            _zone = _bare.group(1) if _bare else ""
+            if "/" in _zone or _zone in ("UTC", "GMT"):
                 if temporal_fn == "datetime":
-                    _input_iana_tz = _bare.group(1)
+                    _input_iana_tz = _zone
                 else:
-                    _time_iana_tz = _bare.group(1)
+                    _time_iana_tz = _zone
 
     # Optional map for overrides (3rd arg)
     overrides = {}
@@ -30680,14 +30686,14 @@ def translate_with_clause(with_clause, context):
                 _pending = context._pending_bool_flags = {}
             _pending[alias] = _flag_kind
             # 4.7.0 row 22: a run-time list's row goes on with its JSON text too, which a collect() after the WITH lists
-            _json_text = _unwind_json_text(item.expression, context) if isinstance(item.expression, ast.Variable) else None
+            _json_text = _unwind_json_text(item.expression, context)
             if _json_text is not None:
                 context.select_items.append(f"{_json_text} AS {_json_text_column(alias)}")
                 context.__dict__.setdefault("_pending_json_texts", set()).add(alias)
-                if has_agg and not _contains_aggregation(item.expression):
-                    context.group_by_items.append(_json_text)
             if has_agg and not _contains_aggregation(item.expression):
                 # a grouping column's flag groups with it; one of an aggregate (`head(collect(x))`) is the aggregate's
+                if _json_text is not None:
+                    context.group_by_items.append(_json_text)
                 context.group_by_items.append(_flag_sql)
         if has_agg and not _contains_aggregation(item.expression):
             # For edge variables in GROUP BY, also include s/p/o identity columns so that
