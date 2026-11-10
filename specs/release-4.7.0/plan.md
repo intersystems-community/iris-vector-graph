@@ -55,6 +55,7 @@ Row 6: a temporal purge retires the endpoints it leaves bare by default (Tom, 20
 | --- | --- |
 | Unit suite | 0 failed |
 | Full E2E (dpgenai1, one run at a time) | no product failure |
+| `tests/integration` (no gate ran it: 9 tests had been stale since 4.6.0, found 2026-11-10) | 0 failed |
 | `scripts/ci-parity.sh` | exit 0 |
 | TCK, enterprise 2026.3 and Community 2026.1, drivers 5.4.0 and 5.4.1 | 3896 / 3896 each (row 15 removes the one listed failure) |
 | Quickstart (`quickstart_e2e.py --isolated`) | 5 / 5 |

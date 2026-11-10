@@ -128,6 +128,7 @@ Rows are `~/.cache/ivg-bench/rel-470/ranked.md`'s. Each row has a test task, wri
 
 - [ ] T071 Unit suite, 0 failed
 - [ ] T072 Full E2E on dpgenai1, no product failure
+- [ ] T088 `tests/integration` on the final commit, 0 failed (no gate ran it before 4.7.0)
 - [ ] T073 `scripts/ci-parity.sh` exit 0
 - [ ] T074 TCK enterprise 2026.3 and Community 2026.1, drivers 5.4.0 and 5.4.1, 3896 / 3896 each
 - [ ] T075 Quickstart 5 / 5
