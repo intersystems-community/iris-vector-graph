@@ -296,6 +296,8 @@ Found during 4.6.5 and listed for 4.7.0: `ivg.ppr` and `ppr()` take any `alpha` 
 `RETURN DISTINCT b.id AS dst` reported empty on 4.2.2 against a 305-edge node did not reproduce on a small graph on
 4.6.5 (the reporter reruns it on 4.6.5); the 4.6.4 list above.
 
+§9: Tom: "Push and publish" (2026-11-09). GitHub CI and Quickstart green on `dd7528fa`; main fast-forwarded to `dd7528fa`; tag `v4.6.5`; built at the tag (68 classes in the wheel), `twine check` passed; PyPI (<https://pypi.org/project/iris-vector-graph/4.6.5/>); GitHub release with the CHANGELOG section; clean venv (Python 3.12) installs 4.6.5 and imports with `-I -W error`.
+
 ### 4.6.4 — Python-API numbers keep their type; IVG writes stay inside the caller's transaction (2026-11-09)
 
 Patch release (Tom 2026-11-08: "Ship 4.6.3, then 4.6.4", for the two python-devx defects). Branch `release-4.6.4` from
