@@ -28219,6 +28219,14 @@ def _expr_function_body(expr, context, segment):
         raise SyntaxError(f"UnknownFunction: Unknown function '{expr.function_name}'")
     if sql_fn == "CHAR_LENGTH":
         sql_fn = _fn("CY_STR_SIZE")  # 4.6.0 R307: characters, not UTF-16 code units
+    if sql_fn == "EXISTS" and segment == "select" and len(args) == 1:
+        # a projected exists(x): IRIS takes EXISTS(subquery) as a condition only, so in a SELECT list it was
+        # SQLCODE -12 (4.7.0 row 34); 1 / 0 is the boolean the column decodes (_BOOL_VALUED_FUNCS). A node property
+        # is a sub-SELECT of its rdf_props rows; any other value (a relationship's or a map's key) is there when it
+        # is not null, and EXISTS of it is no SQL at all.
+        if args[0].lstrip().upper().startswith("(SELECT"):
+            return f"CASE WHEN EXISTS({args[0]}) THEN 1 ELSE 0 END"
+        return f"CASE WHEN ({args[0]}) IS NOT NULL THEN 1 ELSE 0 END"
     return f"{sql_fn}({', '.join(args)})"
 
 
