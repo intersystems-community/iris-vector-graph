@@ -68,3 +68,24 @@ def test_a_truncation_reads_the_offset_at_the_truncated_time(unit, want):
     q = (f"RETURN datetime.truncate('{unit}', datetime({{year: 2015, month: 3, day: 29, hour: 12, minute: 30, "
          f"timezone: 'Europe/Berlin'}})) AS d")
     assert _value(q) == want
+
+
+@pytest.mark.parametrize("query, want", [
+    # the string form kept no zone: '2015-03-29T12:00Z'
+    ("RETURN datetime.truncate('hour', datetime('2015-03-29T12:30[Europe/Berlin]')) AS d",
+     "2015-03-29T12:00+02:00[Europe/Berlin]"),
+    ("RETURN datetime.truncate('day', datetime('2015-03-29T12:30[Europe/Berlin]')) AS d",
+     "2015-03-29T00:00+01:00[Europe/Berlin]"),
+    ("RETURN datetime.truncate('hour', datetime('1818-07-21T21:40:32[Europe/Stockholm]')) AS d",
+     "1818-07-21T21:00+00:53:28[Europe/Stockholm]"),
+    # what the map form and a numeric offset answered already
+    ("RETURN datetime.truncate('hour', datetime('2015-03-29T12:30+02:00[Europe/Berlin]')) AS d",
+     "2015-03-29T12:00+02:00[Europe/Berlin]"),
+    ("RETURN datetime.truncate('hour', datetime('2015-03-29T12:30+02:00')) AS d", "2015-03-29T12:00+02:00"),
+    # a time keeps its zone too, as time('12:30[Europe/Berlin]') answers +02:00 (its reference date, 2015-07-21)
+    ("RETURN time.truncate('hour', time('12:30[Europe/Berlin]')) AS d", "12:00+02:00[Europe/Berlin]"),
+    # a local value has none to keep
+    ("RETURN localdatetime.truncate('hour', datetime('2015-03-29T12:30[Europe/Berlin]')) AS d", "2015-03-29T12:00"),
+])
+def test_a_truncation_of_a_zoned_string_keeps_its_zone(query, want):
+    assert _value(query) == want

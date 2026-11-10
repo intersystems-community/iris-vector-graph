@@ -27523,6 +27523,7 @@ def _eval_truncate(fn, args_exprs):
     # Extract timezone from input temporal string (for datetime/time output)
     input_tz = ""
     _input_iana_tz = None  # IANA timezone name from input (needs re-resolve post-truncation)
+    _time_iana_tz = None  # a time's named zone with no offset (4.7.0 row 20b)
     if temporal_fn in ("datetime", "time"):
         _tz_m = _re.search(r"([+-]\d{2}:\d{2}(?::\d{2})?)(\[[\w/]+\])?$", temporal_str or "")
         if _tz_m:
@@ -27537,6 +27538,16 @@ def _eval_truncate(fn, args_exprs):
                         _input_iana_tz = _iana_raw
         elif temporal_str and temporal_str.endswith("Z"):
             input_tz = "Z"
+        else:
+            # 4.7.0 row 20b: a zone named with no offset (`datetime('2015-03-29T12:30[Europe/Berlin]')`) kept none, and
+            # the truncation answered 'Z'. A datetime's offset is the zone's at the truncated time (below); a time's
+            # the zone's as time() reads it, at its reference date, at the truncated time too.
+            _bare = _re.search(r"\[([\w/+-]+)\]$", temporal_str or "")
+            if _bare and ("/" in _bare.group(1) or _bare.group(1) in ("UTC", "GMT")):
+                if temporal_fn == "datetime":
+                    _input_iana_tz = _bare.group(1)
+                else:
+                    _time_iana_tz = _bare.group(1)
 
     # Optional map for overrides (3rd arg)
     overrides = {}
@@ -27632,6 +27643,9 @@ def _eval_truncate(fn, args_exprs):
         # Input temporal had IANA timezone; re-resolve offset for post-truncation date
         _offset = _iana_tz_offset(_input_iana_tz, ref_year=y, ref_month=mo, ref_day=d, hour=h, minute=mi, second=s)
         out_tz = f"{_offset}[{_input_iana_tz}]" if _offset else _input_iana_tz
+    elif _time_iana_tz is not None:
+        _offset = _iana_tz_offset(_time_iana_tz, hour=h, minute=mi, second=s)
+        out_tz = f"{_offset}[{_time_iana_tz}]" if _offset else _time_iana_tz
 
     # Apply numeric overrides from map (timezone already handled above)
     if "year" in overrides and isinstance(overrides["year"], int):
