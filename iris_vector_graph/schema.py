@@ -266,6 +266,22 @@ def repair_ifind_helpers(cursor, *, conn=None, schema: str = "Graph_KG") -> Dict
     return result
 
 
+def guard_from(table: str) -> str:
+    """The FROM of a per-row guard on `table`, the qualified rdf_props or rdf_labels of an IVG Schema (`... WHERE s = ?
+    AND "key" = ?`). On a table whose statistics were taken near empty (a new namespace) IRIS answered such a guard
+    from the index that leads with the key or the label, every row holding it, so a load grew quadratically (4.7.0
+    row 2); without those the plan reads the s index, else (s, key), else the primary key, never the whole table
+    (EXPLAIN on 2026.3, each fallback measured with the better indexes dropped). Used by create_node, store_node and
+    the Cypher writers (translator._hint_row_guards); the bulk SQL templates below spell the same FROM, and
+    Graph.KG.EdgeScan's server loader its own."""
+    name = table.rsplit(".", 1)[-1]
+    if name == "rdf_props":
+        return f"%IGNOREINDEX {table}.idx_props_key, {table}.idx_props_key_valkey {table}"
+    if name == "rdf_labels":
+        return f"%IGNOREINDEX {table}.idx_labels_label {table}"
+    raise ValueError(f"guard_from: {table} is not rdf_props or rdf_labels")
+
+
 class GraphSchema:
     """Domain-agnostic RDF-style graph schema management"""
 
@@ -1777,14 +1793,14 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             # `node_id` alone found another graph's row, skipped the insert, and
             # still reported the node created (spec 227 FR-034).
             "nodes_with_graph": "INSERT INTO Graph_KG.nodes (node_id, graph_id) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.nodes WHERE node_id = ? AND COALESCE(graph_id, '') = COALESCE(?, ''))",
-            "rdf_labels": "INSERT INTO Graph_KG.rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_labels WHERE s = ? AND label = ?)",
-            "rdf_props": 'INSERT INTO Graph_KG.rdf_props (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props WHERE s = ? AND "key" = ?)',
+            "rdf_labels": "INSERT INTO Graph_KG.rdf_labels (s, label) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM %IGNOREINDEX Graph_KG.rdf_labels.idx_labels_label Graph_KG.rdf_labels WHERE s = ? AND label = ?)",
+            "rdf_props": 'INSERT INTO Graph_KG.rdf_props (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM %IGNOREINDEX Graph_KG.rdf_props.idx_props_key, Graph_KG.rdf_props.idx_props_key_valkey Graph_KG.rdf_props WHERE s = ? AND "key" = ?)',
             # Spec 227 (FR-034): the child tables re-keyed on (graph_id, ...), so
             # both the row and its guard name the graph. Unscoped, the guard finds
             # another graph's row for the same node ID, reports "already there",
             # and the insert is skipped with nothing written and no error.
-            "rdf_labels_with_graph": "INSERT INTO Graph_KG.rdf_labels (graph_id, s, label) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_labels WHERE COALESCE(graph_id, '') = COALESCE(?, '') AND s = ? AND label = ?)",
-            "rdf_props_with_graph": 'INSERT INTO Graph_KG.rdf_props (graph_id, s, "key", val) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM Graph_KG.rdf_props WHERE COALESCE(graph_id, \'\') = COALESCE(?, \'\') AND s = ? AND "key" = ?)',
+            "rdf_labels_with_graph": "INSERT INTO Graph_KG.rdf_labels (graph_id, s, label) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM %IGNOREINDEX Graph_KG.rdf_labels.idx_labels_label Graph_KG.rdf_labels WHERE COALESCE(graph_id, '') = COALESCE(?, '') AND s = ? AND label = ?)",
+            "rdf_props_with_graph": 'INSERT INTO Graph_KG.rdf_props (graph_id, s, "key", val) SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM %IGNOREINDEX Graph_KG.rdf_props.idx_props_key, Graph_KG.rdf_props.idx_props_key_valkey Graph_KG.rdf_props WHERE COALESCE(graph_id, \'\') = COALESCE(?, \'\') AND s = ? AND "key" = ?)',
             # graph_id is named explicitly, not left to the column default: on a
             # database upgraded from before spec-214 the column is nullable with no
             # default, and an omitted graph_id lands in the NULL spelling of the

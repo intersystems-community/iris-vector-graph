@@ -26,6 +26,7 @@ from iris_vector_graph.security import (
 
 from iris_vector_graph.constants import TEMPORAL_MARKED_ROW as _TEMPORAL_MARKED
 from iris_vector_graph.prop_values import SNAPSHOT_TYPED, bool_spellings_sql, number_spellings, prop_text
+from iris_vector_graph.schema import guard_from
 from iris_vector_graph.schema_name import DEFAULT_SCHEMA as _DEFAULT_SCHEMA
 
 from . import ast
@@ -5889,11 +5890,39 @@ def _pre_update_stage_snapshot(cypher_query, context, all_ctes, sql):
     return snap_stmt, ctes
 
 
+def _hint_row_guards(sql: str) -> str:
+    """`sql` with each per-node guard on rdf_props / rdf_labels (`NOT EXISTS (SELECT 1 FROM t WHERE ... s = ...)`)
+    reading from `guard_from(t)`.
+
+    In a new namespace (statistics taken near empty) IRIS answered those guards from idx_props_key / idx_labels_label,
+    every row of the key or label: `UNWIND $rows AS r CREATE (:UW {id: r, name: 'x'})`, 1,000 rows a statement, took
+    2.3 s for the first statement and 7.2 s for the tenth (4.7.0 row 2). A guard on the label alone (`WHERE label =
+    ?`) needs that index and is left alone. Applied once, to the finished statements, after the graph scoping that
+    finds the guards by their plain `FROM t WHERE` text.
+    """
+    prefix = "NOT EXISTS (SELECT 1 FROM "
+    for name in ("rdf_props", "rdf_labels"):
+        tbl = _table(name)
+        needle = f"{prefix}{tbl} WHERE "
+        start = sql.find(needle)
+        while start != -1:
+            where_at = start + len(needle)
+            depth, i = 1, where_at
+            while depth and i < len(sql):
+                depth += {"(": 1, ")": -1}.get(sql[i], 0)
+                i += 1
+            if re.search(r"\bs = ", sql[where_at:i]):
+                at = start + len(prefix)
+                sql = sql[:at] + guard_from(tbl) + sql[at + len(tbl) :]
+            start = sql.find(needle, where_at)
+    return sql
+
+
 def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
     """Assemble SQLQuery for transactional (DML) queries."""
     stmts, all_params = [], []
     for s, p in context.dml_statements:
-        stmts.append(s)
+        stmts.append(_hint_row_guards(s))
         all_params.append(p)
     sql = unpaged = None
     if cypher_query.return_clause:

@@ -394,9 +394,10 @@ ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 					// (4.6.0 R307; create_node stores '')
 					Set:valStr="" valStr = $Char(0)
 					Set tHasProp = 0
-					// %IGNOREINDEX, as for the labels above: idx_props_key is every node holding the key (every node's
-					// `id`, which the loader writes since 4.6.0 R089)
-					&sql(SELECT 1 INTO :tHasProp FROM %IGNOREINDEX Graph_KG.rdf_props.idx_props_key Graph_KG.rdf_props WHERE graph_id = '' AND s = :id AND "key" = :key)
+					// %IGNOREINDEX, as for the labels above: idx_props_key and idx_props_key_valkey lead with the key, every
+					// node holding it (every node's `id`, which the loader writes since 4.6.0 R089). Without them the
+					// plan reads idx_props_s, else idx_props_s_key, else pk_props: never the whole table.
+					&sql(SELECT 1 INTO :tHasProp FROM %IGNOREINDEX Graph_KG.rdf_props.idx_props_key, Graph_KG.rdf_props.idx_props_key_valkey Graph_KG.rdf_props WHERE graph_id = '' AND s = :id AND "key" = :key)
 					If SQLCODE = 100 {
 						&sql(INSERT INTO Graph_KG.rdf_props (graph_id, s, "key", val) VALUES ('', :id, :key, :valStr))
 					}

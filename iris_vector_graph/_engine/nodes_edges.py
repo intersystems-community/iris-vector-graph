@@ -21,7 +21,7 @@ from iris_vector_graph._write_txn import WriteTxn, caller_transaction_level, wri
 from iris_vector_graph.errors import GraphWriteError, IVGError
 from iris_vector_graph.prop_values import decode_typed_text, prop_value, read_node_value
 from iris_vector_graph.routing import graph_scope_predicate
-from iris_vector_graph.schema import GraphSchema
+from iris_vector_graph.schema import GraphSchema, guard_from
 from iris_vector_graph.schema_name import rewrite_schema_text
 
 logger = logging.getLogger(__name__)
@@ -1072,11 +1072,11 @@ class NodesEdgesMixin:
                 prop_sql = (
                     f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
                     f"SELECT ?, ?, ?, ? WHERE NOT EXISTS ("
-                    f'SELECT 1 FROM {self._t("rdf_props")} '
+                    f'SELECT 1 FROM {guard_from(self._t("rdf_props"))} '
                     f'WHERE graph_id = ? AND s = ? AND "key" = ?)'
                 )
             else:
-                prop_sql = f'INSERT INTO {self._t("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?)'
+                prop_sql = f'INSERT INTO {self._t("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {guard_from(self._t("rdf_props"))} WHERE s = ? AND "key" = ?)'
             cursor.executemany(prop_sql, prop_data)
             check_rowcount(cursor, prop_data, "property", self.conn)  # the node is new, so the guard skips none
 
@@ -2434,14 +2434,14 @@ class NodesEdgesMixin:
                 if _children_scoped:
                     cursor.execute(
                         f'INSERT INTO {self._t("rdf_props")} (graph_id, s, "key", val) '
-                        f'SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {self._t("rdf_props")} '
+                        f'SELECT ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {guard_from(self._t("rdf_props"))} '
                         'WHERE graph_id = ? AND s = ? AND "key" = ?)',
                         [graph_id, node_id, "id", node_id, graph_id, node_id, "id"],
                     )
                 else:
                     cursor.execute(
                         f'INSERT INTO {self._t("rdf_props")} (s, "key", val) SELECT ?, ?, ? '
-                        f'WHERE NOT EXISTS (SELECT 1 FROM {self._t("rdf_props")} WHERE s = ? AND "key" = ?)',
+                        f'WHERE NOT EXISTS (SELECT 1 FROM {guard_from(self._t("rdf_props"))} WHERE s = ? AND "key" = ?)',
                         [node_id, "id", node_id, node_id, "id"],
                     )
             for lbl in labels or []:
