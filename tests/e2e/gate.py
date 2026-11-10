@@ -156,6 +156,12 @@ SESSION_NAMESPACES: Dict[str, str] = {
         "a namespace on another server (IVG_R314_HOST and IVG_R314_PORT, tests/e2e/test_460_r314_call_yield_values_e2e"
         ".py), set up there by whoever runs it, so that both builds can be run against one file; unset, the file skips"
     ),
+    "IVG_OLD_NAMESPACE": (
+        "a namespace set up by an older release's checkout (4.6.5: `scripts/dev/make_scratch_namespace.py` run from a "
+        "worktree at that tag), never by this one's initialize_schema(), so that tests/e2e/test_470_ppr_old_namespace"
+        "_e2e.py reads this release's engine against the older functions and classes; the gate builds only this "
+        "release's namespaces, so whoever runs the file sets one up; unset, the file skips"
+    ),
 }
 #: The variables read only by the files they name, so a module that reads one needs that group.
 _BY_VAR = {g.var: name for name, g in GROUPS.items() if g.var != "IVG_NAMESPACE"}
