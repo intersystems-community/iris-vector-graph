@@ -978,23 +978,33 @@ indexes), then `engine.sync()` if `engine.status().adjacency.nkg_populated` is `
 when the ledger is on. IVG's own snapshots (`save_snapshot`, `restore_snapshot`) copy the graph to a file and back
 ([User Guide](USER_GUIDE.md)), and are not a backup of what the "Must keep" list names. A snapshot holds the tables
 `nodes`, `rdf_edges`, `rdf_labels`, `rdf_props`, `rdf_reifications`, `docs`, `embedding_registry`,
-`fhir_unresolved`, `fhir_definitions`, `fhir_canonical_refs`, `fhir_graphs` (the registered FHIR repositories and
-their sync watermarks), `code_crosswalk` (4.7.0; before, a restore elsewhere left a FHIR graph unregistered and its
-crosswalk empty), `kg_NodeEmbeddings`, `kg_EdgeEmbeddings` and each routed embedding table the registry names, and the
-globals `^KG`, `^NKG`, `^BM25Idx`, `^IVF`, `^PLAID`, `^VecIdx`,
+`fhir_unresolved`, `fhir_definitions`, `fhir_canonical_refs`, `kg_NodeEmbeddings`, `kg_EdgeEmbeddings` and each
+routed embedding table the registry names; the configuration tables `fhir_graphs` (the registered FHIR repositories
+and their sync watermarks), `code_crosswalk`, `rdf_namespaces`, `table_mappings`, `relationship_mappings` and
+`fhir_bridges` (4.7.0: before, a restore elsewhere brought back none of them, so a FHIR graph was unregistered, its
+crosswalk empty and the SQL mappings gone); and the globals `^KG`, `^NKG`, `^BM25Idx`, `^IVF`, `^PLAID`, `^VecIdx`,
 `^IVG.Ledger` with the ledger classes' storage, `^IVG.GraphMode` and `^IVG.TemporalStructural`; a global that is
-empty is not written. It leaves out `^IVG.Deploy`, `^IVG.CypherGen`, `^EmbedQueue`, and the tables
-`ledger_revisions` and `ledger_stats` as SQL (their storage globals are in it), `rdf_namespaces`,
-`relationship_mappings`, `table_mappings`, `fhir_bridges` and `embedding_quarantine`, and `kg_NodeEmbeddings_optimized`, which the vector-index migration
-rebuilds from `kg_NodeEmbeddings`. A table or global it cannot read (a login without SELECT on it, say) raises `SnapshotReadError`, a `RuntimeError` naming it and
-IRIS's error, and no archive is written; an `fhir_*` table not created yet (no FHIR graph set up) is left out.
-`erase_all()` keeps `fhir_graphs` and `code_crosswalk` (configuration, not graph content), so a restore matches their
-rows on the primary key: a replacing restore writes the archive's row over the one there, which puts back the
-watermarks that account for the restored edges, and a merge keeps the row there. A row the archive does not hold is
-kept either way. Before
-4.6.0 such a table was listed with 0 rows, so a restore from the archive emptied it. A snapshot made through the HTTP
-server goes to
-`IVG_SNAPSHOT_DIR`, the temporary directory unless you set it
+empty is not written. It leaves out `^IVG.Deploy`, `^IVG.CypherGen`, `^EmbedQueue`, the tables `ledger_revisions`
+and `ledger_stats` as SQL (their storage globals are in it), `embedding_quarantine`, and `kg_NodeEmbeddings_optimized`,
+which the vector-index migration rebuilds from `kg_NodeEmbeddings`. A table or global it cannot read (a login without
+SELECT on it, say) raises `SnapshotReadError`, a `RuntimeError` naming it and IRIS's error, and no archive is written;
+an `fhir_*` table not created yet (no FHIR graph set up) is left out. Before 4.6.0 such a table was listed with 0 rows,
+so a restore from the archive emptied it.
+
+`erase_all()` keeps the configuration tables, so a restore matches their rows on the primary key: a replacing restore
+writes the archive's row over the one there (for `fhir_graphs`, that puts back the watermarks that account for the
+restored edges), and a merge keeps the row there. A row the archive does not hold is kept either way. Two of their
+columns name things outside the archive. A `table_mappings` or `relationship_mappings` row names an SQL table, which a
+restore elsewhere does not bring: check that each `sql_table` and `via_table` exists there. A `fhir_graphs` row's
+`task_id` is the ID of the Task Manager task (`%SYS.Task`) that syncs the graph every `interval_s`, a task of the
+instance the snapshot came from. After a restore into another instance, or once that task is deleted, `task_id` names
+a task that does not exist there, or another one. Check in `%SYS` with
+`SELECT ID, Name, NameSpace FROM %SYS.Task WHERE ID = <task_id>`: the graph's task is named `IVG FHIR sync <graph>`
+in this namespace. If it is not, clear the column first (`UPDATE Graph_KG.fhir_graphs SET task_id = NULL WHERE
+graph_id = '<graph>'`), then run `fhir_graph_schedule(graph)`, which creates a new task. Don't call
+`fhir_graph_schedule` or `fhir_graph_unschedule` before clearing it: they update or delete whichever task has that ID.
+
+A snapshot made through the HTTP server goes to `IVG_SNAPSHOT_DIR`, the temporary directory unless you set it
 ([known issue](KNOWN_ISSUES.md#snapshots-made-through-the-rest-api-land-in-the-temporary-directory)).
 
 **Stop IRIS before its container.** IRIS data survives a container restart cleanly only when IRIS was stopped first;

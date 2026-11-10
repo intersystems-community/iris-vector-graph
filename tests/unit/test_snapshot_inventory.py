@@ -370,13 +370,24 @@ def test_the_fhir_bookkeeping_is_exported_and_restored(table):
     assert fname in snapshot_mod.RESTORE_TABLE_ORDER
 
 
-@pytest.mark.parametrize("table", ("Graph_KG.fhir_graphs", "Graph_KG.code_crosswalk"))
-def test_the_fhir_configuration_is_exported_and_restored(table):
+CONFIGURATION = {
+    "Graph_KG.fhir_graphs": ("graph_id",),
+    "Graph_KG.code_crosswalk": ("target_graph", "target_node_id", "code_system_uri", "code"),
+    # 4.7.0 row 26b: the RDF prefixes, the SQL table and relationship mappings, and the deprecated FHIR bridges
+    "Graph_KG.rdf_namespaces": ("prefix",),
+    "Graph_KG.table_mappings": ("label",),
+    "Graph_KG.relationship_mappings": ("source_label", "predicate", "target_label"),
+    "Graph_KG.fhir_bridges": ("fhir_code", "kg_node_id"),
+}
+
+
+@pytest.mark.parametrize("table", sorted(CONFIGURATION))
+def test_a_configuration_table_is_exported_and_restored(table):
     """4.7.0 (row 26): a FHIR graph's registration and the code crosswalk were in no export, so a restore elsewhere
     left the graph unregistered and every concept lookup empty. They are configuration, not graph content (no erase
     removes them, and `Graph.KG.GraphStores.Inventory()` does not list them), so they are not in the plan."""
     assert table not in snapshot_mod.STORE_PLAN
-    assert table in snapshot_mod.CONFIGURATION_TABLES
+    assert snapshot_mod.CONFIGURATION_TABLES.get(table) == CONFIGURATION[table]  # each table's primary key
     assert snapshot_mod.SQL_TABLES_EXPORT.count(table) == 1
     assert table.replace("Graph_KG.", "Graph_KG_") + ".ndjson" in snapshot_mod.RESTORE_TABLE_ORDER
 

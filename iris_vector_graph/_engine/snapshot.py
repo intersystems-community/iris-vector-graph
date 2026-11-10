@@ -232,6 +232,10 @@ RESTORE_TABLE_ORDER = [
     "Graph_KG_fhir_graphs.ndjson",
     # No FK: a code may map to a node of a graph the archive does not hold.
     "Graph_KG_code_crosswalk.ndjson",
+    "Graph_KG_rdf_namespaces.ndjson",
+    "Graph_KG_table_mappings.ndjson",
+    "Graph_KG_relationship_mappings.ndjson",
+    "Graph_KG_fhir_bridges.ndjson",
 ]
 
 #: The plain tables `save_snapshot` exports with `SELECT *`. A table that does not
@@ -254,6 +258,10 @@ SQL_TABLES_EXPORT = [
     "Graph_KG.fhir_canonical_refs",
     "Graph_KG.fhir_graphs",
     "Graph_KG.code_crosswalk",
+    "Graph_KG.rdf_namespaces",
+    "Graph_KG.table_mappings",
+    "Graph_KG.relationship_mappings",
+    "Graph_KG.fhir_bridges",
 ]
 
 #: Tables with no single identifying first column. A merge restore skips a row that
@@ -279,6 +287,12 @@ LAZY_FHIR_TABLES = FHIR_TABLES | {"Graph_KG.fhir_graphs"}
 CONFIGURATION_TABLES = {
     "Graph_KG.fhir_graphs": ("graph_id",),
     "Graph_KG.code_crosswalk": ("target_graph", "target_node_id", "code_system_uri", "code"),
+    # 4.7.0 row 26b: the RDF prefixes `register_namespace` records, the SQL tables and relationships mapped as nodes
+    # and edges (`map_sql_table`, `map_sql_relationship`), and the deprecated FHIR code bridges
+    "Graph_KG.rdf_namespaces": ("prefix",),
+    "Graph_KG.table_mappings": ("label",),
+    "Graph_KG.relationship_mappings": ("source_label", "predicate", "target_label"),
+    "Graph_KG.fhir_bridges": ("fhir_code", "kg_node_id"),
 }
 
 
