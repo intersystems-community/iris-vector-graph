@@ -17,7 +17,7 @@ from translating CREATE, UNWIND CREATE, SET, MERGE and USE GRAPH CREATE) names i
 index that leads with the key or the label (9995d0d7: idx_labels_label for the first). Then, ratios, robust to a
 busy host: the tenth UNWIND CREATE statement takes under 2x the first (9995d0d7: 3.6x); 10,000 nodes, each with the
 label and the `id` property (R089), load with the last 1,000-node chunk under 2x the first (9995d0d7: 11x). Where: `IVG_LOAD_NS`, a namespace with no data yet (`make_scratch_namespace.py --no-install`),
-on `IVG_LOAD_PORT` (default 31972).
+on `IVG_PORT` (default 31972).
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-PORT = int(os.environ.get("IVG_LOAD_PORT", "31972"))
+PORT = int(os.environ.get("IVG_PORT", "31972"))
 NS = os.environ.get("IVG_LOAD_NS", "")
 
 pytestmark = [pytest.mark.e2e,

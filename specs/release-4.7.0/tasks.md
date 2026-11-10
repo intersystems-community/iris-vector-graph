@@ -87,7 +87,7 @@ Rows are `~/.cache/ivg-bench/rel-470/ranked.md`'s. Each row has a test task, wri
 
 ## Wave 3: value reading
 
-- [ ] T050 [W3-VAL] Row 21 test: `collect(n.on)` then `UNWIND`: `true`, `false` and `''` come back as themselves
+- [ ] T050 [W3-VAL] Row 21 test: `collect(n.flag)` then `UNWIND`: `true`, `false` and `''` come back as themselves
 - [ ] T051 [W3-VAL] Row 21 fix (also `collect(exists(n.p))` and `collect(x IS NOT NULL)` answering [1, 0], found during 4.7.0): An unwound boolean or `''` of a list built at run time reads as `1`, `0` or null
 - [ ] T052 [W3-VAL] Row 22 test: `collect(e)` over `[[1], true]` answers `[[1], true]`
 - [ ] T053 [W3-VAL] Row 22 fix (also `UNWIND [date(...), 'b'] AS e RETURN e < 'c'` answering true, not null, found during 4.7.0): An UNWIND of a run-time list reads a nested list, map or boolean as a string

@@ -9,7 +9,7 @@ any class outside that package (the two IVG.* classes) always read as missing. N
 is pinned here, on whatever IRIS the namespace is.
 
 Where: `IVG_SETUP_NS`, a namespace with no IVG classes yet (USER2-style on a throwaway container, or an IVG470*
-scratch namespace made empty), on `IVG_SETUP_PORT` (default 31972) as `IVG_SETUP_USER` / `IVG_SETUP_PASSWORD`.
+scratch namespace made empty), on `IVG_PORT` (default 31972) as `IVG_SETUP_USER` / `IVG_SETUP_PASSWORD`.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import pathlib
 
 import pytest
 
-PORT = int(os.environ.get("IVG_SETUP_PORT", "31972"))
+PORT = int(os.environ.get("IVG_PORT", "31972"))
 NS = os.environ.get("IVG_SETUP_NS", "")
 USER = os.environ.get("IVG_SETUP_USER", "_SYSTEM")
 PASSWORD = os.environ.get("IVG_SETUP_PASSWORD", "SYS")
