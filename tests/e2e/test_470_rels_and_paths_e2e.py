@@ -77,7 +77,7 @@ def test_size_and_an_element_answer_as_before(engs, route):
     [[n, first]] = _rows(engs[route], "MATCH (:T470P)-[r:R470P]->() WITH collect(r) AS rs RETURN size(rs) AS n, "
                                       "rs[0] AS first")
     assert n == 2
-    assert first == "R470P"  # the type, as before 4.7.0 (row 19 is the whole list; see the report)
+    assert first in (R1, R2)  # the relationship itself since 4.7.0 row 20b (it was the type, 'R470P')
 
 
 @pytest.mark.parametrize("route", ns463.ROUTES)

@@ -315,10 +315,10 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 ### `nodes(p)` of a variable-length path answers node ids
 
 - **Symptom:** `MATCH p = (a)-[:R*2]->(b) RETURN nodes(p)` answers `['a', 'b', 'c']`, the node ids, where openCypher
-  answers the nodes, and so does `tail(nodes(p))` of any path. Of a fixed-length path
+  answers the nodes, and so do `tail(nodes(p))` and `reverse(nodes(p))` of such a path. Of a fixed-length path
   `RETURN nodes(p), relationships(p)` answers the nodes and the relationships as `RETURN [a, b]` and `RETURN [r]` spell
-  them (`{"_id", "_labels", "_props"}` and `{"type", "props"}` each; before 4.7.0 the ids and the types), and
-  `relationships(p)` of a variable-length path answers the relationships.
+  them (`{"_id", "_labels", "_props"}` and `{"type", "props"}` each; before 4.7.0 the ids and the types), and so do
+  `tail()` and `reverse()` of them; `relationships(p)` of a variable-length path answers the relationships.
 - **Cause:** a path is built in SQL as its ids and types; the nodes are read back where a query reads their
   properties, and a `RETURN` of `nodes(p)` itself of a fixed-length path.
 - **Versions:** all 4.x (a fixed-length path's, before 4.7.0).

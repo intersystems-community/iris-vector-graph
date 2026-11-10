@@ -14394,11 +14394,49 @@ def _fixed_path_relationships(expr, context) -> bool:
     return bool(aliases) and not any(a in getattr(context, "_edgescan_aliases", set()) for a in aliases)
 
 
+def _rel_list_elem_name(expr, context) -> Optional[str]:
+    """The name of a WITH-collected relationship list that `expr` reads one element of by position (`rs[0]`), else
+    None (4.7.0 row 20b)."""
+    if not (isinstance(expr, ast.SubscriptExpression) and isinstance(expr.expression, ast.Variable)):
+        return None
+    name = expr.expression.name
+    alias = str(context.variable_aliases.get(name, ""))
+    if alias.startswith("Stage") and name in getattr(context, "rel_list_json_vars", ()):
+        return name
+    return None
+
+
+def _wraps_list_literal(expr) -> bool:
+    """`reverse([...])` or `tail([...])` (nested): a RETURN item whose list literal's nodes and relationships are
+    spelled as the objects `RETURN [a, r]` answers (4.7.0 row 20b: `reverse([r, s])` answered the types)."""
+    if not (isinstance(expr, ast.FunctionCall) and expr.function_name.lower() in ("reverse", "tail")
+            and len(expr.arguments) == 1):
+        return False
+    arg = expr.arguments[0]
+    return (isinstance(arg, ast.Literal) and isinstance(arg.value, list)) or _wraps_list_literal(arg)
+
+
+def _innermost_fn(expr) -> str:
+    """The name of the function under any `reverse` / `tail` wrapping `expr`, lower case."""
+    while isinstance(expr, ast.FunctionCall) and expr.function_name.lower() in ("reverse", "tail") and expr.arguments:
+        expr = expr.arguments[0]
+    return expr.function_name.lower() if isinstance(expr, ast.FunctionCall) else ""
+
+
 def _returned_path_list_sql(expr, context) -> Optional[str]:
     """A RETURN item `nodes(p)` or `relationships(p)` of a fixed-length named path, as the JSON list of the nodes or
     relationships themselves, spelled as `RETURN [a, b]` and `RETURN [r]` spell theirs (4.7.0 row 20: the SQL lists
     the node ids and the relationship types, which the comprehensions, UNWIND and size() over them read, and RETURN
     answered those). None for anything else, a variable-length path among it."""
+    if (isinstance(expr, ast.FunctionCall) and len(expr.arguments) == 1
+            and expr.function_name.lower() in ("reverse", "tail")):
+        # 4.7.0 row 20b: reverse() and tail() of either keep its elements (tail answered the ids, reverse the text
+        # backwards)
+        inner = _returned_path_list_sql(expr.arguments[0], context)
+        if inner is None:
+            return None
+        fn = "CY_REVERSE" if expr.function_name.lower() == "reverse" else "LIST_TAIL"
+        return f"{_fn(fn)}({inner})"
     if not (isinstance(expr, ast.FunctionCall) and len(expr.arguments) == 1
             and expr.function_name.lower() in ("nodes", "relationships")):
         return None
@@ -23570,7 +23608,11 @@ def _scalar_string(fn, args, args_exprs, context=None):
         arg_expr = args_exprs[0] if args_exprs else None
         is_list = (
             isinstance(arg_expr, ast.Literal) and isinstance(arg_expr.value, list)
-        ) or isinstance(arg_expr, ast.ListComprehension)
+        ) or isinstance(arg_expr, ast.ListComprehension) or (
+            # 4.7.0 row 20b: a function answering a list (`relationships(p)`, `nodes(p)`, `tail(...)`); REVERSE turned
+            # its JSON text around as a string, ']"R"['
+            context is not None and isinstance(arg_expr, ast.FunctionCall) and _container_kind(arg_expr, context) == "list"
+        )
         # One UDF reverses a JSON array (keeping element types) or a string,
         # so the argument is named once: IRIS inlines CTEs, and a CASE that
         # repeated it multiplied the readers of chained stages until Prepare
@@ -27715,7 +27757,7 @@ def _expr_scalar_function(fn, sql_fn, args, args_exprs, expr, context, segment):
     result = _scalar_coalesce(fn, args, args_exprs)
     if result is not None:
         return result
-    result = _scalar_string(fn, args, args_exprs)
+    result = _scalar_string(fn, args, args_exprs, context)
     if result is not None:
         return result
     result = _scalar_numeric_and_datetime(fn, args, args_exprs, context)
@@ -29579,7 +29621,7 @@ def translate_return_clause(ret, context):
             continue
         context._graph_value_elems = isinstance(item.expression, ast.MapLiteral) or (
             isinstance(item.expression, ast.Literal) and isinstance(item.expression.value, list)
-        )
+        ) or _wraps_list_literal(item.expression)
         context._typed_rel_prop = _is_rel_prop_ref(item.expression, context)
         _typed_arith_scope(context, item.expression, through_tostring=True)
         # R250: a RETURN item that is sum() of an untyped value reads its type (_expr_aggregation)
@@ -29605,6 +29647,13 @@ def translate_return_clause(ret, context):
             _rel_json = _with_rel_list_json(item.expression, context) if isinstance(item.expression, ast.Variable) else None
             if _rel_json is not None:
                 sql = _rel_json
+            elif _rel_list_elem_name(item.expression, context) is not None:
+                # 4.7.0 row 20b: an element read by position (`rs[0]`, `rs[-1]`) is the relationship, from the same
+                # list RETURN rs answers; it read the stage's types (or, for a staged r, its properties) column
+                _base = item.expression.expression.name
+                _alias = context.variable_aliases[_base]
+                sql = re.sub(rf"\b{re.escape(_alias)}\.{re.escape(_base)}\b", f"{_alias}.__rels_{_base}_json", sql)
+                _rel_json = sql
             # 4.7.0 row 20: nodes(p) and relationships(p) answer the nodes and relationships, not ids and types
             _path_list = _returned_path_list_sql(item.expression, context)
             if _path_list is not None:
@@ -29737,7 +29786,7 @@ def translate_return_clause(ret, context):
             if _holds_collected_nodes(item.expression, context):
                 context.__dict__.setdefault("node_json_aliases", []).append(safe)
             if _holds_graph_json(item.expression, context) or _rel_json is not None or (
-                    _path_list is not None and item.expression.function_name.lower() == "relationships"):
+                    _path_list is not None and _innermost_fn(item.expression) == "relationships"):
                 context.__dict__.setdefault("graph_json_aliases", []).append(safe)
             if _container_kind(item.expression, context) is not None or (
                 isinstance(item.expression, ast.Variable)
