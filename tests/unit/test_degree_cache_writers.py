@@ -191,8 +191,11 @@ def _methods(path: Path) -> dict[str, str]:
 
 
 ADJACENCY_METHODS = _methods(ADJACENCY)
-S_LOCK = re.compile(r'Lock\s+\+\^IVG\.AdjW(?:\([^)]*\))?#"S"')
-S_UNLOCK = re.compile(r'Lock\s+-\^IVG\.AdjW(?:\([^)]*\))?#"S"')
+#: the shared writer lock: taken by a Lock statement, or (4.7.0 row 17) through WriterLock, which goes on without it
+#: after 5 s and marks the graph's degree cache; the unlock is then conditional, `Lock:tLocked -...`
+RAW_S_LOCK = re.compile(r'Lock\s+\+\^IVG\.AdjW(?:\([^)]*\))?#"S"')
+S_LOCK = re.compile(r'Lock\s+\+\^IVG\.AdjW(?:\([^)]*\))?#"S"|\.\.WriterLock\(')
+S_UNLOCK = re.compile(r'Lock(?::\w+)?\s+-\^IVG\.AdjW(?:\([^)]*\))?#"S"')
 GEN_BUMP = re.compile(r'\$(?i:increment|i)\(\s*\^KG\(\s*"gen"')
 GEN_KILL = re.compile(r'(?i:kill|k)\s+(?:[^,()\n]|\([^()]*\))*\^KG\(\s*"gen"')
 OUT_TOUCH = [
@@ -232,8 +235,9 @@ def test_the_shared_lock_is_released_in_the_method_that_takes_it(name):
     body = ADJACENCY_METHODS[name]
     taken = len(S_LOCK.findall(body))
     released = len(S_UNLOCK.findall(body))
-    if name in ("BeginRebuild",):
-        assert taken == 1 and released == 0, "BeginRebuild takes the lock and EndRebuild releases it"
+    if name in ("BeginRebuild", "WriterLock"):
+        # BeginRebuild's lock is released by EndRebuild, WriterLock's by the writer that asked for it
+        assert taken == 1 and released == 0, f"{name} takes the lock and its caller (or EndRebuild) releases it"
         return
     if name in ("EndRebuild",):
         assert taken == 0 and released >= 1
@@ -246,9 +250,9 @@ def test_the_shared_lock_is_released_in_the_method_that_takes_it(name):
 def test_the_lock_is_always_taken_with_a_timeout_and_checked():
     for name, body in ADJACENCY_METHODS.items():
         for line in body.splitlines():
-            if S_LOCK.search(line):
+            if RAW_S_LOCK.search(line):
                 assert re.search(r'#"S":\s*\d+', line), f"Adjacency.{name}: lock without a timeout: {line.strip()}"
-        if S_LOCK.search(body):
+        if RAW_S_LOCK.search(body):
             assert "$Test" in body, f"Adjacency.{name} never checks whether the lock was granted"
 
 

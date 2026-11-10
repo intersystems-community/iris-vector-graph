@@ -71,7 +71,8 @@ ClassMethod Degree(pGraph As %String, pSrc As %String, pPred As %String = "") As
 		Lock -^IVG.AdjW(pGraph)#"E"
 	}
 	Set tN = ..Count(pGraph, pSrc, pPred)
-	If tGot && (+$Get(^KG("gen", pGraph, pSrc)) = tGen) {
+	// 4.7.0 row 17: a write without the lock may be uncommitted (Graph.KG.Adjacency.WriterLock)
+	If tGot && '$Data(^IVG.AdjNoLock(pGraph)) && (+$Get(^KG("gen", pGraph, pSrc)) = tGen) {
 		Try {
 			Set ^KG("degc", pGraph, pSrc, tKey) = $ListBuild(tGen, tN)
 			If +$Get(^KG("gen", pGraph, pSrc)) '= tGen {
@@ -155,7 +156,7 @@ ClassMethod WarmFill(pGraph As %String, pSrc As %String) As %Integer
 		Set tTotal = tTotal + tCounts(tP)
 	}
 	Set tStored = 0
-	If tGot && (+$Get(^KG("gen", pGraph, pSrc)) = tGen) {
+	If tGot && '$Data(^IVG.AdjNoLock(pGraph)) && (+$Get(^KG("gen", pGraph, pSrc)) = tGen) {
 		Set ^KG("degc", pGraph, pSrc, $Char(1)) = $ListBuild(tGen, tTotal)
 		Set tStored = 1
 		Set tP = ""

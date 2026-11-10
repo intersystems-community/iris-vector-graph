@@ -774,6 +774,8 @@ IVG_GLOBALS = {
     "IVG.CypherCompiled": ("derived", "set sc=##class(Graph.KG.Cypher.Gen).DropAll()"),  # plans and IVGC.* classes
     "IVG.AlgoCache": ("derived", "set n=##class(Graph.KG.AlgoCache).InvalidateAll()"),
     "IVG.BuiltFrom": ("derived", "kill ^IVG.BuiltFrom"),  # which write token a derived store was built from
+    # 4.7.0 row 17: a graph whose ^KG was written without the writer lock (Graph.KG.Adjacency.WriterLock)
+    "IVG.AdjNoLock": ("derived", "kill ^IVG.AdjNoLock"),
     "IVG.warnings": ("derived", "kill ^IVG.warnings"),
     "IVG.Deploy": ("install", ""),
     "IVG.AdjW": ("lock", ""),

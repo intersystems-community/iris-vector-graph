@@ -380,6 +380,13 @@ _PARAM_BACK = (("pGraph", "graph"), ("pSrc", "s"), ("pPred", "p"), ("pDst", "o")
 def _as_edgescan_wrote_it(name: str) -> str:
     body = _method_body((CLS / "Adjacency.cls").read_text(), _ADJACENCY_METHOD[name])
     text = body[body.index("\n{") :]
+    # 4.7.0 row 17: the writer lock through WriterLock (refused after 5 s, it goes on without it), back to the refusal
+    method = _ADJACENCY_METHOD[name]
+    text = text.replace(
+        f'\tSet tLocked = ..WriterLock(pGraph, "{method}")\n',
+        '\tLock +^IVG.AdjW(pGraph)#"S":5\n\tIf \'$Test {\n\t\tQuit $$$ERROR($$$GeneralError, "Adjacency.'
+        f'{method}: the writer lock for graph "_pGraph_" was not granted in 5 seconds")\n\t}}\n',
+    ).replace("Lock:tLocked -^IVG.AdjW", "Lock -^IVG.AdjW")
     text = text.replace("\tSet tSC = $$$OK\n", "").replace("\tQuit tSC\n", "")
     text = re.sub(r'\tIf pWeight = "" \{\n\t\tSet pWeight = "1.0"\n\t\}\n', "", text)
     for new, old in _PARAM_BACK:

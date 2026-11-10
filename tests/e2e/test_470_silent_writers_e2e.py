@@ -1,4 +1,4 @@
-"""4.7.0 row 3c: two silent failures in the loaders; row 11: DETACH DELETE and reifications.
+"""4.7.0 row 3c: two silent failures in the loaders; row 11: DETACH DELETE and reifications; row 17: the writer lock.
 
 (i) `BulkLoader.build_graph_globals` sent `Do ##class(Graph.KG.Traversal).BuildKG()` as SQL: IRIS answered SQLCODE -51
 ("SQL statement expected"), the method logged it and answered False, and `^KG` was never rebuilt. `load_networkx`
@@ -223,3 +223,111 @@ def test_detach_delete_in_a_named_graph_takes_its_edges_reification(conn):
     assert _count(conn, "SELECT COUNT(*) FROM Graph_KG.rdf_reifications WHERE reifier_id = ?", [f"{u}rd"]) == 1
     assert _count(conn, "SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = ?", [f"{u}rd"]) == 1
     assert _edge_id(conn, f"{u}a", "R470R", f"{u}b") == by_graph[""]
+
+
+# ------------------------------------------------------------------------------- row 17: the adjacency writer lock
+#
+# Another process holds ^IVG.AdjW(0) exclusively. IRIS's SQL filing does not read the error a functional index callback
+# returns or throws, so on 4.6.5 a writer whose shared lock was not granted in 5 s left the row written and ^KG without
+# the edge (create_edge answered True after 5.02 s; a raw INSERT the same). Now the writer goes on without the lock
+# (Graph.KG.Adjacency.WriterLock): the edge is in ^KG, ^KG("gen") and ^KG("__version") move as ever (so ^IVG.AlgoCache
+# and ^ArnoKG miss), and ^IVG.AdjNoLock(graph) stops the degree cache storing until a rebuild clears it.
+
+
+@pytest.fixture
+def held_writer_lock():
+    """^IVG.AdjW(0) held exclusively by a second connection, released in teardown whatever the test did."""
+    import iris
+
+    holder = _connect()
+    other = iris.createIRIS(holder)
+    other.lock("", 1, "^IVG.AdjW", 0)
+    try:
+        yield other
+    finally:
+        try:
+            other.unlock("", "^IVG.AdjW", 0)
+        finally:
+            holder.close()
+
+
+def _lock_free(conn) -> bool:
+    import iris
+
+    probe = iris.createIRIS(_connect())
+    try:
+        probe.lock("", 0, "^IVG.AdjW", 0)
+    except RuntimeError:
+        return False
+    probe.unlock("", "^IVG.AdjW", 0)
+    return True
+
+
+@pytest.mark.parametrize("writer", ("create_edge", "cypher_create", "raw_sql_insert"))
+def test_a_write_while_the_writer_lock_is_held_still_writes_kg(conn, held_writer_lock, writer):
+    from iris_vector_graph import IRISGraphEngine
+
+    u = _uid()
+    eng = IRISGraphEngine(conn, embedding_dimension=rr.DIM)
+    if writer == "create_edge":
+        assert eng.create_edge(f"{u}a", "R470L", f"{u}b") is True
+    elif writer == "cypher_create":
+        eng.execute_cypher("CREATE (:T470L {id: $a})-[:R470L]->(:T470L {id: $b})", {"a": f"{u}a", "b": f"{u}b"},
+                           raise_on_error=True)
+    else:
+        cur = conn.cursor()
+        for n in (f"{u}a", f"{u}b"):
+            cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, '')", [n])
+        cur.execute("INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (?, 'R470L', ?, '')",
+                    [f"{u}a", f"{u}b"])
+    assert _count(conn, "SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s = ?", [f"{u}a"]) == 1
+    assert _kg_out(conn, f"{u}a", "R470L", f"{u}b") > 0, "the row is written and ^KG has no entry for it"
+
+
+def test_no_cached_answer_from_during_the_hold_is_served_after_it(conn):
+    """A WCC answer cached while the lock is held, before a write without the lock, is a miss after it: the next call
+    recomputes and joins the two nodes the write connected. The degree cache stores nothing for the graph until sync()
+    rebuilds ^KG, and stores again after."""
+    import iris
+
+    from iris_vector_graph import IRISGraphEngine
+
+    u = _uid()
+    eng = IRISGraphEngine(conn, embedding_dimension=rr.DIM)
+    assert eng.create_edge(f"{u}a", "R470L", f"{u}c")  # two components: {a, c} and {b, d}
+    assert eng.create_edge(f"{u}b", "R470L", f"{u}d")
+    native = iris.createIRIS(conn)
+    holder = _connect()
+    other = iris.createIRIS(holder)
+    other.lock("", 1, "^IVG.AdjW", 0)
+    try:
+        def component(rows, nid):
+            return {r[0]: r[1] for r in rows}[nid]
+
+        before = eng._store.execute_wcc().rows
+        assert component(before, f"{u}a") != component(before, f"{u}b")
+        assert eng.create_edge(f"{u}b", "R470L", f"{u}a") is True  # without the lock
+        assert int(native.isDefined("^IVG.AdjNoLock", 0)) > 0
+        after = eng._store.execute_wcc().rows
+        assert component(after, f"{u}a") == component(after, f"{u}b"), "the answer cached before the write was served"
+    finally:
+        other.unlock("", "^IVG.AdjW", 0)
+        holder.close()
+    native.kill("^KG", "degc", 0, f"{u}a")
+    assert int(native.classMethodValue("Graph.KG.Adj", "Degree", 0, f"{u}a")) == 1
+    assert int(native.isDefined("^KG", "degc", 0, f"{u}a")) == 0, "a degree was stored while a lock-less write stands"
+    eng.sync()
+    assert int(native.isDefined("^IVG.AdjNoLock", 0)) == 0, "the rebuild did not clear the marker"
+    assert int(native.classMethodValue("Graph.KG.Adj", "Degree", 0, f"{u}a")) == 1
+    assert int(native.isDefined("^KG", "degc", 0, f"{u}a")) > 0
+
+
+def test_no_writer_lock_is_left_behind(conn, held_writer_lock):
+    from iris_vector_graph import IRISGraphEngine
+
+    u = _uid()
+    eng = IRISGraphEngine(conn, embedding_dimension=rr.DIM)
+    assert eng.create_edge(f"{u}a", "R470L", f"{u}b")
+    held_writer_lock.unlock("", "^IVG.AdjW", 0)
+    assert _lock_free(conn), "a writer kept ^IVG.AdjW(0) after its write"
+    held_writer_lock.lock("", 1, "^IVG.AdjW", 0)  # the fixture releases it

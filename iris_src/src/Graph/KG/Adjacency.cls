@@ -32,7 +32,8 @@
 ///                                         no-wait probe fail while an uncommitted write is visible
 ///
 /// Erase and rebuild kill the affected gen and degc subtrees with the out/in kill, under the
-/// same lock. A lock that cannot be taken in 5 seconds is an error status and nothing is written.
+/// same lock. A lock that cannot be taken in 5 seconds is an error status and nothing is written, but for the row
+/// writers (4.7.0 row 17: IRIS ignores a functional index's error), which write without it: see WriterLock.
 /// Reweight does not change a degree, so it takes no lock and does not bump.
 ///
 /// graph is a derived index key: integer 0 for the default graph, the graph name
@@ -47,6 +48,30 @@
 Class Graph.KG.Adjacency Extends %RegisteredObject
 {
 
+/// The shared writer lock on graph pGraph, for a row writer (pWho names it): 1 when granted in 5 seconds. 4.7.0 row
+/// 17: refused, the writer returned an error status, which IRIS's SQL filing does not read from a functional index
+/// callback (Graph.KG.AdjIndex), so the row was written and its ^KG entry was not. Now the writer goes on without the
+/// lock and answers 0. What the lock keeps safe is the degree cache: a reader's exclusive no-wait probe (Graph.KG.Adj
+/// Degree, WarmFill) fails while a writer holds it, and the unlock waits for the writer's commit or rollback, so no
+/// count that includes an uncommitted entry is stored. Without the lock that probe would succeed, so the writer marks
+/// the graph in ^IVG.AdjNoLock(pGraph) with $Increment, which a rollback does not take back, and the readers store no
+/// degree for that graph until a rebuild of ^KG from the rows (RemoveAll, RemoveGraph) clears it. ^KG("gen") and
+/// ^KG("__version") move as with the lock, so ^IVG.AlgoCache and ^ArnoKG see the write. A WARNING goes to messages.log
+/// once per process and graph.
+ClassMethod WriterLock(pGraph, pWho As %String) As %Boolean
+{
+	Lock +^IVG.AdjW(pGraph)#"S":5
+	If $Test {
+		Quit 1
+	}
+	Set tmp = $Increment(^IVG.AdjNoLock(pGraph))
+	If '$Data(^||IVG.AdjNoLockWarned(pGraph)) {
+		Set ^||IVG.AdjNoLockWarned(pGraph) = 1
+		Do ##class(%SYS.System).WriteToConsoleLog("IVG Graph.KG.Adjacency."_pWho_": the writer lock for graph "_pGraph_" was not granted in 5 seconds; ^KG was written without it, and the graph's degree cache is not stored until sync() rebuilds ^KG", 0, 1)
+	}
+	Quit 0
+}
+
 /// Write adjacency for one edge. pWeight "" means 1.0.
 ///
 /// The generation is bumped on every call, so this is for an edge that is new to the
@@ -58,17 +83,14 @@ ClassMethod Put(pGraph, pSrc As %String, pPred As %String, pDst As %String, pWei
 	If pWeight = "" {
 		Set pWeight = "1.0"
 	}
-	Lock +^IVG.AdjW(pGraph)#"S":5
-	If '$Test {
-		Quit $$$ERROR($$$GeneralError, "Adjacency.Put: the writer lock for graph "_pGraph_" was not granted in 5 seconds")
-	}
+	Set tLocked = ..WriterLock(pGraph, "Put")
 	Set ^KG("out", pGraph, pSrc, pPred, pDst) = +pWeight
 	Set ^KG("in", pGraph, pDst, pPred, pSrc) = +pWeight
 	Set tmp = $Increment(^KG("gen", pGraph, pSrc))
 	// ^ArnoKG serves a cached snapshot while its stamp equals ^KG("__version"), so a
 	// write that leaves the stamp alone is invisible to the next Arno walk.
 	Set tmp = $Increment(^KG("__version"))
-	Lock -^IVG.AdjW(pGraph)#"S"
+	Lock:tLocked -^IVG.AdjW(pGraph)#"S"
 	// ^NKG is per-identifier (no graph dimension); unchanged by spec 214
 	If $Data(^NKG("$meta", "nodeCount")) {
 		Set sIdx = ##class(Graph.KG.GraphIndex).InternNode(pSrc)
@@ -102,10 +124,7 @@ ClassMethod PutShadow(pGraph, pSrc As %String, pPred As %String, pDst As %String
 	If pWeight = "" {
 		Set pWeight = "1.0"
 	}
-	Lock +^IVG.AdjW(pGraph)#"S":5
-	If '$Test {
-		Quit $$$ERROR($$$GeneralError, "Adjacency.PutShadow: the writer lock for graph "_pGraph_" was not granted in 5 seconds")
-	}
+	Set tLocked = ..WriterLock(pGraph, "PutShadow")
 	// Same structural edge at a new timestamp: refresh the weight, leave the
 	// generation alone. Killing and rewriting would be the same thing more slowly.
 	Set tExists = $Data(^KG("out", pGraph, pSrc, pPred, pDst))
@@ -115,7 +134,7 @@ ClassMethod PutShadow(pGraph, pSrc As %String, pPred As %String, pDst As %String
 		Set tmp = $Increment(^KG("gen", pGraph, pSrc))
 		Set tmp = $Increment(^KG("__version"))
 	}
-	Lock -^IVG.AdjW(pGraph)#"S"
+	Lock:tLocked -^IVG.AdjW(pGraph)#"S"
 	Quit tSC
 }
 
@@ -128,10 +147,7 @@ ClassMethod PutShadow(pGraph, pSrc As %String, pPred As %String, pDst As %String
 ClassMethod Remove(pGraph, pSrc As %String, pPred As %String, pDst As %String) As %Status
 {
 	Set tSC = $$$OK
-	Lock +^IVG.AdjW(pGraph)#"S":5
-	If '$Test {
-		Quit $$$ERROR($$$GeneralError, "Adjacency.Remove: the writer lock for graph "_pGraph_" was not granted in 5 seconds")
-	}
+	Set tLocked = ..WriterLock(pGraph, "Remove")
 	Set tHad = $Data(^KG("out", pGraph, pSrc, pPred, pDst))
 	Kill ^KG("out", pGraph, pSrc, pPred, pDst)
 	Kill ^KG("in", pGraph, pDst, pPred, pSrc)
@@ -139,7 +155,7 @@ ClassMethod Remove(pGraph, pSrc As %String, pPred As %String, pDst As %String) A
 		Set tmp = $Increment(^KG("gen", pGraph, pSrc))
 	}
 	Set tmp = $Increment(^KG("__version"))
-	Lock -^IVG.AdjW(pGraph)#"S"
+	Lock:tLocked -^IVG.AdjW(pGraph)#"S"
 	// Only when the entry was there: a row delete removes it through the index (spec 252), and a
 	// caller's own Remove after that must not count ^NKG down a second time.
 	If (tHad) && ($Data(^NKG("$meta", "nodeCount"))) && ('..HeldElsewhere(pGraph, pSrc, pPred, pDst)) {
@@ -214,11 +230,7 @@ ClassMethod PutKeyed(pGraph, pSrc As %String, pPred As %String, pDst As %String,
 			// then finds its child present. Every job that gets here writes the same state.
 			Set tOthers = ..OtherEdgeKeys(pSrc, pPred, pDst, pGraph, tEkey, .tKeys)
 		}
-		Lock +^IVG.AdjW(pGraph)#"S":5
-		If '$Test {
-			$$$ThrowStatus($$$ERROR($$$GeneralError, "Adjacency.PutKeyed: the writer lock for graph "_pGraph_" was not granted in 5 seconds"))
-		}
-		Set tLocked = 1
+		Set tLocked = ..WriterLock(pGraph, "PutKeyed")
 		If ('tHash) && (tOthers = 0) {
 			// The same edge again: refresh its weight, count nothing.
 			Set ^KG("out", pGraph, pSrc, pPred, pDst) = tW
@@ -247,12 +259,10 @@ ClassMethod PutKeyed(pGraph, pSrc As %String, pPred As %String, pDst As %String,
 			// Put path above bumps the version in Put.
 			Set tmp = $Increment(^KG("__version"))
 		}
-		Lock -^IVG.AdjW(pGraph)#"S"
+		Lock:tLocked -^IVG.AdjW(pGraph)#"S"
 		Set tLocked = 0
 	} Catch tEx {
-		If tLocked {
-			Lock -^IVG.AdjW(pGraph)#"S"
-		}
+		Lock:tLocked -^IVG.AdjW(pGraph)#"S"
 		Set tSC = tEx.AsStatus()
 	}
 	Quit tSC
@@ -278,11 +288,7 @@ ClassMethod RemoveKeyed(pGraph, pSrc As %String, pPred As %String, pDst As %Stri
 		}
 		// A repeated delete of a gone edge is a no-op, not a second bump.
 		Quit:'$Data(^KG("out", pGraph, pSrc, pPred, pDst, tEkey))
-		Lock +^IVG.AdjW(pGraph)#"S":5
-		If '$Test {
-			$$$ThrowStatus($$$ERROR($$$GeneralError, "Adjacency.RemoveKeyed: the writer lock for graph "_pGraph_" was not granted in 5 seconds"))
-		}
-		Set tLocked = 1
+		Set tLocked = ..WriterLock(pGraph, "RemoveKeyed")
 		Kill ^KG("out", pGraph, pSrc, pPred, pDst, tEkey)
 		Kill ^KG("in", pGraph, pDst, pPred, pSrc, tEkey)
 		Set tmp = $Increment(^KG("gen", pGraph, pSrc))
@@ -305,12 +311,10 @@ ClassMethod RemoveKeyed(pGraph, pSrc As %String, pPred As %String, pDst As %Stri
 			Kill ^KG("out", pGraph, pSrc, pPred, pDst, "#")
 			Set tmp = $Increment(^KG("__version"))
 		}
-		Lock -^IVG.AdjW(pGraph)#"S"
+		Lock:tLocked -^IVG.AdjW(pGraph)#"S"
 		Set tLocked = 0
 	} Catch tEx {
-		If tLocked {
-			Lock -^IVG.AdjW(pGraph)#"S"
-		}
+		Lock:tLocked -^IVG.AdjW(pGraph)#"S"
 		Set tSC = tEx.AsStatus()
 	}
 	Quit tSC
@@ -347,10 +351,7 @@ ClassMethod RemoveSource(pGraph, pSrc As %String) As %Status
 	If pSrc = "" {
 		Quit tSC
 	}
-	Lock +^IVG.AdjW(pGraph)#"S":5
-	If '$Test {
-		Quit $$$ERROR($$$GeneralError, "Adjacency.RemoveSource: the writer lock for graph "_pGraph_" was not granted in 5 seconds")
-	}
+	Set tLocked = ..WriterLock(pGraph, "RemoveSource")
 	Set tNkg = $Data(^NKG("$meta", "nodeCount"))
 	Kill tEdges
 	Set tN = 0
@@ -379,7 +380,7 @@ ClassMethod RemoveSource(pGraph, pSrc As %String) As %Status
 	Kill ^KG("deg", pGraph, pSrc)
 	Kill ^KG("degp", pGraph, pSrc)
 	Set tmp = $Increment(^KG("__version"))
-	Lock -^IVG.AdjW(pGraph)#"S"
+	Lock:tLocked -^IVG.AdjW(pGraph)#"S"
 	For tI = 1:1:tN {
 		If '..HeldElsewhere(pGraph, pSrc, $List(tEdges(tI), 1), $List(tEdges(tI), 2)) {
 			Do ##class(Graph.KG.GraphIndex).DeleteIndex("", pSrc, $List(tEdges(tI), 1), $List(tEdges(tI), 2), "")
@@ -436,6 +437,7 @@ ClassMethod RemoveGraph(pGraph) As %Status
 	Kill ^KG("gen", pGraph)
 	Kill ^KG("degc", pGraph)
 	Kill ^KG("degw", pGraph)
+	Kill ^IVG.AdjNoLock(pGraph)  // nothing of the graph is left in the degree cache (WriterLock)
 	// Residue of the stored counters, as in RemoveSource.
 	Kill ^KG("deg", pGraph)
 	Kill ^KG("degp", pGraph)
@@ -459,6 +461,8 @@ ClassMethod RemoveAll() As %Status
 	Kill ^KG("gen")
 	Kill ^KG("degc")
 	Kill ^KG("degw")
+	// rebuilt from the rows next: no lock-less write is left in the degree cache (WriterLock)
+	Kill ^IVG.AdjNoLock
 	// Residue of the stored counters, as in RemoveSource.
 	Kill ^KG("deg")
 	Kill ^KG("degp")
@@ -516,17 +520,14 @@ ClassMethod RowUpdate(pGraphId As %String, pSrc As %String, pPred As %String, pD
 	Set tW = ..WeightOf(pQuals)
 	If $Data(^KG("out", tG, pSrc, pPred, pDst, tEkey)) {
 		// A keyed edge of a multigraph triple: its child, then the leaf from the lowest key.
-		Lock +^IVG.AdjW(tG)#"S":5
-		If '$Test {
-			Quit $$$ERROR($$$GeneralError, "Adjacency.RowUpdate: the writer lock for graph "_tG_" was not granted in 5 seconds")
-		}
+		Set tLocked = ..WriterLock(tG, "RowUpdate")
 		Set ^KG("out", tG, pSrc, pPred, pDst, tEkey) = +tW
 		Set ^KG("in", tG, pDst, pPred, pSrc, tEkey) = +tW
 		Do ..SetLeafFromLowest(pSrc, pPred, pDst, tG)
 		// The degree is unchanged, but the weighted degree cache (degw) rides on the same generation.
 		Set tmp = $Increment(^KG("gen", tG, pSrc))
 		Set tmp = $Increment(^KG("__version"))
-		Lock -^IVG.AdjW(tG)#"S"
+		Lock:tLocked -^IVG.AdjW(tG)#"S"
 		Quit $$$OK
 	}
 	Quit ..Reweight(tG, pSrc, pPred, pDst, tW)
