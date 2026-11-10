@@ -277,6 +277,33 @@ engine.execute_cypher(
 # → [['q1', '0.95'], ['q2', '.95'], ['q3', '0.95']]
 ```
 
+### A value written through the ledger is stored as its text
+
+- **Symptom:** `Changeset.set_property` (and a changeset's `create_node` / `upsert_node` properties) sends every
+  value as its text: 30 is the string `"30"`, `True` the string `"true"`. A number written through the ledger reads
+  back as a string (`n.p` answers `'30'`; a boolean's `'true'` reads as true, as any stored `'true'` does). And the
+  ledger cannot retype a value of the same text: setting 30 over a Cypher-stored number 30, or over a string `'30'`,
+  is the identical value the ledger skips (no write, no record), so the stored type stays as it was.
+- **Versions:** every release with the ledger (spec 213).
+- **Workaround:** write a value whose type matters with Cypher (`SET n.p = 30`, or `SET n.p = toInteger(n.p)` to
+  retype the text) or `store_node`, outside the changeset; read a ledger-written number with `toInteger()` or
+  `toFloat()`. Typed changesets are planned for 4.8.0.
+- **Check:** the ledger's record and the stored value are both the text.
+
+```python
+from iris_vector_graph.ledger.changeset import Changeset
+
+engine.ledger.enable()
+engine.execute_cypher("CREATE (:LedgerText {node_id: 'lt1', n: 30})")
+result = engine.ledger.commit(
+    Changeset(actor="docs", actor_type="example").set_property("lt1", "p", 30).set_property("lt1", "n", 30)
+)
+engine.execute_cypher("MATCH (x {node_id: 'lt1'}) RETURN x.p, x.n").rows
+# → [['30', 30]]
+[(m.attr, m.new) for m in engine.ledger.get_revision(result.revision.revision_id).records]
+# → [('p', '30')]
+```
+
 ### A stored string that spells a boolean, a list or a map reads as one, and `"\u0000"` as the empty string
 
 - **Symptom:** a property holding the string `'true'` or `'false'` reads back as the boolean `True` or `False`, one
