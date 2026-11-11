@@ -508,6 +508,16 @@ tables`), as such a write fails anyway (the entry below).
 - **Check:** `MATCH (n) WHERE n.p = true RETURN n.p, toString(n.p)` lists the rows the equality matches, with the
   spelling each holds.
 
+### The first large `UNWIND $rows ... MERGE` statement of a run is slow
+
+- **Symptom:** the first 1,000-row `UNWIND $rows AS r MERGE (n:L {id: r.id}) SET ...` statement a process runs takes
+  68 to 184 s; the second and third statements of the same shape take 1.5 to 30 s. Measured on 4.6.5 and 4.7.0 alike.
+  It looks like a one-off prepare of the large statement the translation generates.
+- **Versions:** 4.6.5 and 4.7.0; planned for 4.7.1.
+- **Workaround:** make the first batch of a run small (a few rows) so the statement is prepared on it, or expect the
+  cost once per process; later batches of the same shape are faster.
+- **Check:** time the first and the second statement of the same batch shape in one process.
+
 ### A query that reads many properties prepares slowly
 
 - **Symptom:** the first run of a query that reads properties many times on the SQL route takes seconds to prepare.

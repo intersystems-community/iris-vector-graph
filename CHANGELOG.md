@@ -198,7 +198,18 @@ WHERE label = 'A' RETURN label` answered every label; it answers the filtered on
   (interleaved): the SET's UPDATE and INSERT took 11.4 and 11.6 ms of each MERGE on 4.6.5, against 1.95 and 2.28 ms
   on 4.4.1. The lookup read every row of the key, and since 4.6.0 (R089) every node has an `id` row (59,300 in the
   4.6.5 namespace, 9,600 in the 4.4.1 one). It now also compares `val_key`, so that index drives it: the UPDATE took
-  10.8 ms before this fix and 0.30 ms after. <!-- cy's final tuned and cold timings go here -->
+  10.8 ms before this fix and 0.30 ms after. `MERGE (n:L {id: $id}) SET n.v = $v`, seconds per 1,000:
+
+  | Namespace             | 4.4.1               | 4.6.5        | 4.7.0             |
+  | --------------------- | ------------------- | ------------ | ----------------- |
+  | tuned at 50,000 nodes | 2.1 to 5.0          | 23.7 to 37.7 | 3.4 to 5.8        |
+  | new, over 3 × 1,000   | 62 → 1,088 to 1,231 | 77 → 1,171   | 5.7 to 7.9 → 12.0 |
+
+  4.7.0 is back within 4.4.1's range on the tuned namespace and no longer grows with the graph. `UNWIND $rows ...
+MERGE` batches of 1,000 rows a statement (statements 2 and 3, tuned) took 25.2 to 28.3 s on 4.6.5 and 1.5 to 2.0 s
+  on 4.7.0; a MERGE matching 500 nodes 37.9 to 38.7 ms on 4.6.5 and 19.8 to 23.1 ms on 4.7.0, all 500 set. The first
+  1,000-row statement of a run is slower on every release (Known issues).
+
 - Number equality on a node property reads the `(key, val_key)` index, where it read every row of the key. On 50,000
   nodes, median of 7 in three interleaved pairs: a labelled `n.p = 0.95` 14.2 to 14.7 ms before, 1.4 to 1.6 ms after;
   the inline `{p: 0.95}` without a label 14.0 to 14.3 ms and 1.1 to 1.5 ms; `{q: 777}` 10.7 to 11.4 ms and 0.9 to 1.1
@@ -220,8 +231,8 @@ WHERE label = 'A' RETURN label` answered every label; it answers the filtered on
 
 **Opened against closed.** Of the 55 defects open on 4.6.5, 29 are closed in 4.7.0. Of the release's cut, three stay open (the other 23 were outside it):
 a variable-length read from Mindwalk waits on their rerun; typed relationship storage and the parallel-relationship
-default go to 4.8.0. 33 more were found during 4.7.0 and fixed. Of those found and not fixed, 10 are queued for
-4.7.1 and 3 for 4.8.0 with typed storage; [Known issues](docs/KNOWN_ISSUES.md) has the ones with a workaround.
+default go to 4.8.0. 33 more were found during 4.7.0 and fixed. Of those found and not fixed, 11 are queued for
+4.7.1 (among them the first large `UNWIND ... MERGE` statement of a run) and 3 for 4.8.0 with typed storage; [Known issues](docs/KNOWN_ISSUES.md) has the ones with a workaround.
 
 ### v4.6.5 (2026-11-09)
 
