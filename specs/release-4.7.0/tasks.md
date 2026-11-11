@@ -141,8 +141,7 @@ Rows are `~/.cache/ivg-bench/rel-470/ranked.md`'s. Each row has a test task, wri
 
 Of the 55 open defects on 4.6.5 (`~/.cache/ivg-bench/rel-470/ranked.md`), **29 are closed**: rows 1-6, 8-22, 24 (node
 properties; relationship properties go with row 23), 25, 26, 28, 29, 33, 34, 35. Row 5 was not IVG's (python-devx's
-check filtered `Graph.KG.*`), pinned by a test. Open from the cut: row 7 (waits on Mindwalk's rerun), row 23 (typed
-storage: Tom's decision, 4.8.0 recommended), row 27 (moves to 4.8.0 with the parallel-relationship default).
+check filtered `Graph.KG.*`), pinned by a test. Open from the cut: row 7 (waits on Mindwalk's rerun), row 23 (typed storage: 4.8.0, Tom 2026-11-11), row 27 (moves to 4.8.0 with the parallel-relationship default).
 
 **Found during 4.7.0 and fixed: 33.** Silent wrong answers or data loss unless marked:
 
