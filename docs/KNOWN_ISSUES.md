@@ -26,8 +26,7 @@ engine.initialize_schema()
 
 - **Symptom:** outside multigraph mode, `CREATE (a)-[:R]->(b)` between a pair that already has an `R` relationship
   returns no error and writes nothing. openCypher adds a second, parallel relationship.
-- **Versions:** all 4.x. Early 4.0 builds raised `SQLCODE -119` here instead. Parallel relationships by default come
-  with typed storage, planned for 4.8.0.
+- **Versions:** all 4.x. Early 4.0 builds raised `SQLCODE -119` here instead. Parallel relationships by default are planned for 4.8.0.
 - **Workaround:** turn on multigraph mode for the graph (`engine.set_multigraph(graph, True)`) when you need parallel
   relationships, or use `MERGE` when you mean "at most one".
 - **Check:** count the relationships after the write.
