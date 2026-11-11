@@ -62,3 +62,13 @@ Row 6: a temporal purge retires the endpoints it leaves bare by default (Tom, 20
 | Speed, the paths touched (bulk load, ppr, PageRank, Cypher writes), paired with 4.6.5 after `TUNE TABLE` | no slowdown over 10% unexplained; row 2 within 10% of 4.4.1 or the gap explained |
 | Newcomer walkthroughs (expert, Python developer) on the built wheel, with the round-10 rule sheet | 0 blocker, 0 wrong |
 | Opened against closed | at least 28 of the 55 closed |
+
+## Deferred to 4.7.1
+
+Found during 4.7.0 and not in its cut (the list is frozen).
+
+- **Orphaned label rows.** A node removed by SQL leaves its `rdf_labels` rows too; `create_node` of that id in that
+  graph with one of those labels is refused (-119) and raises `GraphWriteError`. 4.7.0 replaces orphaned property rows
+  only.
+- **`bulk_create_nodes` over orphaned property rows** keeps the old values (it merges), where `create_node` now
+  replaces them.

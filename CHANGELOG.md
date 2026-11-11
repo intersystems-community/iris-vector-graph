@@ -38,6 +38,8 @@ whatever setup ran: see the list that follows.
 - PageRank and personalized PageRank refuse an alpha or damping outside (0, 1) and an iteration count below 1; a
   VecIndex refuses a metric it does not compute; `fhir_graph_schedule` / `unschedule` refuse a `task_id` that names
   another task.
+- `create_node` replaces the property rows that a node removed by SQL left behind under its id in its graph. It kept
+  the old values, and 4.7.0's row count raised `GraphWriteError` ("IRIS refused 1 of the 1 property rows").
 
 **Fixed: reported by users**
 
@@ -196,6 +198,10 @@ WHERE label = 'A' RETURN label` answered every label; it answers the filtered on
   `<LIST>LoadTableFunction`; and a relationship number past 64-bit integers (`SET r.p = 1e20`) read back through
   `collect` and UNWIND as the integer 10\*\*20 rather than the float 1e+20. A string `'inf'` compares as an infinity
   in `=` and range filters, as on 4.6.5 (Known issues).
+- `status()` as a reading or writing role (ADMIN_GUIDE §3) reported the adjacency index probe as a privilege error
+  (SQLCODE -99 on `%Dictionary.CompiledIndex`), and a read before setup went to SQL instead of the native executor and
+  was refused (-99). The probe falls back to `Graph.KG.Adjacency.IndexKind()` over the Native API; if that is refused
+  too, `status()` adds `adjacency` to `unknown`.
 
 **Speed**
 
