@@ -121,6 +121,9 @@ PURE = [
     ("JSON_KEYS('{\"k\":1}')", '["k"]'),
     ("Percentile_PDISC('[5,1,3]', 0.5)", "3"),  # sorted 1,3,5; index (3-1)*0.5 = 1
     ("Percentile_PCONT('[1,2,3,4]', 0.5)", 2.5),  # position 1.5, halfway from 2 to 3
+    # 4.7.0 row 35 (421566c5): Cypher's typed write of rdf_props.val; another text than the stored one is the
+    # UPDATE's own write, so it answers the new value and writes nothing (Graph.KG.PropWrite.SetVal)
+    ("Prop_Set('1', '30', '31')", "31"),
 ]
 
 

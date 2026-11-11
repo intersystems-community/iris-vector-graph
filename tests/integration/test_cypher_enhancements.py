@@ -104,9 +104,12 @@ def test_order_by_limit(engine):
 def test_numeric_comparison_filtering(engine):
     _cleanup_test_nodes(engine)
 
-    engine.create_node('TEST_NODE:cmp_1', properties={'confidence': '0.3'})
-    engine.create_node('TEST_NODE:cmp_2', properties={'confidence': '0.7'})
-    engine.create_node('TEST_NODE:cmp_3', properties={'confidence': '0.9'})
+    # 4.7.0 row 24 (b9c12438): a number filter on a node property matches stored numbers only; the string '0.9'
+    # is a string, null against 0.7 (CHANGELOG 4.7.0, "Behaviour changes you will see")
+    engine.create_node('TEST_NODE:cmp_1', properties={'confidence': 0.3})
+    engine.create_node('TEST_NODE:cmp_2', properties={'confidence': 0.7})
+    engine.create_node('TEST_NODE:cmp_3', properties={'confidence': 0.9})
+    engine.create_node('TEST_NODE:cmp_s', properties={'confidence': '0.9'})
 
     result = engine.execute_cypher(
         "MATCH (n) WHERE n.id STARTS WITH 'TEST_NODE:cmp_' AND n.confidence >= 0.7 RETURN n.id AS id"
@@ -120,7 +123,8 @@ def test_numeric_comparison_skips_non_numeric(engine):
     _cleanup_test_nodes(engine)
 
     engine.create_node('TEST_NODE:cmp_n1', properties={'confidence': 'abc'})
-    engine.create_node('TEST_NODE:cmp_n2', properties={'confidence': '0.9'})
+    engine.create_node('TEST_NODE:cmp_n2', properties={'confidence': 0.9})
+    engine.create_node('TEST_NODE:cmp_n3', properties={'confidence': '0.9'})  # a string: not a number (row 24)
 
     result = engine.execute_cypher(
         "MATCH (n) WHERE n.id STARTS WITH 'TEST_NODE:cmp_' AND n.confidence >= 0.7 RETURN n.id AS id"

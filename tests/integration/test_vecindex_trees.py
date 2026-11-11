@@ -123,9 +123,11 @@ def test_every_metric_ranks_its_nearest_first(vi, metric, query, expected):
         assert hits[0]["score"] <= hits[1]["score"]
 
 
-def test_unknown_metric_falls_back_to_cosine(vi):
-    name = vi.make(metric="bogus", trees=0)
-    assert vi.search(name, [1.0, 0.05, 0.0, 0.0], k=1)[0]["id"] == "A_5"
+def test_unknown_metric_is_refused(vi):
+    """4.7.0 row 8b (0eb099d2): a VecIndex refuses a metric it does not compute, where an unknown one was measured
+    as cosine (CHANGELOG: "A VecIndex refuses a metric it does not compute")."""
+    with pytest.raises(Exception, match=r"metric must be one of cosine, l2, l1, dot, chebyshev, got 'bogus'"):
+        vi.make(metric="bogus", trees=0)
 
 
 def test_search_multi_answers_each_query_in_order(vi):
