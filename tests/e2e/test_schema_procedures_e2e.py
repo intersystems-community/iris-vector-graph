@@ -123,12 +123,12 @@ def test_initialize_schema_idempotent_e2e(clean_iris_procedures):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.e2e
-def test_dimension_1536_procedure_e2e(iris_connection):
+def test_dimension_1536_procedure_e2e(iris_connection, iris_master_cleanup):
     """spec.md US2 AC-2 (SC-005): embedding_dimension=1536 produces correct VECTOR size.
 
-    Note: The existing kg_NodeEmbeddings table has 768-dim VECTOR columns.
-    If that dimension mismatches 1536, initialize_schema logs a warning but
-    doesn't fail — the procedure is still installed with the configured dimension.
+    4.7.0 row 25: setup re-declares the namespace's vector columns at 1536 only when
+    asked (`rewidth=True`) and only while they are empty, which `iris_master_cleanup`
+    makes them; the per-test guard in tests/conftest.py puts the session width back.
     """
     from iris_vector_graph.engine import IRISGraphEngine
 

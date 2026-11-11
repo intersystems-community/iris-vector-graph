@@ -40,7 +40,13 @@ def nodes_with_vecs(engine):
     for nid in node_ids:
         engine.create_node(nid, labels=["VecNode"], properties={"idx": int(nid.split(":")[1])})
         engine.store_embedding(nid, _rand_vec(dim))
-    return pfx, n, dim, node_ids
+    yield pfx, n, dim, node_ids
+    # 4.7.0 row 25: the 200 vectors stayed in the shared namespace, and every later setup at another width there
+    # (test_stress_setup, test_stress_traversal) was refused: "holds 200 vectors"
+    assert engine.delete_nodes_by_prefix(f"{pfx}:") == n
+    cur = engine.conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM Graph_KG.kg_NodeEmbeddings WHERE node_id %STARTSWITH ?", [f"{pfx}:"])
+    assert int(cur.fetchone()[0]) == 0, "the module's vectors outlived its nodes"
 
 
 class TestVecIndex:

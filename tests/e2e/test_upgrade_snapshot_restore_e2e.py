@@ -58,13 +58,16 @@ def restored(request, iris_connection, iris_master_cleanup):
 
     The dimension comes from the release, not from the test: restoring an
     archive into an engine configured for a different width would fail inside
-    `TO_VECTOR` and the loss would look like a snapshot defect.
+    `TO_VECTOR` and the loss would look like a snapshot defect. `iris_master_cleanup`
+    has emptied the vector tables, so `rewidth=True` re-declares them at the release's
+    width (4.7.0 row 25: setup changes a width only when asked); the per-test guard in
+    tests/conftest.py puts the session width back after.
     """
     release = request.param
     engine = IRISGraphEngine(
         iris_connection, embedding_dimension=release.embedding_dimension
     )
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)
     result = engine.restore_snapshot(str(release.zip_path))
     return release, engine, result
 
@@ -314,7 +317,7 @@ def restored_v216(iris_connection, iris_master_cleanup):
     engine = IRISGraphEngine(
         iris_connection, embedding_dimension=release.embedding_dimension
     )
-    engine.initialize_schema()
+    engine.initialize_schema(rewidth=True)  # as `restored` does
     result = engine.restore_snapshot(str(release.zip_path))
     return release, engine, result
 

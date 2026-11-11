@@ -94,16 +94,17 @@ def test_a_test_may_narrow_the_shared_table(iris_connection):
 
     cur = iris_connection.cursor()
     try:
-        # `initialize_schema` only re-declares the column while the table is empty —
-        # which is exactly the state most of the suite leaves it in.
-        cur.execute("DELETE FROM Graph_KG.kg_NodeEmbeddings")
+        # `initialize_schema(rewidth=True)` re-declares the columns only while they hold
+        # no vectors (4.7.0 row 25), and another test may have left some in any of them.
+        for table in ("kg_NodeEmbeddings", "kg_NodeEmbeddings_optimized", "kg_EdgeEmbeddings"):
+            cur.execute(f"DELETE FROM Graph_KG.{table}")
         iris_connection.commit()
     finally:
         with contextlib.suppress(Exception):
             cur.close()
 
     IRISGraphEngine(iris_connection, embedding_dimension=narrow).initialize_schema(
-        auto_deploy_objectscript=False
+        auto_deploy_objectscript=False, rewidth=True
     )
 
     cur = iris_connection.cursor()
@@ -158,7 +159,7 @@ def test_initialize_schema_reports_a_table_that_needs_a_manual_migration(iris_co
     engine = IRISGraphEngine(iris_connection, embedding_dimension=SESSION_EMBEDDING_DIM)
     faked = "Graph_KG.kg_NodeEmbeddings"
 
-    def _fake_migrate(cursor, dim):
+    def _fake_migrate(cursor, dim, rewidth=False):
         return {
             "altered": [],
             "unchanged": [],

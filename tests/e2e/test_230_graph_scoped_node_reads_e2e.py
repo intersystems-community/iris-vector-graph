@@ -17,6 +17,8 @@ import uuid
 
 import pytest
 
+from tests.e2e import namespace_width
+
 IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
 IRIS_PORT = int(os.environ.get("IVG_PORT", "31972"))
 IRIS_NS = os.environ.get("IVG_NAMESPACE", "USER")  # the run's namespace (R266: IRIS_NAMESPACE put scratch runs in USER)
@@ -37,10 +39,11 @@ def engine():
         from iris_vector_graph.engine import IRISGraphEngine
 
         conn = iris.connect(IRIS_HOST, IRIS_PORT, IRIS_NS, IRIS_USER, IRIS_PASS)
-        eng = IRISGraphEngine(conn, embedding_dimension=4)
-        eng.initialize_schema()
     except Exception as ex:  # pragma: no cover - environment guard
         pytest.skip(f"IRIS unavailable: {ex}")
+    # The namespace's width (4.7.0 row 25); and a setup failure is a failure, not "IRIS unavailable", as it was
+    eng = IRISGraphEngine(conn, embedding_dimension=namespace_width.of(conn))
+    eng.initialize_schema()
 
     eng.create_node(
         SHARED_ID, labels=["ScopedA"], properties={"side": "a", "sort": "1"}, graph=GRAPH_A

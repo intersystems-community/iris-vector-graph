@@ -5,13 +5,14 @@ import uuid
 import contextlib
 
 import pytest
+from tests.e2e import namespace_width
 
 
 @pytest.fixture(scope="module")
 def engine(iris_connection):
     from iris_vector_graph.engine import IRISGraphEngine
-    e = IRISGraphEngine(iris_connection, embedding_dimension=4)
-    e.initialize_schema(rewidth=True)
+    e = IRISGraphEngine(iris_connection, embedding_dimension=namespace_width.of(iris_connection))
+    e.initialize_schema()
     return e
 
 

@@ -35,6 +35,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from tests.e2e import namespace_width
 
 pytestmark = [pytest.mark.e2e]
 
@@ -71,8 +72,8 @@ class TestTuneTablesE2E:
         _require_iris(iris_connection)
         from iris_vector_graph.engine import IRISGraphEngine
 
-        engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
-        status = engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
+        engine = IRISGraphEngine(iris_connection, embedding_dimension=namespace_width.of(iris_connection))
+        status = engine.initialize_schema(auto_deploy_objectscript=False)
         assert "tuned" in status, sorted(status)
         for table in ("nodes", "rdf_edges", "rdf_labels", "rdf_props"):
             assert status["tuned"][f"Graph_KG.{table}"] is True, status["tuned"]
@@ -83,8 +84,8 @@ class TestTuneTablesE2E:
         _require_iris(iris_connection)
         from iris_vector_graph.engine import IRISGraphEngine
 
-        engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
-        engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
+        engine = IRISGraphEngine(iris_connection, embedding_dimension=namespace_width.of(iris_connection))
+        engine.initialize_schema(auto_deploy_objectscript=False)
 
         plan = _plan(iris_connection, SCOPED_LOOKUP)
         assert INDEX_MAP in plan, f"not reading an index map:\n{plan}"

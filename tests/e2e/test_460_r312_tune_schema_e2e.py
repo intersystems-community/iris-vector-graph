@@ -24,7 +24,7 @@ def test_setup_tunes_the_namespaces_own_schema():
         schema = iris.createIRIS(conn).get("^IVG.Deploy", "schema")
         if not schema or schema.upper() == "GRAPH_KG":
             pytest.skip(f"{alt.NS} records {schema!r}; this case needs a non-default IVG Schema")
-        engine = IRISGraphEngine(conn, schema_prefix=schema, namespace=alt.NS, embedding_dimension=768)
+        engine = IRISGraphEngine(conn, schema_prefix=schema, namespace=alt.NS, embedding_dimension=alt.DIM)
         tuned = engine.initialize_schema()["tuned"]
         assert tuned, tuned
         assert all(name.split(".")[0] == schema for name in tuned), tuned

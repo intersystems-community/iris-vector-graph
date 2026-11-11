@@ -3,14 +3,15 @@ strawberry = pytest.importorskip("strawberry", reason="strawberry not installed"
 from fastapi.testclient import TestClient
 from iris_vector_graph import IRISGraphEngine
 from iris_vector_graph.gql import create_app
+from tests.e2e import namespace_width
 
 @pytest.mark.requires_database
 def test_gql_traversal(iris_connection, iris_master_cleanup):
     """
     Test bi-directional relationship traversal via GraphQL.
     """
-    engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    engine.initialize_schema(rewidth=True)
+    engine = IRISGraphEngine(iris_connection, embedding_dimension=namespace_width.of(iris_connection))
+    engine.initialize_schema()
     
     # 1. Setup test data
     node1 = "GQL:TRAV:NODE1"

@@ -5,13 +5,14 @@ import threading
 import contextlib
 
 import pytest
+from tests.e2e import namespace_width
 
 
 @pytest.fixture(scope="module")
 def engine(iris_connection):
     from iris_vector_graph.engine import IRISGraphEngine
-    e = IRISGraphEngine(iris_connection, embedding_dimension=4)
-    e.initialize_schema(rewidth=True)
+    e = IRISGraphEngine(iris_connection, embedding_dimension=namespace_width.of(iris_connection))
+    e.initialize_schema()
     return e
 
 
@@ -63,7 +64,7 @@ class TestMultiContext:
 
     def test_two_engine_instances_same_connection(self, engine):
         from iris_vector_graph.engine import IRISGraphEngine
-        e2 = IRISGraphEngine(engine.conn, embedding_dimension=4)
+        e2 = IRISGraphEngine(engine.conn, embedding_dimension=engine.embedding_dimension)
         pfx = f"twoeng_{uuid.uuid4().hex[:6]}"
         engine.create_node(f"{pfx}:a", labels=["TwoEng"])
         r = e2.execute_cypher(f"MATCH (n:TwoEng) WHERE n.node_id = '{pfx}:a' RETURN n.node_id")

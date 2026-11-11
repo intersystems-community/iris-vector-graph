@@ -4,6 +4,7 @@ import uuid
 import contextlib
 
 import pytest
+from tests.e2e import namespace_width
 
 IRIS_HOST = os.environ.get("IRIS_HOST", "localhost")
 IRIS_PORT = int(os.environ.get("IVG_PORT", "31972"))
@@ -20,8 +21,8 @@ def raw_conn(iris_connection):
 @pytest.fixture
 def fresh_engine(raw_conn):
     from iris_vector_graph.engine import IRISGraphEngine
-    e = IRISGraphEngine(raw_conn, embedding_dimension=4)
-    e.initialize_schema(rewidth=True)
+    e = IRISGraphEngine(raw_conn, embedding_dimension=namespace_width.of(raw_conn))
+    e.initialize_schema()
     yield e
 
 
@@ -29,8 +30,8 @@ class TestColdInit:
 
     def test_initialize_schema_creates_tables(self, raw_conn):
         from iris_vector_graph.engine import IRISGraphEngine
-        e = IRISGraphEngine(raw_conn, embedding_dimension=4)
-        e.initialize_schema(rewidth=True)
+        e = IRISGraphEngine(raw_conn, embedding_dimension=namespace_width.of(raw_conn))
+        e.initialize_schema()
         cur = raw_conn.cursor()
         cur.execute("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'Graph_KG'")
         count = cur.fetchone()[0]
@@ -38,9 +39,9 @@ class TestColdInit:
 
     def test_initialize_schema_is_idempotent(self, raw_conn):
         from iris_vector_graph.engine import IRISGraphEngine
-        e = IRISGraphEngine(raw_conn, embedding_dimension=4)
+        e = IRISGraphEngine(raw_conn, embedding_dimension=namespace_width.of(raw_conn))
         for _ in range(3):
-            e.initialize_schema(rewidth=True)
+            e.initialize_schema()
         # Should not raise, should not duplicate tables
         cur = raw_conn.cursor()
         cur.execute("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'Graph_KG'")
@@ -155,24 +156,31 @@ class TestSchemaMigration:
         assert count >= 100
 
 
-class TestEmbeddingDimension:
+VECTOR_TABLES = ("kg_NodeEmbeddings", "kg_NodeEmbeddings_optimized", "kg_EdgeEmbeddings")
 
-    def test_different_dimensions_initialize_correctly(self, raw_conn):
+
+def _widths(conn) -> dict:
+    from iris_vector_graph.schema import GraphSchema
+
+    return {t: GraphSchema.get_embedding_dimension(conn.cursor(), f"Graph_KG.{t}") for t in VECTOR_TABLES}
+
+
+class TestEmbeddingDimension:
+    """4.7.0 row 25: setup re-declares the namespace's vector columns only when asked (`rewidth=True`) and only while
+    they are empty, which `iris_master_cleanup` makes them; the per-test guard in tests/conftest.py puts the session
+    width back after. Both cases used to skip or swallow whatever happened."""
+
+    def test_different_dimensions_initialize_correctly(self, raw_conn, iris_master_cleanup):
         from iris_vector_graph.engine import IRISGraphEngine
         for dim in [4, 64]:
-            try:
-                e = IRISGraphEngine(raw_conn, embedding_dimension=dim)
-                e.initialize_schema(rewidth=True)
-            except Exception as ex:
-                pytest.skip(f"Multi-dim init test skipped: {ex}")
+            IRISGraphEngine(raw_conn, embedding_dimension=dim).initialize_schema(rewidth=True)
+            assert _widths(raw_conn) == {t: dim for t in VECTOR_TABLES}
 
-    def test_dimension_mismatch_logged(self, raw_conn):
-        import logging
+    def test_dimension_mismatch_logged(self, raw_conn, iris_master_cleanup):
+        from iris_vector_graph import EmbeddingIdentityConflict
         from iris_vector_graph.engine import IRISGraphEngine
-        e1 = IRISGraphEngine(raw_conn, embedding_dimension=768)
-        try:
-            e1.initialize_schema(rewidth=True)
-        except Exception:
-            pass
-        with pytest.raises(Exception) if False else contextlib.suppress(Exception):
-            e2 = IRISGraphEngine(raw_conn, embedding_dimension=4)
+        IRISGraphEngine(raw_conn, embedding_dimension=768).initialize_schema(rewidth=True)
+        with pytest.raises(EmbeddingIdentityConflict) as info:
+            IRISGraphEngine(raw_conn, embedding_dimension=4).initialize_schema()
+        assert "VECTOR(DOUBLE, 768)" in str(info.value) and "embedding_dimension is 4" in str(info.value)
+        assert _widths(raw_conn) == {t: 768 for t in VECTOR_TABLES}, "the refused setup changed a column"

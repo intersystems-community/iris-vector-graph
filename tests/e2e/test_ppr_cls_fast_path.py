@@ -23,6 +23,7 @@ import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.schema import _call_classmethod
+from tests.e2e import namespace_width
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true",
@@ -46,8 +47,8 @@ def _cleanup(engine, prefix: str) -> None:
 @pytest.fixture(scope="module")
 def engine(iris_connection):
     """Engine with .cls layer deployed."""
-    eng = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    eng.initialize_schema(auto_deploy_objectscript=True, rewidth=True)
+    eng = IRISGraphEngine(iris_connection, embedding_dimension=namespace_width.of(iris_connection))
+    eng.initialize_schema(auto_deploy_objectscript=True)
     return eng
 
 
@@ -376,8 +377,8 @@ def test_bfs_fast_json_1hop_only(iris_connection, chain_graph, engine):
 @pytest.mark.e2e
 def test_ppr_fallback_without_cls(iris_connection):
     p = f"{PREFIX}_FALLBACK"
-    eng = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    eng.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
+    eng = IRISGraphEngine(iris_connection, embedding_dimension=namespace_width.of(iris_connection))
+    eng.initialize_schema(auto_deploy_objectscript=False)
     
     _cleanup(eng, p)
     

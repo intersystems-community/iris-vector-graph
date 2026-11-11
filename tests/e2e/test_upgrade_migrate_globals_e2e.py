@@ -35,6 +35,7 @@ import os
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.e2e import namespace_width
 from tests.e2e.fixtures.old_releases import (
     GRAPH_SCOPED_IDS,
     GRAPH_SCOPED_RELEASES,
@@ -71,8 +72,9 @@ def scoped_database(request, iris_connection, iris_master_cleanup):
 
 
 def _sitting_on(release, iris_connection):
+    # The subject is ^KG, not vectors: the engine takes the namespace's width (4.7.0 row 25).
     engine = IRISGraphEngine(
-        iris_connection, embedding_dimension=release.embedding_dimension
+        iris_connection, embedding_dimension=namespace_width.of(iris_connection)
     )
     engine.initialize_schema()
 

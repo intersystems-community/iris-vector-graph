@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from tests.e2e import namespace_width
 
 PORT = int(os.environ.get("IVG_ISSUE13_PORT", os.environ.get("IVG_PORT", "31972")))
 NS = os.environ.get("IVG_ISSUE13_NS", os.environ.get("IVG_NAMESPACE", ""))
@@ -55,7 +56,9 @@ def engines():
 
     from iris_vector_graph.engine import IRISGraphEngine
 
-    e1 = IRISGraphEngine.from_connect("127.0.0.1", PORT, NS, USER, PASSWORD, embedding_dimension=4)
+    conn = iris.connect("127.0.0.1", PORT, NS, USER, PASSWORD)
+    dim = namespace_width.of(conn)  # the width the namespace is set up at (4.7.0 row 25)
+    e1 = IRISGraphEngine.from_connect("127.0.0.1", PORT, NS, USER, PASSWORD, embedding_dimension=dim)
     e1.initialize_schema()
     for nid, _, _ in NODES:
         e1.delete_node(nid)
@@ -63,8 +66,7 @@ def engines():
         assert e1.create_node(nid, labels=[label], properties={"name": name})
     for s, p, o in EDGES:
         assert e1.create_edge(s, p, o)
-    conn = iris.connect("127.0.0.1", PORT, NS, USER, PASSWORD)
-    e2 = IRISGraphEngine(conn, embedding_dimension=4)
+    e2 = IRISGraphEngine(conn, embedding_dimension=dim)
     yield {"from_connect": e1, "connection": e2}
     for nid, _, _ in NODES:
         e1.delete_node(nid)

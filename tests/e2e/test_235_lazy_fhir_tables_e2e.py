@@ -13,6 +13,7 @@ from tests.conftest import TEST_NAMESPACE
 
 from iris_vector_graph.engine import IRISGraphEngine
 from iris_vector_graph.exceptions import FHIRGraphError
+from tests.e2e import namespace_width
 
 LAZY = ("fhir_graphs", "fhir_unresolved", "fhir_definitions", "fhir_canonical_refs")
 EAGER = ("fhir_bridges", "code_crosswalk")
@@ -48,8 +49,8 @@ def user_engine():
             assert cur.fetchone()[0] == 0, f"Graph_KG.{t} holds rows in a namespace with no FHIR repository"
             cur.execute(f"DROP TABLE Graph_KG.{t}")
     conn.commit()
-    engine = IRISGraphEngine(conn, embedding_dimension=4)
-    engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
+    engine = IRISGraphEngine(conn, embedding_dimension=namespace_width.of(conn))
+    engine.initialize_schema(auto_deploy_objectscript=False)
     yield engine, cur
     conn.close()
 

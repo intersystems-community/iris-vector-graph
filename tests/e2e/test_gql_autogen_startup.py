@@ -3,6 +3,7 @@ pytest.importorskip("strawberry", reason="strawberry not installed")
 from fastapi.testclient import TestClient
 from iris_vector_graph import IRISGraphEngine
 from iris_vector_graph.gql import create_app
+from tests.e2e import namespace_width
 
 @pytest.mark.requires_database
 def test_gql_autogen_startup(iris_connection, iris_master_cleanup):
@@ -10,8 +11,8 @@ def test_gql_autogen_startup(iris_connection, iris_master_cleanup):
     Test that the auto-generated GraphQL server starts and discovers labels.
     """
     # 1. Setup test data (ensure at least one label exists)
-    engine = IRISGraphEngine(iris_connection, embedding_dimension=384)
-    engine.initialize_schema(rewidth=True)
+    engine = IRISGraphEngine(iris_connection, embedding_dimension=namespace_width.of(iris_connection))
+    engine.initialize_schema()
     engine.create_node("GQL:STARTUP:NODE1", labels=["TestLabel"])
     
     try:
