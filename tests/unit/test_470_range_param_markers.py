@@ -36,3 +36,19 @@ def test_each_marker_has_a_value(query, value):
     for sql, binds in _statements(query, {"p": value, "k": "a"}):
         assert sql.count("?") == len(binds), (query, sql, binds)
 
+
+def test_the_long_list_fallback_has_no_plain_copy():
+    """4.7.0 gate, test_460_r310 at n = 200: the 2026.3 long-list fallback (`unwind_by_index`) failed at Prepare
+    (<LIST>LoadTableFunction+10^%qTable) with the plain `CAST(val AS DOUBLE)` copy beside the typed comparison; with
+    either alone it answered 39,800. The usual translation keeps the copy (row 24's plan)."""
+    from iris_vector_graph.cypher.translator import unwind_by_index
+
+    q = ("MATCH (n:L310D) WHERE n.v <= 200 WITH collect(n) AS ns UNWIND range(0, size(ns) - 1) AS i "
+         "UNWIND range(0, size(ns) - 1) AS j WITH i, j WHERE i <> j RETURN count(*) AS c")
+    plain = "(CAST(p2.val AS DOUBLE) < 200)"
+    usual = translate_to_sql(parse_query(q), {}).sql
+    with unwind_by_index([]) as used:
+        fallback = translate_to_sql(parse_query(q), {}).sql
+    assert used == ["u3", "u4"]
+    assert plain in usual and "BETWEEN 4 AND 9" in usual
+    assert plain not in fallback and "BETWEEN 4 AND 9" in fallback

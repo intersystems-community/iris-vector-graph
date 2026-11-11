@@ -18784,8 +18784,11 @@ def _translate_boolean_expression(expr, context, direct: bool) -> str:
             # the CASE's null (a string '.5' against 0.9). The copy's markers would have no values bound (a $p side
             # is `?`, bound once: 4.7.0 gate, "Incorrect number of parameters"), so a number parameter is inlined in
             # it and any other marker leaves the copy out.
+            # Not in the long-list fallback (`unwind_by_index`): there the copy beside the CASE made IRIS 2026.3 refuse
+            # the statement at Prepare (<LIST>LoadTableFunction+10^%qTable; either comparison alone answers, 4.7.0
+            # gate, test_460_r310 n = 200).
             sides = [_marker_free_side(cast_left, left_expr, context), _marker_free_side(cast_right, right_expr, context)]
-            hint = tuple(sides) if None not in sides else None
+            hint = tuple(sides) if None not in sides and _unwind_by_index.get() is None else None
         # Numeric literal type promotion: IRIS treats 1 <> 1.0 due to INTEGER vs DOUBLE.
         # When comparing int with float literal, cast both to DOUBLE.
         _left_is_int = (
