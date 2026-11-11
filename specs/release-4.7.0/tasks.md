@@ -136,3 +136,42 @@ Rows are `~/.cache/ivg-bench/rel-470/ranked.md`'s. Each row has a test task, wri
 - [ ] T077 Newcomer walkthroughs (expert, Python developer) on the built wheel: 0 blocker, 0 wrong
 - [ ] T078 Opened against closed: at least 28 of 55 closed
 - [ ] T079 Sign-off in PRE_RELEASE_CHECKLIST.md; publish only on Tom's "push it"
+
+## Opened against closed (2026-11-11, at 0db71450)
+
+Of the 55 open defects on 4.6.5 (`~/.cache/ivg-bench/rel-470/ranked.md`), **29 are closed**: rows 1-6, 8-22, 24 (node
+properties; relationship properties go with row 23), 25, 26, 28, 29, 33, 34, 35. Row 5 was not IVG's (python-devx's
+check filtered `Graph.KG.*`), pinned by a test. Open from the cut: row 7 (waits on Mindwalk's rerun), row 23 (typed
+storage: Tom's decision, 4.8.0 recommended), row 27 (moves to 4.8.0 with the parallel-relationship default).
+
+**Found during 4.7.0 and fixed: 33.** Silent wrong answers or data loss unless marked:
+
+- 3b: about 20 more `conn.commit()` calls ended a caller's transaction (embed_edges, FHIR, RDF, snapshot, bulk loader,
+  Arno bridge, ledger enable/redact on `from_connect`, reify_edge, delete_reification, the migrations' swallowed commit)
+- 3c: `BulkLoader.build_graph_globals` never rebuilt `^KG`; `attach_embeddings_to_table` embedded 0 rows silently
+- 3d: BulkLoader, `load_networkx` and `import_rdf` cut long values; 3e: `import_rdf` cut long keys
+- 8b: global PageRank took any damping; a seed that is no node scored 1.0; VecIndex reported a wrong score for an
+  unknown metric
+- 14b: BulkLoader wrote a NULL predicate, after which every edge delete in the namespace failed (loud)
+- 20b: `reverse()`/`tail()` of a path's list reversed JSON text; `rs[0]` answered the type; a zone map dropped the
+  offset's seconds; offsets were read at midnight (DST days); `datetime.truncate` of a string lost the zone
+- 21b: `collect(exists(...))` answered `[1, 0]`; 22b: a mixed-kind UNWIND compared as text; 22c: `UNWIND $p` read a
+  mixed list by text
+- 26b: snapshots left out rdf_namespaces, table_mappings, relationship_mappings, fhir_bridges; 26c: FHIR
+  schedule/unschedule acted on another program's Task Manager task
+- 33b: a clause after a db/dbms/apoc call's YIELD was dropped
+- 35b: a SET value IVG could not translate was stored as null; an arithmetic null left a NULL row; `toBoolean('yes')`
+  was true; a function of a property in SET failed (-23, loud)
+- UNWIND writes: `MERGE ... ON MATCH SET` after UNWIND wrote nothing; a WITH-carried boolean was written as '1'; SET of
+  an UNWIND variable raised (loud); an UNWIND element `true` deleted the node whose property is the string '1' and missed
+  the stored true
+- MERGE: a `MERGE {id:'x'}` after `SET n.id = 'x'` made a second node
+- 1b: SKIP with LIMIT on a `from_connect()` engine failed (-25, loud); 29b: `status()` raised UnboundLocalError (loud)
+- 16b: `status()` did not report a missing adjacency index or a graph whose degree cache is off
+- Speed: Cypher and `create_node` writes into a new namespace slowed quadratically; `MERGE ... SET` on a tuned large
+  graph was about 10x slower than 4.4.1 (4.6.0 R089's `id` rows read on every MERGE)
+
+**Found during 4.7.0, not fixed** (KNOWN_ISSUES or listed): for 4.7.1, in-query `CALL`, `WHERE exists(r.w)`,
+`reduce()`, `SET n.p = [1, n.q]`, `UNWIND $p AS e WITH e CREATE` (-119), `m.v` of an unwound parameter map, AlgoCache
+after a rollback race, the Eraser's -124 message, `toBoolean()` of a stored integer, edge cold-load +20% against 4.4.1;
+for 4.8.0 with typed storage, relationship property types, ledger typed changesets, the boolean legacy-spelling match.
