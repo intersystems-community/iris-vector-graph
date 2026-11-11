@@ -190,6 +190,12 @@ WHERE label = 'A' RETURN label` answered every label; it answers the filtered on
   for the translator's procedures and with three-valued logic for the engine's handlers.
 - `status()` as a user without EXECUTE on IVG's routines reported all 58 routines missing; it names the ones it may
   not run in `errors` and adds `routines` to `status().unknown`.
+- Three faults in 4.7.0's own number-filter and UNWIND changes, found by the release's E2E gate, answer as on 4.6.5:
+  a range filter against a parameter (`WHERE n.p >= $v`) failed with "Incorrect number of parameters"; a grouping read
+  over an UNWIND of a long collected list (`collect(n)` of 200 nodes, two UNWINDs of its ranges) failed on 2026.3 with
+  `<LIST>LoadTableFunction`; and a relationship number past 64-bit integers (`SET r.p = 1e20`) read back through
+  `collect` and UNWIND as the integer 10\*\*20 rather than the float 1e+20. A string `'inf'` compares as an infinity
+  in `=` and range filters, as on 4.6.5 (Known issues).
 
 **Speed**
 

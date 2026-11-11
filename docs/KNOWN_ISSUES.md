@@ -234,6 +234,22 @@ engine.execute_cypher(
 # → [['q1', '0.95'], ['q2', '.95'], ['q3', '0.95']]
 ```
 
+### A string `'inf'` is an infinity to a number filter
+
+- **Symptom:** a node property holding the string `'inf'`, `'-inf'`, `'Infinity'` or `'-Infinity'` compares as that
+  infinity in `=` and range filters: with `CREATE (:M {p: 'inf'})`, `MATCH (n:M) WHERE n.p >= $v` matches it for
+  `v = float('inf')`, and `n.p > -1e308` matches it too. openCypher matches no string against a number. `RETURN n.p`
+  reads it as the string `'inf'`. The strings `'nan'` and `'NaN'` match no number filter.
+- **Cause:** the Python API (`create_node`, `bulk_create_nodes`, `store_node` and the other Python writers) stores a
+  float infinity as the text `'inf'`, the same text and type a Cypher string `'inf'` is stored with, and the filters
+  read that text as the infinity so that the API's value matches (as 4.6.5 did). A Cypher-bound infinity
+  (`SET n.p = $v`) is stored as a number and is not affected.
+- **Versions:** all 4.x. Typed storage, planned for 4.8.0, is the fix.
+- **Workaround:** keep text that spells an infinity under a property name of its own, not beside numbers that a
+  filter compares.
+- **Check:** `MATCH (n) WHERE n.p IN ['inf', '-inf', 'Infinity', '-Infinity'] RETURN n` lists the nodes whose
+  property is such a string (or the API's stored infinity).
+
 ### A value written through the ledger is stored as its text
 
 - **Symptom:** `Changeset.set_property` (and a changeset's `create_node` / `upsert_node` properties) sends every
