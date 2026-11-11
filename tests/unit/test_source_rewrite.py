@@ -72,7 +72,7 @@ def test_no_table_or_function_class_survives(rewritten):
 
 def test_table_classes_follow_the_schemas_package(sources, rewritten):
     text = rewritten["Graph.KG.Adjacency"]
-    assert "IVGALT.rdfedges||idxedgesadj" in text
+    assert 'IndexKind(pTableClass As %String = "IVGALT.rdfedges")' in text  # Indexed() asks IndexKind() (4.7.0)
     assert "IVGALT.rdf_edges" in rewritten["Graph.KG.Eraser"]
 
 
@@ -101,5 +101,5 @@ def test_the_fingerprint_follows_the_schema(sources, rewritten):
 
 def test_a_name_with_an_underscore_maps_to_its_package(sources):
     rewritten = rewrite_sources(sources, "MY_APP")
-    assert "MY.APP.rdfedges||idxedgesadj" in rewritten["Graph.KG.Adjacency"]
+    assert 'IndexKind(pTableClass As %String = "MY.APP.rdfedges")' in rewritten["Graph.KG.Adjacency"]
     assert {f"MY.APP.{c}" for c in MOVED} <= set(rewritten)
