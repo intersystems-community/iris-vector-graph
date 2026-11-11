@@ -541,9 +541,16 @@ class AdminMixin:
         try:
             from iris_vector_graph.schema import GraphSchema
 
-            adjacency.index = GraphSchema.adjacency_index_kind(cursor, schema=self._ivg_schema)
+            # a role refused the class dictionary is answered through the Native API (4.7.0)
+            adjacency.index = GraphSchema.adjacency_index_kind(
+                cursor, schema=self._ivg_schema, native=getattr(self, "_native_or_none", lambda: None)())
         except Exception as e:
-            errors.append(f"adjacency index probe failed (%Dictionary.CompiledIndex): {e}")
+            from iris_vector_graph._dictionary import sql_refused
+
+            if sql_refused(e):
+                unknown.append("adjacency")  # not readable for this role: unknown, not an error (R050)
+            else:
+                errors.append(f"adjacency index probe failed (%Dictionary.CompiledIndex): {e}")
         if adjacency.index == "plain":
             errors.append(
                 f"{self._ivg_schema}.rdf_edges' idx_edges_adj is a plain index, not the adjacency index "

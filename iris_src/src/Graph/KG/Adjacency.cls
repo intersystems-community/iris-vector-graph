@@ -539,11 +539,21 @@ ClassMethod RowUpdate(pGraphId As %String, pSrc As %String, pPred As %String, pD
 /// ^KG, and taking it for the adjacency index left every write's ^KG unwritten.
 ClassMethod Indexed() As %Boolean
 {
-	Set tIdx = ##class(%Dictionary.CompiledIndex).%OpenId("Graph.KG.rdfedges||idxedgesadj", 0)
+	Quit (..IndexKind() = "functional")
+}
+
+/// "functional" when pTableClass (the rdf_edges class of an IVG Schema) has idx_edges_adj as a functional index (a
+/// TypeClass, Graph.KG.AdjIndex), "plain" when an index of that name is an ordinary one, "absent" when there is none.
+/// The SQL check (GraphSchema.adjacency_index_kind) reads %Dictionary.CompiledIndex, which a role without SELECT on
+/// the class dictionary may not (SQLCODE -99, ADMIN_GUIDE §3's reading and writing roles); any user may call this
+/// through the Native API (4.7.0).
+ClassMethod IndexKind(pTableClass As %String = "Graph.KG.rdfedges") As %String
+{
+	Set tIdx = ##class(%Dictionary.CompiledIndex).%OpenId(pTableClass _ "||idxedgesadj", 0)
 	If '$IsObject(tIdx) {
-		Quit 0
+		Quit "absent"
 	}
-	Quit (tIdx.TypeClass '= "")
+	Quit $Select(tIdx.TypeClass '= "": "functional", 1: "plain")
 }
 
 /// ADR-0009: the structural row a temporal edge implies, marked {"temporal": true}, with its two endpoint

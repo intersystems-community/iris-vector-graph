@@ -783,16 +783,35 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
 
     @staticmethod
     def adjacency_index_kind(
-        cursor, name: str = "idx_edges_adj", table: str = "rdf_edges", schema: str = "Graph_KG"
+        cursor, name: str = "idx_edges_adj", table: str = "rdf_edges", schema: str = "Graph_KG", native=None
     ) -> str:
         """``functional`` when ``schema.table`` has the index ``name`` as a functional index (a TypeClass, such as
         Graph.KG.AdjIndex), ``plain`` when an index of that name is an ordinary one, ``absent`` when there is none
-        (4.7.0 row 16: a plain ``idx_edges_adj`` was taken for the adjacency index, and ``^KG`` went unwritten)."""
-        cursor.execute(
-            "SELECT ci.TypeClass FROM %Dictionary.CompiledIndex ci WHERE ci.SqlName = ? AND ci.parent IN "
-            "(SELECT Name FROM %Dictionary.CompiledClass WHERE SqlSchemaName = ? AND SqlTableName = ?)",
-            [name, schema, table],
-        )
+        (4.7.0 row 16: a plain ``idx_edges_adj`` was taken for the adjacency index, and ``^KG`` went unwritten).
+
+        A role without SELECT on the class dictionary (ADMIN_GUIDE §3's reading and writing roles) is refused the SQL
+        (SQLCODE -99); given ``native``, the adjacency index of ``rdf_edges`` is then asked of
+        ``Graph.KG.Adjacency.IndexKind``, which any user may call. Without it, or if that fails, the refusal raises."""
+        from iris_vector_graph._dictionary import sql_refused
+        from iris_vector_graph.schema_name import schema_package
+
+        try:
+            cursor.execute(
+                "SELECT ci.TypeClass FROM %Dictionary.CompiledIndex ci WHERE ci.SqlName = ? AND ci.parent IN "
+                "(SELECT Name FROM %Dictionary.CompiledClass WHERE SqlSchemaName = ? AND SqlTableName = ?)",
+                [name, schema, table],
+            )
+        except Exception as exc:
+            if native is None or not sql_refused(exc) or (name, table) != ("idx_edges_adj", "rdf_edges"):
+                raise
+            try:
+                kind = str(native.classMethodValue(
+                    "Graph.KG.Adjacency", "IndexKind", f"{schema_package(schema)}.rdfedges") or "")
+            except Exception:
+                kind = ""  # classes older than IndexKind: the refusal is the answer
+            if kind not in ("functional", "plain", "absent"):
+                raise exc from None
+            return kind
         rows = cursor.fetchall()
         if not rows:
             return "absent"

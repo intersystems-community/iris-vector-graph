@@ -693,6 +693,13 @@ class IRISGraphEngine(
                 self._props_value_key_cached = False
         return self._props_value_key_cached is True
 
+    def _native_or_none(self):
+        """The engine's Native API handle, or None where the connection has none (a stand-in, a foreign DB-API)."""
+        try:
+            return self._iris_obj()
+        except TypeError:
+            return None
+
     @property
     def _adjacency_indexed(self) -> bool:
         """True when ``rdf_edges`` carries the functional index ``idx_edges_adj`` (spec 252, ADR-0008); a plain index of
@@ -703,17 +710,14 @@ class IRISGraphEngine(
         ``^KG`` themselves. Detected once per engine; ``initialize_schema`` resets it.
         """
         if getattr(self, "_adjacency_indexed_cached", None) is None:
+            from iris_vector_graph.schema import GraphSchema
+
             try:
-                cur = self.conn.cursor()
-                cur.execute(
-                    "SELECT COUNT(*) FROM %Dictionary.CompiledIndex ci WHERE ci.SqlName = 'idx_edges_adj' "
-                    "AND ci.TypeClass IS NOT NULL AND ci.TypeClass <> '' AND ci.parent IN (SELECT Name FROM "
-                    f"%Dictionary.CompiledClass WHERE SqlSchemaName = '{self._ivg_schema}' AND SqlTableName = 'rdf_edges')"
-                )
-                row = cur.fetchone()
-                count = row[0] if row else 0
-                # Only a real count says yes: anything else (no catalog, a stub) keeps the writers writing ^KG.
-                self._adjacency_indexed_cached = isinstance(count, int) and not isinstance(count, bool) and count > 0
+                # A role refused the class dictionary (SQLCODE -99) is answered by Graph.KG.Adjacency.IndexKind
+                # through the Native API (4.7.0); without that answer the writers keep writing ^KG.
+                kind = GraphSchema.adjacency_index_kind(
+                    self.conn.cursor(), schema=self._ivg_schema, native=self._native_or_none())
+                self._adjacency_indexed_cached = kind == "functional"
             except Exception:
                 self._adjacency_indexed_cached = False
         return self._adjacency_indexed_cached is True
