@@ -222,8 +222,12 @@ def decode_typed_text(value: Any) -> Any:
     if kind == "S":
         return text
     if kind == "J":
-        # a scalar element of a list a row holds, as JSON: 1, 2.5, "a", true (4.6.0 R227)
-        return json.loads(text)
+        # a scalar element of a list a row holds, as JSON: 1, 2.5, "a", true (4.6.0 R227); an integer outside
+        # openCypher's 64 bits is a float, as CY_JSON_TYPED read it (1e20 SET on a relationship is stored 10**20)
+        got = json.loads(text)
+        if isinstance(got, int) and not isinstance(got, bool) and not -(2**63) <= got <= 2**63 - 1:
+            return float(got)
+        return got
     return value
 
 
