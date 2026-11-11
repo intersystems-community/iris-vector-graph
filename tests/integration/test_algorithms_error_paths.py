@@ -31,11 +31,13 @@ def _error_result(cols):
 
 class TestDegreeCentralityErrorPath:
 
-    def test_degree_centrality_returns_empty_on_error(self, alg_eng):
+    def test_degree_centrality_raises_on_error(self, alg_eng):
+        """4.6.0 R105 / R127 (a9549fef, 44898ff1): a failed path raises naming the method; it answered [], which
+        read as a graph with nothing in it."""
         with patch.object(alg_eng._store, "execute_degree_centrality",
                           return_value=_error_result(["id", "score", "degree"])):
-            result = alg_eng.degree_centrality(direction="out", top_k=5)
-        assert result == []
+            with pytest.raises(RuntimeError, match=r"^degree_centrality failed: forced error$"):
+                alg_eng.degree_centrality(direction="out", top_k=5)
 
     def test_degree_centrality_top_k_zero_warning(self, alg_eng):
         import warnings
@@ -52,11 +54,13 @@ class TestDegreeCentralityErrorPath:
 
 class TestBetweennessErrorPath:
 
-    def test_betweenness_returns_empty_on_error(self, alg_eng):
+    def test_betweenness_raises_on_error(self, alg_eng):
+        """4.6.0 R105 / R127 (a9549fef, 44898ff1): a failed path raises naming the method; it answered [], which
+        read as a graph with nothing in it."""
         with patch.object(alg_eng._store, "execute_betweenness",
                           return_value=_error_result(["id", "score"])):
-            result = alg_eng.betweenness_centrality(top_k=5)
-        assert result == []
+            with pytest.raises(RuntimeError, match=r"^betweenness_centrality failed: forced error$"):
+                alg_eng.betweenness_centrality(top_k=5)
 
     def test_betweenness_top_k_zero_warning(self, alg_eng):
         import warnings
@@ -72,11 +76,13 @@ class TestBetweennessErrorPath:
 
 class TestClosenessErrorPath:
 
-    def test_closeness_returns_empty_on_error(self, alg_eng):
+    def test_closeness_raises_on_error(self, alg_eng):
+        """4.6.0 R105 / R127 (a9549fef, 44898ff1): a failed path raises naming the method; it answered [], which
+        read as a graph with nothing in it."""
         with patch.object(alg_eng._store, "execute_closeness",
                           return_value=_error_result(["id", "score"])):
-            result = alg_eng.closeness_centrality(top_k=5)
-        assert result == []
+            with pytest.raises(RuntimeError, match=r"^closeness_centrality failed: forced error$"):
+                alg_eng.closeness_centrality(top_k=5)
 
     def test_closeness_top_k_zero_warning(self, alg_eng):
         import warnings
@@ -92,11 +98,13 @@ class TestClosenessErrorPath:
 
 class TestEigenvectorErrorPath:
 
-    def test_eigenvector_returns_empty_on_error(self, alg_eng):
+    def test_eigenvector_raises_on_error(self, alg_eng):
+        """4.6.0 R105 / R127 (a9549fef, 44898ff1): a failed path raises naming the method; it answered [], which
+        read as a graph with nothing in it."""
         with patch.object(alg_eng._store, "execute_eigenvector",
                           return_value=_error_result(["id", "score"])):
-            result = alg_eng.eigenvector_centrality(top_k=5)
-        assert result == []
+            with pytest.raises(RuntimeError, match=r"^eigenvector_centrality failed: forced error$"):
+                alg_eng.eigenvector_centrality(top_k=5)
 
     def test_eigenvector_top_k_zero_warning(self, alg_eng):
         import warnings
@@ -114,11 +122,13 @@ class TestEigenvectorErrorPath:
 
 class TestLeidenErrorPath:
 
-    def test_leiden_returns_empty_on_error(self, alg_eng):
+    def test_leiden_raises_on_error(self, alg_eng):
+        """4.6.0 R105 / R127 (a9549fef, 44898ff1): a failed path raises naming the method; it answered [], which
+        read as a graph with nothing in it."""
         with patch.object(alg_eng._store, "execute_leiden",
                           return_value=_error_result(["community_id", "members", "size"])):
-            result = alg_eng.leiden_communities(top_k=5)
-        assert result == []
+            with pytest.raises(RuntimeError, match=r"^leiden_communities failed: forced error$"):
+                alg_eng.leiden_communities(top_k=5)
 
     def test_leiden_progress_callback(self, alg_eng):
         calls = []
@@ -134,11 +144,13 @@ class TestLeidenErrorPath:
 
 class TestTriangleCountErrorPath:
 
-    def test_triangle_count_returns_empty_on_error(self, alg_eng):
+    def test_triangle_count_raises_on_error(self, alg_eng):
+        """4.6.0 R105 / R127 (a9549fef, 44898ff1): a failed path raises naming the method; it answered [], which
+        read as a graph with nothing in it."""
         with patch.object(alg_eng._store, "execute_triangle_count",
                           return_value=_error_result(["id", "score"])):
-            result = alg_eng.triangle_count(top_k=5)
-        assert result == []
+            with pytest.raises(RuntimeError, match=r"^triangle_count failed: forced error$"):
+                alg_eng.triangle_count(top_k=5)
 
 
 # ---------------------------------------------------------------------------

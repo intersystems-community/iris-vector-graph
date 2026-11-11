@@ -280,26 +280,26 @@ class TestNodesExistFallback:
         assert result == set()
 
     def test_nodes_exist_in_fails_falls_back(self, base_eng):
-        # Mock the cursor to fail on IN query and succeed on individual queries
-        original_cursor = base_eng.conn.cursor
-        call_count = [0]
+        """The batched `IN` lookup refused, nodes_exist asks for each id on the same cursor and answers the same
+        set. The trigger is explicit: the real cursor, made to refuse only the `IN` statement (TESTING_POLICY)."""
+        real = base_eng.conn.cursor()
+        sent = []
 
-        def mock_cursor():
-            mc = MagicMock()
-            call_count[0] += 1
-            if call_count[0] == 1:
-                # First cursor call — IN query fails
-                mc.execute.side_effect = Exception("IN not supported")
-            else:
-                # Individual count queries work
-                mc.execute.return_value = None
-                mc.fetchone.return_value = (1,)
-            mc.close = MagicMock()
-            return mc
+        class RefuseIn:
+            def __getattr__(self, name):
+                return getattr(real, name)
 
-        with patch.object(base_eng.conn, "cursor", side_effect=mock_cursor):
-            result = base_eng.nodes_exist(["fb_0"])
-        assert isinstance(result, set)
+            def execute(self, sql, params=None):
+                sent.append(sql)
+                if " IN (" in sql:
+                    raise RuntimeError("IN not supported")
+                return real.execute(sql, params or [])
+
+        with patch.object(base_eng.conn, "cursor", return_value=RefuseIn()):
+            result = base_eng.nodes_exist(["fb_0", "fb_1", "fb_99_nonexistent"])
+        assert result == {"fb_0", "fb_1"}
+        assert sum(" IN (" in q for q in sent) == 1
+        assert sum("WHERE node_id = ?" in q for q in sent) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -371,10 +371,28 @@ class TestBulkIngestEdges:
         result = base_eng.bulk_ingest_edges([])
         assert result == 0
 
-    def test_bulk_ingest_edges_objectscript_fails_sql_fallback(self, base_eng):
+    def test_bulk_ingest_edges_objectscript_fails_sql_fallback(self, base_eng, iris_connection):
+        """The server loader (Graph.KG.EdgeScan.BulkIngestEdgesSQL) failing, the SQL path writes the edge. The trigger
+        is that one call (TESTING_POLICY: patch what the code calls). With `_iris_obj` made to fail everywhere, as
+        before, the call raised 'no iris' (on 4.6.5 too) instead of reaching the SQL path's answer."""
+        import iris_vector_graph.schema as schema_mod
+
+        real = schema_mod._call_classmethod_large
+
+        def refuse_loader(obj, cls, method, *args, **kwargs):
+            if method == "BulkIngestEdgesSQL":
+                raise RuntimeError("loader refused")
+            return real(obj, cls, method, *args, **kwargs)
+
         edges = [{"s": "fb_0", "p": "BK_E2", "o": "fb_2"}]
         with patch.object(base_eng.capabilities.__class__, "objectscript_deployed",
                           new_callable=lambda: property(lambda self: True)):
-            with patch.object(base_eng, "_iris_obj", side_effect=Exception("no iris")):
+            with patch.object(schema_mod, "_call_classmethod_large", side_effect=refuse_loader):
                 result = base_eng.bulk_ingest_edges(edges)
-        assert isinstance(result, int)
+        assert result == 1
+        cur = iris_connection.cursor()
+        try:
+            cur.execute("SELECT COUNT(*) FROM Graph_KG.rdf_edges WHERE s = 'fb_0' AND p = 'BK_E2' AND o_id = 'fb_2'")
+            assert int(cur.fetchone()[0]) == 1
+        finally:
+            cur.close()

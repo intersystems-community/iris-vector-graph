@@ -64,18 +64,18 @@ class TestSpecialCharacterNodeIds:
         cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = ?", [node_id])
         assert int(cur.fetchone()[0]) == 1
 
-    def test_node_id_very_long_crashes_iris(self, engine, iris_connection):
-        """IRIS SUBSCRIPT error: node IDs > ~490 chars exceed IRIS global key length limit.
-        create_node returns False (swallows the SQLCODE -400 Fatal error).
-        This documents a known IRIS limitation — node IDs must be < 490 chars.
-        The engine does not pre-validate length, so callers must enforce this."""
+    def test_node_id_too_long_is_refused_before_iris(self, engine, iris_connection):
+        """A node id wider than `nodes.node_id` (256 characters) is refused before anything is sent (4.7.0, as the
+        CHANGELOG says create_node does): a 500-character id reached IRIS and failed with SQLCODE -400 <SUBSCRIPT>
+        (GraphWriteError; 4.6.5 too). The connection stays usable."""
         node_id = "x" * 500
-        # IRIS raises SQLCODE -400 SUBSCRIPT error; engine swallows and returns False
-        result = engine.create_node(node_id, labels=["Thing"])
-        # Either returns False (swallowed) or True if IRIS accepted it
-        # Verify the connection is still usable regardless
-        engine.create_node("recovery_after_long_id")
+        with pytest.raises(ValueError, match=r"create_node: node id 'x+'\.\.\. is 500 characters; the column holds 256"):
+            engine.create_node(node_id, labels=["Thing"])
         cur = iris_connection.cursor()
+        # an equality on the 500-character id is itself refused by IRIS (<SUBSCRIPT> on the index), so count by length
+        cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE LENGTH(node_id) > 256")
+        assert int(cur.fetchone()[0]) == 0
+        engine.create_node("recovery_after_long_id")
         cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id='recovery_after_long_id'")
         assert int(cur.fetchone()[0]) == 1
 

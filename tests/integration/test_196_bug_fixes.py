@@ -269,17 +269,19 @@ class TestEngineHelpers:
 
 class TestBulkCreateNodesEdgeCases:
 
-    def test_bulk_create_nodes_skips_missing_id(self, engine, iris_connection):
-        """Nodes without 'id' key are silently skipped."""
+    def test_bulk_create_nodes_refuses_a_missing_id(self, engine, iris_connection):
+        """A node without 'id' is refused, naming it, before anything is written (4.6.0 R213, 4b923b82: it was
+        skipped and the call answered as if the batch had been written)."""
         nodes = [
             {"id": "valid_node", "labels": ["Thing"]},
-            {"labels": ["Thing"]},  # missing id — should be skipped
+            {"labels": ["Thing"]},
         ]
-        result = engine.bulk_create_nodes(nodes)
+        with pytest.raises(ValueError, match=r"^bulk_create_nodes: node 1 \{'labels': \['Thing'\]\} has no 'id'"):
+            engine.bulk_create_nodes(nodes)
         cur = iris_connection.cursor()
         try:
             cur.execute("SELECT COUNT(*) FROM Graph_KG.nodes WHERE node_id = 'valid_node'")
-            assert int(cur.fetchone()[0]) == 1
+            assert int(cur.fetchone()[0]) == 0
         finally:
             try:
                 cur.close()

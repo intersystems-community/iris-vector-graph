@@ -427,13 +427,15 @@ class TestKhopFallback:
         assert isinstance(result, dict)
         assert "nodes" in result
 
-    def test_khop_objectscript_failure_returns_empty(self, ne_eng):
+    def test_khop_objectscript_failure_raises(self, ne_eng):
+        """4.6.0 R206 (3984854a): a failed server read raises naming the seed; it answered no nodes, which read as a
+        seed with no neighbourhood."""
         original = ne_eng.capabilities.objectscript_deployed
         ne_eng.capabilities.objectscript_deployed = True
         try:
             with patch.object(ne_eng, "_iris_obj", side_effect=RuntimeError("forced")):
-                result = ne_eng._khop_fallback("ne_0", hops=2, max_nodes=50)
-            assert result == {"nodes": [], "edges": []}
+                with pytest.raises(RuntimeError, match=r"^khop\('ne_0'\) failed: forced$"):
+                    ne_eng._khop_fallback("ne_0", hops=2, max_nodes=50)
         finally:
             ne_eng.capabilities.objectscript_deployed = original
 

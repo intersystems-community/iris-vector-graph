@@ -430,6 +430,9 @@ class TestAdvancedQueryPatterns:
         assert avg_time_ms < 5.0, \
             f"Complex join took {avg_time_ms:.2f}ms, should be <5ms"
 
+    # An absolute throughput floor on a shared container: alone, four interleaved pairs measured 34 to 90 q/s on
+    # 4.6.5 and 32 to 89 on 4.7.0 (raw SQL, no IVG code path), either way across the 50. Opt-in (`-m perf`).
+    @pytest.mark.perf
     def test_concurrent_query_throughput(self, iris_connection_with_vectors):
         """
         Benchmark: Concurrent query throughput under FK constraints.

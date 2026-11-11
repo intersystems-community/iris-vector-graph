@@ -70,7 +70,7 @@ def test_integration_with_clause(execute_cypher):
 def test_integration_aggregations(execute_cypher):
     """Test aggregation functions COUNT, SUM, AVG"""
     query = "MATCH (t:Transaction) RETURN count(t), sum(t.amount), avg(t.amount)"
-    result = execute_cypher(query)
+    result = execute_cypher(query, decode=True)
     
     assert len(result["rows"]) == 1
     # An un-aliased projection gets a SQL-safe alias built from its expression with the
@@ -80,10 +80,12 @@ def test_integration_aggregations(execute_cypher):
     # runs the statement itself and does not, which is why the raw alias shows here. The
     # `count_res` this line used to expect was never a name either layer produced.
     assert result["columns"] == ["count_t_", "sum_t_amount_", "avg_t_amount_"]
-    # Check that we got numeric results
-    assert result["rows"][0][0] > 0
-    assert result["rows"][0][1] > 0
-    assert result["rows"][0][2] > 0
+    # By hand from fraud_test_data: 10 Transaction nodes, amounts 100 + 50 * i for i = 0 .. 9 (stored as text, which
+    # arithmetic reads as the number it spells; docs/KNOWN_ISSUES.md): sum 3250, avg 325
+    count, total, mean = result["rows"][0]
+    assert count == 10
+    assert total == pytest.approx(3250)
+    assert mean == pytest.approx(325)
 
 def test_integration_built_in_functions(execute_cypher):
     """Test built-in functions id() and type()"""

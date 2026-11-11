@@ -138,7 +138,7 @@ def execute_cypher(fraud_test_data):
     # engine did not fail a test — it killed the pytest process and every test after it.
     engine = IRISGraphEngine(conn)
 
-    def _execute(query, params=None):
+    def _execute(query, params=None, decode=False):
         from iris_vector_graph.cypher.parser import parse_query
         from iris_vector_graph.cypher.translator import translate_to_sql
 
@@ -165,10 +165,24 @@ def execute_cypher(fraud_test_data):
 
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
+            if not decode:
+                return {"columns": columns, "rows": rows, "sql": sql_str, "params": p}
+            # decode=True: the values as the engine answers them. Since 4.6.0 (R218) a stored value comes back marked
+            # with its type and the engine decodes it (`_finish_sql_result`); raw, `sum(t.amount)` was text. The
+            # columns keep the SQL aliases this fixture answers (`count_t_`, not `count(t)`).
+            from iris_vector_graph._engine.query import _finish_sql_result
+            from iris_vector_graph.result import IVGResult
+
+            decoded = IVGResult(columns=list(columns), rows=[list(r) for r in rows])
+            name_map, sql_query.column_name_map = sql_query.column_name_map, {}
+            try:
+                _finish_sql_result(decoded, sql_query, bolt_types=False)
+            finally:
+                sql_query.column_name_map = name_map
 
             return {
-                "columns": columns,
-                "rows": rows,
+                "columns": decoded.columns,
+                "rows": decoded.rows,
                 "sql": sql_str,
                 "params": p,
             }

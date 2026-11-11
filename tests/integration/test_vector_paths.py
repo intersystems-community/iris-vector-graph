@@ -313,24 +313,27 @@ class TestKGRRFFuse:
             vec_eng._index_registry.pop("rrf_test_bm25", None)
 
     def test_rrf_fuse_with_both_indexes(self, vec_eng):
-        # Patch ivf_search to return dicts (as the code expects) to exercise full fusion path
+        # ivf_search answers (node_id, score) tuples since 4.6.0 R086; the dicts this patched in were read as
+        # tuples inside kg_RRF_FUSE's `except Exception`, which logged and answered [] (plan.md 4.7.1)
         vec_eng._index_registry.clear()
         vec_eng._index_registry["rrf_both_ivf"] = "ivf"
         vec_eng._index_registry["rrf_both_bm25"] = "bm25"
         try:
-            fake_ivf_dicts = [{"id": "vec_0", "score": 0.9}, {"id": "vec_1", "score": 0.5}]
+            fake_ivf = [("vec_0", 0.9), ("vec_1", 0.5)]
             fake_bm25 = [("vec_1", 0.8), ("vec_2", 0.3)]
-            with patch.object(vec_eng, "ivf_search", return_value=fake_ivf_dicts):
+            with patch.object(vec_eng, "ivf_search", return_value=fake_ivf):
                 with patch.object(vec_eng, "bm25_search", return_value=fake_bm25):
                     result = vec_eng.kg_RRF_FUSE(
                         k=5, k1=3, k2=3, c=60,
                         query_vector=_ONES_JSON,
                         query_text="test",
                     )
-            assert isinstance(result, list)
-            assert len(result) <= 5
-            ids = [r[0] for r in result]
-            assert "vec_0" in ids or "vec_1" in ids
+            # by hand: 1 / (c + rank), c = 60, a leg that missed the id ranking it len(leg) + c = 62:
+            # vec_1 1/62 + 1/61, vec_0 1/61 + 1/122, vec_2 1/122 + 1/62, in that order
+            want = {"vec_1": 1 / 62 + 1 / 61, "vec_0": 1 / 61 + 1 / 122, "vec_2": 1 / 122 + 1 / 62}
+            assert {r[0]: r[1] for r in result} == pytest.approx(want)
+            assert [r[0] for r in result] == ["vec_1", "vec_0", "vec_2"]
+            assert {r[0]: (r[2], r[3]) for r in result} == {"vec_0": (0.9, 0.0), "vec_1": (0.5, 0.8), "vec_2": (0.0, 0.3)}
         finally:
             vec_eng._index_registry.pop("rrf_both_ivf", None)
             vec_eng._index_registry.pop("rrf_both_bm25", None)
