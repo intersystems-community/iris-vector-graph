@@ -1611,6 +1611,35 @@ class NodesEdgesMixin:
             missing = missing_rows(cursor, self._t(table), columns, wanted, self.conn)
             raise_if_missing(writer, missing, what)
 
+    def _drop_orphaned_props(self, cursor, nodes: List[Dict[str, Any]]) -> None:
+        """Delete the property rows of each of ``nodes`` whose ``nodes`` row is not there yet, in its graph: rows a
+        node removed by SQL left (rdf_props has no foreign key on nodes). Run before the nodes are inserted, so a node
+        the batch inserts holds what it is given, as create_node's does, and a node already there keeps its rows
+        (the batch merges into it). One DELETE per graph and 500 ids (4.7.0 gate: the old values stood)."""
+        by_graph: Dict[str, Dict[str, None]] = {}
+        for n in nodes:
+            if n.get("id"):
+                by_graph.setdefault(n.get("graph") or "", {})[n["id"]] = None
+        scoped = getattr(self, "_nodes_has_graph_id", True) and getattr(self, "_children_have_graph_id", True)
+        props, node_table = self._t("rdf_props"), self._t("nodes")
+        for graph_id, id_set in by_graph.items():
+            ids = list(id_set)
+            for i in range(0, len(ids), _DELETE_LOOKUP_CHUNK):
+                chunk = ids[i : i + _DELETE_LOOKUP_CHUNK]
+                marks = ", ".join("?" * len(chunk))
+                if scoped:
+                    cursor.execute(
+                        f"DELETE FROM {props} WHERE graph_id = ? AND s IN ({marks}) AND s NOT IN "
+                        f"(SELECT node_id FROM {node_table} WHERE graph_id = ? AND node_id IN ({marks}))",
+                        [graph_id, *chunk, graph_id, *chunk],
+                    )
+                else:  # a pre-227 schema: a node of that id in any graph keeps the rows
+                    cursor.execute(
+                        f"DELETE FROM {props} WHERE s IN ({marks}) AND s NOT IN "
+                        f"(SELECT node_id FROM {node_table} WHERE node_id IN ({marks}))",
+                        [*chunk, *chunk],
+                    )
+
     def bulk_create_nodes(
         self,
         nodes: List[Dict[str, Any]],
@@ -1647,7 +1676,9 @@ class NodesEdgesMixin:
             The IDs of the nodes with an ``id``, in the order given, including any that already
             existed. A node whose ``id`` already exists in its graph is merged, not replaced: it
             gains the labels it lacked and the properties it lacked, keeps the value of every
-            property it has, and its ID is returned all the same.
+            property it has, and its ID is returned all the same. A node the call inserts holds the
+            properties it is given: property rows of its id in its graph that a node removed by SQL
+            left go first, as create_node's do (4.7.0 gate).
 
         Raises:
             ValueError: an id over 256 characters, or a label or property key over 128, naming the node, before
@@ -1803,6 +1834,8 @@ class NodesEdgesMixin:
                         all_props.append((node_id, k, val_str, node_id, k))
 
             # 4. Batch Execution (Transactional phases for FK safety)
+            # Phase 0 (4.7.0 gate): a node this batch inserts replaces the property rows a removed node of its id left
+            self._drop_orphaned_props(cursor, nodes)
             # Phase 1: Nodes
             cursor.executemany(node_sql, valid_nodes)
 

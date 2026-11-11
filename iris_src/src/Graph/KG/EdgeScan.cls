@@ -341,9 +341,24 @@ ClassMethod BulkIngestNodesSQL(nodesJson As %String) As %Integer
 {
 	Set data = {}.%FromJSON(nodesJson)
 	Set n = 0
-	Kill tSeen
+	Kill tSeen, tIdSeen
+	// 4.7.0 gate: the batch's ids, for the one DELETE below
+	Set tIds = ""
+	Set iter = data.%GetIterator()
+	While iter.%GetNext(.idx, .node) {
+		Set id = node.id
+		If (id '= "") && '$Data(tIdSeen(id)) { Set tIdSeen(id) = "", tIds = tIds _ $ListBuild(id) }
+	}
 	TSTART
 	Try {
+		// 4.7.0 gate: rdf_props has no foreign key on nodes, so a node removed by SQL leaves its property rows, and
+		// the guarded inserts below kept their values for a node of that id loaded again. A node this batch inserts
+		// holds what it is given, as create_node's does: the rows of the batch's ids that have no node row yet go
+		// first, in one statement. A node already there keeps every row (the batch merges into it).
+		If tIds '= "" {
+			&sql(DELETE FROM Graph_KG.rdf_props WHERE graph_id = '' AND s %INLIST :tIds AND s NOT IN (SELECT node_id FROM Graph_KG.nodes WHERE graph_id = '' AND node_id %INLIST :tIds))
+			If SQLCODE < 0 { Throw ##class(%Exception.SQL).CreateFromSQLCODE(SQLCODE, "orphaned properties") }
+		}
 		Set iter = data.%GetIterator()
 		While iter.%GetNext(.idx, .node) {
 			Set id = node.id
