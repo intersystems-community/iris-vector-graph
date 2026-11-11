@@ -25,14 +25,14 @@ register_fhir_routes(app)
 # Landing page
 DEMOS = [
     {
-        "key": "fraud", "href": "/fraud", "tag": "Financial services",
+        "key": "fraud", "href": "/fraud", "tag": "Financial services", "link": "View fraud demo",
         "title": "Fraud scoring",
         "shows": "Score a card transaction, then look at the payer's device and merchant graph "
                  "and the bitemporal audit trail behind the score.",
         "needs": "The fraud API at FRAUD_API_URL, or DEMO_MODE=true for the amount-only heuristic.",
     },
     {
-        "key": "bio", "href": "/bio", "tag": "Life sciences",
+        "key": "bio", "href": "/bio", "tag": "Life sciences", "link": "View biomedical demo",
         "title": "Protein interaction graph",
         "shows": "Find proteins by name or annotation, draw an interaction network, and find "
                  "the shortest path between two proteins (GAPDH to LDHA through glycolysis).",
@@ -40,7 +40,7 @@ DEMOS = [
                  "(python -m iris_demo_server.services.bio_demo_data).",
     },
     {
-        "key": "fhir", "href": "/fhir", "tag": "Healthcare",
+        "key": "fhir", "href": "/fhir", "tag": "Healthcare", "link": "View FHIR demo",
         "title": "FHIR repository as a graph",
         "shows": "Search a live FHIR repository by clinical concept: expand the concept, resolve "
                  "codes to resources, rank patients with PageRank, and sync a change live.",
@@ -92,7 +92,7 @@ def demo_card(d):
         Div(cls="needs")(B("Needs: "), d["needs"]),
         Div(cls="status", id=f"status-{d['key']}", hx_get=f"/api/status/{d['key']}",
             hx_trigger="load", hx_swap="outerHTML")(Span(cls="dot"), "Checking backend..."),
-        A(cls="go", href=d["href"])(Span("Open demo →")),
+        A(cls="go", href=d["href"], aria_label=d["link"])(Span("Open demo →")),
     )
 
 
