@@ -23,14 +23,10 @@ DIM = 128  # must match schema width — GraphSchema auto-detects 128 from colum
 @pytest.fixture
 def engine(iris_connection, iris_master_cleanup):
     eng = IRISGraphEngine(iris_connection, embedding_dimension=DIM)
-    # Force embedding_dimension — auto-detection may return wrong value if
-    # prior tests left data with a different dimension (session-scoped connection).
-    # Also reinitialize schema so kg_NodeEmbeddings column matches DIM.
-    eng.embedding_dimension = DIM
-    try:
-        eng.initialize_schema(auto_deploy_objectscript=False)
-    except Exception:
-        pass
+    # The columns at DIM: iris_master_cleanup has emptied the vector tables, and since 4.7.0 (row 25) setup changes
+    # a width only when asked (rewidth=True). A failed setup used to be swallowed here, so every write then failed
+    # with SQLCODE -104 against the namespace's 768 instead of naming the setup.
+    eng.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
     return eng
 
 

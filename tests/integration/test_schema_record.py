@@ -2,11 +2,14 @@
 Native API only (no engine): what `^IVG.Deploy("schema")` holds after `write_record`, that names compare without
 case, and that a schema whose class package holds someone else's class is refused before any DDL.
 
-Runs in IVG262REC (created by `scripts/dev/make_scratch_namespace.py IVG262REC` when absent). The record the
+Runs in `IVG_NS_IVG262REC` (default IVG262REC; created by `scripts/dev/make_scratch_namespace.py` when absent), which
+must hold none of IVG's objects: the not-upgraded case reads a namespace setup never touched. The record the
 namespace held before is put back afterwards.
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
@@ -14,7 +17,7 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.integration, ns262.requires_container]
 
-NS = "IVG262REC"
+NS = os.environ.get("IVG_NS_IVG262REC", "IVG262REC")
 
 
 @pytest.fixture(scope="module")
@@ -59,16 +62,20 @@ def test_the_recorded_name_compares_without_case(live):
     assert raised.value.recorded == "ivgalt" and NS in str(raised.value)
 
 
-def test_no_record_and_no_46_objects_is_refused_with_the_not_upgraded_error(live):
+def test_no_record_and_no_46_objects_is_refused_with_the_never_set_up_error(live):
+    """4.6.0 R201: a namespace holding none of IVG's objects says it was never set up; the not-upgraded message is
+    only for one where an earlier release's objects are (this test asserted that one before R201)."""
     from iris_vector_graph.schema_name import IVGSchemaError, check_first_access
 
     conn, native = live
     native.kill("^IVG.Deploy", "schema")
+    held = ns262.rows(conn, "SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name %STARTSWITH 'Graph.KG.'")
+    assert held[0][0] == 0, f"{NS} holds IVG's classes: point IVG_NS_IVG262REC at a namespace setup never touched"
     assert ns262.rows(conn, "SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'IVGNONE.funcCYCMP'"
                       )[0][0] == 0
     with pytest.raises(IVGSchemaError) as raised:
         check_first_access(native, "IVGNONE")
-    assert "set up by an earlier IVG release" in str(raised.value)
+    assert f"Namespace {NS} has never been set up for IVG" in str(raised.value)
 
 
 def test_no_record_with_the_46_objects_is_accepted(live):

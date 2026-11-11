@@ -220,7 +220,10 @@ def test_ppr_and_neighbours_stop_seeing_deleted_nodes(engine):
 
     after = engine.kg_PERSONALIZED_PAGERANK(["s"], graph=A)
     assert "m" not in after
-    assert "t" not in after, "t is only reachable through the deleted node"
+    # t is only reachable through the deleted node. Since 4.7.0 (rows 8, 9) PPR answers every node of the graph and
+    # 0.0 for one the walk never reaches (networkx's answer), so t is there with nothing; s, the seed with no
+    # out-edge left, holds it all.
+    assert after == pytest.approx({"s": 1.0, "t": 0.0})
     assert _neighbours(engine, "s", A) == set()
 
 

@@ -2,10 +2,13 @@
 
 A role granted EXECUTE on a legacy-style `SQLUser` function gets the same grant on its replacement; the SuperUser and
 Owner Privilege rows SQLAllPrivileges also returns are never copied. Read before and after through the catalog.
-Runs in IVG262ALT (IVG Schema IVGALT, or any schema: the replacement is made here).
+Runs in `IVG_NS_IVG262ALT` (default IVG262ALT; IVG Schema IVGALT, or any schema: the replacement is made here), a
+namespace that exists: a run points it at one of its own.
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
@@ -14,7 +17,7 @@ from tests.e2e import ns262
 
 pytestmark = [pytest.mark.integration, ns262.requires_container]
 
-NS = "IVG262ALT"
+NS = os.environ.get("IVG_NS_IVG262ALT", "IVG262ALT")
 ROLE = "ivg262_grant_role"
 
 

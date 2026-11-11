@@ -25,6 +25,7 @@ Targets:
 import pytest
 
 from tests.conftest import TEST_NAMESPACE
+from tests.e2e import namespace_width
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
@@ -210,8 +211,20 @@ class TestStatsEndpoint:
 class TestAdminEndpoints:
 
     def test_admin_schema_init_success(self, api_client):
-        resp = api_client.post("/admin/schema/init", json={"embedding_dimension": 4})
-        assert resp.status_code in (200, 500)
+        width = namespace_width.of(cypher_api_module._engine_cache.conn)
+        resp = api_client.post("/admin/schema/init", json={"embedding_dimension": width})
+        assert resp.status_code == 200, resp.text
+
+    def test_admin_schema_init_at_another_width_is_409(self, api_client):
+        """4.7.0 row 25: setup at another width than the namespace's columns is the caller's state, not a server
+        fault (it re-declared an empty column, or answered 500): 409 Conflict, naming `rewidth`, the column kept."""
+        conn = cypher_api_module._engine_cache.conn
+        width = namespace_width.of(conn)
+        other = 4 if width != 4 else 8
+        resp = api_client.post("/admin/schema/init", json={"embedding_dimension": other})
+        assert resp.status_code == 409, resp.text
+        assert "rewidth" in resp.json()["detail"] and str(other) in resp.json()["detail"], resp.text
+        assert namespace_width.of(conn) == width
 
     def test_admin_schema_init_exception(self, broken_client):
         resp = broken_client.post("/admin/schema/init", json={"embedding_dimension": 4})

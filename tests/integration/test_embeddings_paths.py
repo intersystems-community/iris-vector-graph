@@ -53,9 +53,10 @@ def emb_eng(iris_connection, iris_master_cleanup):
     # this the fixture inherited whatever width the last test to run `initialize_schema`
     # left behind — 768 from the `engine` fixture — and every write here was refused with
     # SQLCODE -104 depending on test order. The tables are cleared first because IRIS can
-    # only ALTER a VECTOR column's width while it holds no rows.
+    # only ALTER a VECTOR column's width while it holds no rows. Since 4.7.0 (row 25) setup changes a width only
+    # when asked: rewidth=True, which re-declares the columns the clear just emptied.
     _clear_embedding_tables(iris_connection)
-    eng.initialize_schema(auto_deploy_objectscript=False)
+    eng.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
     for i in range(5):
         eng.create_node(f"emb_{i}", labels=["EmbNode"], properties={"name": f"node_{i}"})
     for i in range(4):
@@ -303,9 +304,10 @@ class TestEmbeddingCount:
         cursor_mock = MagicMock()
         cursor_mock.execute.side_effect = RuntimeError("query fail")
         cursor_mock.close = MagicMock()
+        # 4.6.0 R176: a query that fails raises; it answered [], so a backfill over the list embedded nothing
         with patch.object(emb_eng.conn, "cursor", return_value=cursor_mock):
-            result = emb_eng.get_unembedded_nodes()
-        assert result == []
+            with pytest.raises(RuntimeError, match="query fail"):
+                emb_eng.get_unembedded_nodes()
 
 
 # ---------------------------------------------------------------------------

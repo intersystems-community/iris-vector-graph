@@ -108,15 +108,27 @@ class TestIndexConsistencyInvariant:
         assert after.pending_sync is False
         assert after.in_sync is True
 
+    def test_a_plain_sql_insert_keeps_the_index(self):
+        """Spec 252: ^KG is a functional index on rdf_edges, so a raw SQL INSERT (SQL-bridge / external-ETL pattern)
+        keeps it: the gap does not move. (This test asserted the drift before spec 252.)"""
+        for i in range(4):
+            self.engine.create_node(self._n(i), labels=["Node"])
+        self.engine.sync()
+        before = self.engine.verify_sync()
+        assert self._raw_insert(3) == 3, "raw insert must add genuinely-new rows for this test"
+        after = self.engine.verify_sync()
+        assert after.sql_edges == before.sql_edges + 3
+        assert (after.sql_edges - after.global_edges) == (before.sql_edges - before.global_edges)
+
     def test_raw_sql_bypass_widens_the_gap(self):
-        """A raw SQL INSERT (SQL-bridge / external-ETL pattern) drifts the index."""
+        """A raw `INSERT %NOINDEX` (the bulk loaders' hint) skips the index, so it drifts."""
         for i in range(4):
             self.engine.create_node(self._n(i), labels=["Node"])
         self.engine.sync()
         before = self.engine.verify_sync()
 
-        # Bypass create_edge entirely — write the table directly.
-        added = self._raw_insert(3)
+        # Bypass create_edge entirely — write the table directly, past its indexes.
+        added = self._raw_insert(3, noindex=True)
         assert added == 3, "raw insert must add genuinely-new rows for this test"
 
         after = self.engine.verify_sync()

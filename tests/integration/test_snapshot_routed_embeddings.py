@@ -55,7 +55,8 @@ NODE = "snaproute:shared"
 def routed(iris_connection, iris_master_cleanup):
     """Two graphs, one node ID, two models, two widths, two routed tables."""
     engine = IRISGraphEngine(iris_connection, embedding_dimension=WIDTH_A)
-    engine.initialize_schema(auto_deploy_objectscript=False)
+    # iris_master_cleanup has emptied the vector tables; since 4.7.0 (row 25) setup changes a width only when asked
+    engine.initialize_schema(auto_deploy_objectscript=False, rewidth=True)
 
     engine.create_node(NODE, graph=GRAPH_A)
     engine.create_node(NODE, graph=GRAPH_B)
