@@ -38,8 +38,11 @@ whatever setup ran: see the list that follows.
 - PageRank and personalized PageRank refuse an alpha or damping outside (0, 1) and an iteration count below 1; a
   VecIndex refuses a metric it does not compute; `fhir_graph_schedule` / `unschedule` refuse a `task_id` that names
   another task.
-- `create_node` replaces the property rows that a node removed by SQL left behind under its id in its graph. It kept
-  the old values, and 4.7.0's row count raised `GraphWriteError` ("IRIS refused 1 of the 1 property rows").
+- `create_node` and `bulk_create_nodes` replace the property rows that a node removed by SQL left behind under its id
+  in its graph (`rdf_props` has no foreign key on `nodes`). `create_node` kept the old values, and 4.7.0's row count
+  raised `GraphWriteError` ("IRIS refused 1 of the 1 property rows"). `bulk_create_nodes` returned the id and kept them:
+  given `{a: 2}` over an old `{a: 1}`, `RETURN n.a` answered 1, on the server loader and on the batch SQL alike. A node
+  that is there is still merged into: it keeps its values and gains what it lacks.
 
 **Fixed: reported by users**
 
