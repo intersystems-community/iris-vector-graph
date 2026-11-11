@@ -200,10 +200,10 @@ WHERE label = 'A' RETURN label` answered every label; it answers the filtered on
   4.6.5 namespace, 9,600 in the 4.4.1 one). It now also compares `val_key`, so that index drives it: the UPDATE took
   10.8 ms before this fix and 0.30 ms after. `MERGE (n:L {id: $id}) SET n.v = $v`, seconds per 1,000:
 
-  | Namespace             | 4.4.1               | 4.6.5        | 4.7.0             |
-  | --------------------- | ------------------- | ------------ | ----------------- |
-  | tuned at 50,000 nodes | 2.1 to 5.0          | 23.7 to 37.7 | 3.4 to 5.8        |
-  | new, over 3 × 1,000   | 62 → 1,088 to 1,231 | 77 → 1,171   | 5.7 to 7.9 → 12.0 |
+  | Namespace                                   | 4.4.1               | 4.6.5        | 4.7.0             |
+  | ------------------------------------------- | ------------------- | ------------ | ----------------- |
+  | tuned at 50,000 nodes                       | 2.1 to 5.0          | 23.7 to 37.7 | 3.4 to 5.8        |
+  | new namespace, first → third batch of 1,000 | 62 → 1,088 to 1,231 | 77 → 1,171   | 5.7 to 7.9 → 12.0 |
 
   4.7.0 is back within 4.4.1's range on the tuned namespace and no longer grows with the graph. `UNWIND $rows ...
 MERGE` batches of 1,000 rows a statement (statements 2 and 3, tuned) took 25.2 to 28.3 s on 4.6.5 and 1.5 to 2.0 s
