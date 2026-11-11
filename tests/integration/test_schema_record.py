@@ -2,14 +2,16 @@
 Native API only (no engine): what `^IVG.Deploy("schema")` holds after `write_record`, that names compare without
 case, and that a schema whose class package holds someone else's class is refused before any DDL.
 
-Runs in `IVG_NS_IVG262REC` (default IVG262REC; created by `scripts/dev/make_scratch_namespace.py` when absent), which
-must hold none of IVG's objects: the not-upgraded case reads a namespace setup never touched. The record the
-namespace held before is put back afterwards.
+Runs in `IVG_NS_IVG262REC` (default IVG262REC; created by `scripts/dev/make_scratch_namespace.py` when absent). The
+record the namespace held before is put back afterwards. The never-set-up case needs a namespace setup never touched,
+which that one is not once test_function_placement (which shares the variable) has installed into it: it makes an
+empty namespace of its own, named per run (`IVG470NS` and a random suffix), and drops it after.
 """
 
 from __future__ import annotations
 
 import os
+import uuid
 
 import pytest
 
@@ -62,20 +64,37 @@ def test_the_recorded_name_compares_without_case(live):
     assert raised.value.recorded == "ivgalt" and NS in str(raised.value)
 
 
-def test_no_record_and_no_46_objects_is_refused_with_the_never_set_up_error(live):
+@pytest.fixture
+def untouched():
+    """An empty namespace of this run's own (make_scratch_namespace's make, no IVG install), dropped after."""
+    import make_scratch_namespace
+
+    ns = "IVG470NS" + uuid.uuid4().hex[:6].upper()
+    assert make_scratch_namespace.make(ns), f"{ns} existed already"
+    conn = ns262.connect(ns)
+    nconn = ns262.connect(ns)
+    try:
+        yield ns, conn, ns262.native(nconn)
+    finally:
+        nconn.close()
+        conn.close()
+        make_scratch_namespace.drop(ns)
+
+
+def test_no_record_and_no_46_objects_is_refused_with_the_never_set_up_error(untouched):
     """4.6.0 R201: a namespace holding none of IVG's objects says it was never set up; the not-upgraded message is
     only for one where an earlier release's objects are (this test asserted that one before R201)."""
     from iris_vector_graph.schema_name import IVGSchemaError, check_first_access
 
-    conn, native = live
-    native.kill("^IVG.Deploy", "schema")
+    ns, conn, native = untouched
+    assert native.get("^IVG.Deploy", "schema") is None
     held = ns262.rows(conn, "SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name %STARTSWITH 'Graph.KG.'")
-    assert held[0][0] == 0, f"{NS} holds IVG's classes: point IVG_NS_IVG262REC at a namespace setup never touched"
+    assert held[0][0] == 0, f"{ns} holds IVG's classes: this case needs a namespace setup never touched"
     assert ns262.rows(conn, "SELECT COUNT(*) FROM %Dictionary.ClassDefinition WHERE Name = 'IVGNONE.funcCYCMP'"
                       )[0][0] == 0
     with pytest.raises(IVGSchemaError) as raised:
         check_first_access(native, "IVGNONE")
-    assert f"Namespace {NS} has never been set up for IVG" in str(raised.value)
+    assert f"Namespace {ns} has never been set up for IVG" in str(raised.value)
 
 
 def test_no_record_with_the_46_objects_is_accepted(live):
