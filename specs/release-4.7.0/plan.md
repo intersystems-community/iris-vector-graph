@@ -74,3 +74,8 @@ Found during 4.7.0 and not in its cut (the list is frozen).
   `except Exception: logger.error(...)` around the IVF / HNSW and BM25 legs turns any failure (a shape mismatch, a
   missing index, IRIS refusing the query) into an empty fusion, which reads as "nothing matched". It should raise
   naming the leg, as the centrality methods do since 4.6.0 R105 / R127.
+- **`create_edge` and `store_node` check no widths** (4.6.5 and 4.7.0; loud): an over-wide id, predicate, label or key
+  reaches IRIS and fails there (SQLCODE -400 or -104) instead of a `ValueError` before anything is sent, as
+  `create_node` and the bulk writers do since 4.7.0. Found by the integration gate's audit (f2c6c2a6).
+- **`RETURN r.p` of a relationship number past 64-bit integers reads an int** (4.6.5 and 4.7.0): `SET r.p = 1e20`
+  returns 100000000000000000000 where UNWIND and `collect` read the float 1e+20 (d4ac7523).
