@@ -5926,11 +5926,52 @@ def _hint_row_guards(sql: str) -> str:
     return sql
 
 
+def _hint_value_key_lookups(sql: str) -> str:
+    """`sql` with each subquery `(SELECT ... FROM <nodes> <alias> ...)` whose own WHERE or JOINs compare a `val_key`
+    reading the (key, val_key) index first: a MERGE's lookup (the SET's `IN (...)`, the node insert's `NOT EXISTS
+    (...)`, the captured SELECT) and a matched node's property equality.
+
+    IRIS answered such a lookup (`... JOIN rdf_props p ON ... p."key" = ? AND p.val = ? AND p.val_key = '...'`) from
+    idx_props_key, every row of the key, or from idx_labels_label, every node of the label. Every node has an `id`
+    row since 4.6.0 (R089), so `MERGE (n:L {id: $id}) SET ...` read every node's: 10.8 ms an UPDATE at 59,000 nodes
+    (tuned), 2.1 ms on 4.4.1, which wrote no id rows. Without those two indexes it reads idx_props_key_valkey: 0.30
+    ms (EXPLAIN, 2026.3). `%IGNOREINDEX` is refused inside a JOIN, so it goes at the head of the subquery's FROM.
+    Applied once, to finished statements, like `_hint_row_guards`.
+    """
+    nodes = _table("nodes")
+    hint = f"%IGNOREINDEX {_table('rdf_props')}.idx_props_key, {_table('rdf_labels')}.idx_labels_label "
+    lead = re.compile(rf"\s*SELECT [^()]*?\sFROM\s({re.escape(nodes)}\s+\w+\s)")
+    start = sql.find("(SELECT ")
+    while start != -1:
+        body = start + 1
+        depth, i = 1, body
+        while depth and i < len(sql):
+            depth += {"(": 1, ")": -1}.get(sql[i], 0)
+            i += 1
+        sub = sql[body : i - 1]
+        own = sub
+        while True:  # the subquery's own text: nested subqueries taken out
+            flat = re.sub(r"\([^()]*\)", "", own)
+            if flat == own:
+                break
+            own = flat
+        m = lead.match(sub)
+        if m and ".val_key = '" in own:
+            at = body + m.start(1)
+            sql = sql[:at] + hint + sql[at:]
+        start = sql.find("(SELECT ", body)
+    # the capture form (several graphs: the ids read first, `__capture_ids__ <key> SELECT ...`) has the same lookup
+    m = re.match(rf"__capture_ids__ \w+\s+SELECT [^()]*?\sFROM\s({re.escape(nodes)}\s+\w+\s)", sql)
+    if m and ".val_key = '" in sql and "%IGNOREINDEX" not in sql[: m.end()]:
+        sql = sql[: m.start(1)] + hint + sql[m.start(1) :]
+    return sql
+
+
 def _tts_transactional_result(cypher_query, context, metadata, order_by_items):
     """Assemble SQLQuery for transactional (DML) queries."""
     stmts, all_params = [], []
     for s, p in context.dml_statements:
-        stmts.append(_hint_row_guards(s))
+        stmts.append(_hint_value_key_lookups(_hint_row_guards(s)))
         all_params.append(p)
     sql = unpaged = None
     if cypher_query.return_clause:
@@ -10741,13 +10782,15 @@ def _merge_id_keyed_guards(context, start, node_id, exist_sql, exist_params) -> 
             context.dml_statements[i] = (sql + node_there, list(params) + [node_id])
 
 
-def _merge_val_match(p_alias: str, val) -> str:
-    """Existing-node probe for one MERGE property: a boolean or a number matches any spelling (4.6.0 R168)."""
+def _merge_val_match(p_alias: str, val, context=None) -> str:
+    """Existing-node probe for one MERGE property: a boolean or a number matches any spelling (4.6.0 R168); a string
+    also compares `val_key`, its indexed first 128 characters (`_value_key_predicate`), which `_hint_value_key_lookups`
+    then lets drive the lookup."""
     if isinstance(val, bool):
         return _stored_bool_in(f"{p_alias}.val", val)
     if _static_number(ast.Literal(val), None) is not None:
         return _number_eq_sql(f"{p_alias}.val", val, doubles=True)
-    return f"{p_alias}.val = ?"
+    return f"{p_alias}.val = ?" + _value_key_predicate(f"{p_alias}.val", ast.Literal(val), context)
 
 
 def _merge_val_params(k, val) -> list:
@@ -10842,7 +10885,7 @@ def _merge_pattern_existence_sql(merge_node, context=None):
             p_alias = f"_mp{ki}"
             prop_joins += (
                 f' JOIN {_table("rdf_props")} {p_alias} ON '
-                f'{p_alias}.s = _ml0.node_id{same_graph(p_alias)} AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
+                f'{p_alias}.s = _ml0.node_id{same_graph(p_alias)} AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val, context)}'
             )
             prop_params.extend(_merge_val_params(k, val))
         return (
@@ -10860,12 +10903,12 @@ def _merge_pattern_existence_sql(merge_node, context=None):
             prop_joins_parts.append(
                 f"SELECT 1 FROM {_table('nodes')} _ml0 "
                 f'JOIN {_table("rdf_props")} {p_alias} ON '
-                f'{p_alias}.s = _ml0.node_id{same_graph(p_alias)} AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
+                f'{p_alias}.s = _ml0.node_id{same_graph(p_alias)} AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val, context)}'
             )
         else:
             prop_joins_parts.append(
                 f'JOIN {_table("rdf_props")} {p_alias} ON '
-                f'{p_alias}.s = _ml0.node_id{same_graph(p_alias)} AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
+                f'{p_alias}.s = _ml0.node_id{same_graph(p_alias)} AND {p_alias}."key" = ? AND {_merge_val_match(p_alias, val, context)}'
             )
         prop_params.extend(_merge_val_params(k, val))
     return " ".join(prop_joins_parts) + in_graph + exclusion_sql, prop_params
@@ -11458,7 +11501,7 @@ def translate_merge_clause(merge, context, metadata):
                 context.join_clauses.append(
                     f'JOIN {_table("rdf_props")} {p_alias} ON '
                     f"{p_alias}.s = {node_alias}.node_id AND "
-                    f'{p_alias}."key" = ? AND {_merge_val_match(p_alias, val)}'
+                    f'{p_alias}."key" = ? AND {_merge_val_match(p_alias, val, context)}'
                 )
                 for param in _merge_val_params(k, val):
                     context.add_join_param(param)
@@ -17589,7 +17632,7 @@ def _value_key_predicate(col_sql, value_expr, context) -> str:
     """
     if not _has_value_key(context):
         return ""
-    m = re.fullmatch(r"(p\d+)\.val", col_sql.strip())
+    m = re.fullmatch(r"(_?m?p\d+)\.val", col_sql.strip())
     if not m:
         return ""
     if isinstance(value_expr, ast.Literal):
