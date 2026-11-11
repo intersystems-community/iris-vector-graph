@@ -15990,7 +15990,9 @@ def _stored_number_test(col_sql: str) -> str:
 def _stored_number_value(col_sql: str) -> str:
     """A node property row's `val` as a DOUBLE when it holds a number, else NULL: a string never orders against a
     number (openCypher: null), where `CAST(val AS DOUBLE)` read the string '.95' as 0.95 (4.7.0 row 24)."""
-    return f"(CASE WHEN {_stored_number_test(col_sql)} THEN CAST({col_sql} AS DOUBLE) END)"
+    infinities = ", ".join(f"'{t}'" for v in (math.inf, -math.inf) for t in number_spellings(v))
+    return (f"(CASE WHEN {_stored_number_test(col_sql)} THEN CAST({col_sql} AS DOUBLE) "
+            f"WHEN %EXACT({col_sql}) IN ({infinities}) THEN CAST({col_sql} AS DOUBLE) END)")
 
 
 def _number_texts(value) -> List[str]:
