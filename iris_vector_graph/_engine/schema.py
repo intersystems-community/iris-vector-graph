@@ -1592,7 +1592,7 @@ class SchemaMixin:
             )
         else:
             return
-        name =table.rsplit(".", 1)[-1]
+        name = table.rsplit(".", 1)[-1]
         recorded = self.get_embedding_identity(name) or EmbeddingIdentity(mechanism=None, model_key=None)
         recorded = replace(recorded, dimension=db)
         offered = replace(self._offered_embedding_identity(), dimension=dim)
