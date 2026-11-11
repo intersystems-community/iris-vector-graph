@@ -70,3 +70,7 @@ Found during 4.7.0 and not in its cut (the list is frozen).
 - **A MATCH with many property equalities can take minutes to prepare** (4.6.5 and 4.7.0, docs/KNOWN_ISSUES.md): five
   or more `n.p = v` on one node do not prepare in 60 s on 2026.3. `test_stress_api::test_very_long_query_string`
   skips until then (tests/e2e/gate_skips.txt).
+- **`kg_RRF_FUSE` answers `[]` when an index search fails** (4.6.5 and 4.7.0; silent wrong answer): its
+  `except Exception: logger.error(...)` around the IVF / HNSW and BM25 legs turns any failure (a shape mismatch, a
+  missing index, IRIS refusing the query) into an empty fusion, which reads as "nothing matched". It should raise
+  naming the leg, as the centrality methods do since 4.6.0 R105 / R127.
