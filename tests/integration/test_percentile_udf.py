@@ -29,9 +29,15 @@ def test_continuous_percentile_interpolates(pct, vals, p, expected):
     assert float(pct("PCONT", vals, p)) == pytest.approx(expected)
 
 
-def test_empty_input_gives_the_neutral_answer(pct):
-    assert pct("PDISC", "[]", 0.5) in ("", None)
-    assert float(pct("PCONT", "[]", 0.5)) == 0
+def test_empty_input_answers_null(pct, iris_connection):
+    """openCypher: percentileDisc and percentileCont over no rows are null. PCONT answered 0.0 before 4.6.0 (R274,
+    CHANGELOG 4.6.0 "percentileCont over no rows answered 0.0 (now null)"); both answer SQL's empty string, which the
+    driver hands back as None (measured on 4.6.5 and 4.7.0 alike)."""
+    assert pct("PDISC", "[]", 0.5) is None
+    assert pct("PCONT", "[]", 0.5) is None
+    r = IRISGraphEngine(iris_connection, embedding_dimension=768).execute_cypher(
+        "UNWIND [] AS x RETURN percentileCont(x, 0.5) AS pc, percentileDisc(x, 0.5) AS pd", {})
+    assert r.error is None and [list(row) for row in r.rows] == [[None, None]]
 
 
 @pytest.mark.parametrize("method", ["PDISC", "PCONT"])
