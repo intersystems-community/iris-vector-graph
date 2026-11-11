@@ -991,8 +991,9 @@ class NodesEdgesMixin:
             added to it: not its labels, not its properties).
 
         Raises:
-            ValueError: a label or property key over 128 characters, before anything is written (4.7.0: one long
-                label made the call answer False, and a long label beside another answered True and dropped it).
+            ValueError: a node id over 256 characters, or a label or property key over 128, before anything is
+                written (4.7.0: one long label made the call answer False, and a long label beside another answered
+                True and dropped it; a 500-character id failed in IRIS with SQLCODE -400).
             GraphWriteError: IRIS refused the write (for example SQLCODE -99 for a user
                 without INSERT on the IVG Schema); the transaction is rolled back, so
                 nothing is written. Before 4.6.0 this answered False, like a duplicate.
@@ -1003,6 +1004,8 @@ class NodesEdgesMixin:
         """
         _ledger_check(self, "create_node")
         NodeIdInput(node_id=node_id)
+        # 4.7.0: the id as bulk_create_nodes checks it; a 500-character one reached IRIS (SQLCODE -400 <SUBSCRIPT>)
+        check_width("create_node", "node id", node_id, NODE_ID_WIDTH)
         # 4.7.0 row 14: the labels and properties go in executemany, which skipped a refused row of several
         for label in labels or []:
             check_width("create_node", "label", label, LABEL_WIDTH)
