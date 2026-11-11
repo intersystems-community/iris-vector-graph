@@ -15981,6 +15981,11 @@ def _stored_number_test(col_sql: str) -> str:
     """True when a node property row's `val` holds a number, read from the value's `$LISTBUILD` type byte (4.7.0
     row 24; row 35): 4 to 7 an integer or a decimal, 8 or 9 a `$DOUBLE`; a string is 1 or 2. A number's element is
     short, so its first byte is its length; a long string's is 0, and its second byte is a length, not a type."""
+    if _unwind_by_index.get() is not None:
+        # the 2026.3 long-list fallback: with `$LISTBUILD` in its SQL IRIS refused the statement at Prepare
+        # (<LIST>LoadTableFunction+10^%qTable) on an rdf_props that holds graph_id last (a namespace upgraded from
+        # 3.x); CY_TYPED reads the same type byte and marks a number N or D (4.7.0 gate, test_460_r310 n = 200)
+        return f"(SUBSTRING({_fn('CY_TYPED')}(%EXACT({col_sql})), 1, 2) IN (CHAR(1) || 'N', CHAR(1) || 'D'))"
     lb = f"$LISTBUILD(%EXACT({col_sql}))"
     return f"(ASCII({lb}) > 0 AND ASCII(SUBSTRING({lb}, 2, 1)) BETWEEN 4 AND 9)"
 

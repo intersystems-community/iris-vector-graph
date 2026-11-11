@@ -51,4 +51,22 @@ def test_the_long_list_fallback_has_no_plain_copy():
         fallback = translate_to_sql(parse_query(q), {}).sql
     assert used == ["u3", "u4"]
     assert plain in usual and "BETWEEN 4 AND 9" in usual
-    assert plain not in fallback and "BETWEEN 4 AND 9" in fallback
+    assert plain not in fallback and "CY_TYPED(%EXACT(p2.val))" in fallback  # the typed test, as the next case reads it
+
+
+def test_the_long_list_fallback_reads_the_type_through_cy_typed():
+    """4.7.0 gate rerun on 4d3d005a: the same test failed in the gate's session namespace, whose rdf_props holds
+    graph_id last (a namespace upgraded from 3.x; a new one holds it first). There the fallback failed at Prepare
+    (<LIST>LoadTableFunction+10^%qTable) with the typed comparison alone, spelled with `$LISTBUILD` in the SQL; the
+    same type read through CY_TYPED's mark answered 39,800 (measured, IVG470LU). The usual translation keeps the
+    inline `$LISTBUILD` test (row 24's plan)."""
+    from iris_vector_graph.cypher.translator import unwind_by_index
+
+    q = ("MATCH (n:L310D) WHERE n.v <= 200 WITH collect(n) AS ns UNWIND range(0, size(ns) - 1) AS i "
+         "UNWIND range(0, size(ns) - 1) AS j WITH i, j WHERE i <> j RETURN count(*) AS c")
+    usual = translate_to_sql(parse_query(q), {}).sql
+    with unwind_by_index([]):
+        fallback = translate_to_sql(parse_query(q), {}).sql
+    assert "$LISTBUILD(%EXACT(p2.val))" in usual
+    assert "$LISTBUILD(" not in fallback.split("Stage2 AS")[0], fallback
+    assert "SUBSTRING(Graph_KG.CY_TYPED(%EXACT(p2.val)), 1, 2) IN (CHAR(1) || 'N', CHAR(1) || 'D')" in fallback
