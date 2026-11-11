@@ -1065,7 +1065,15 @@ class NodesEdgesMixin:
                 else:
                     prop_data.append([node_id, k, val_str, node_id, k])
 
+            # The node is new, so a property row of that id in that graph is an orphan: rdf_props has
+            # no foreign key on nodes, and a node removed by SQL leaves its rows. The guard below
+            # skipped them, so the old values stood, and row 14's count raised GraphWriteError for
+            # the skip (4.7.0). A new node holds what it is given.
             if _children_scoped:
+                cursor.execute(
+                    f"DELETE FROM {self._t('rdf_props')} WHERE graph_id = ? AND s = ?",
+                    [graph_id, node_id],
+                )
                 # The guard is scoped as well as the insert: keyed on (s, "key") alone it
                 # reports "already there" for another graph's property of the same name
                 # and skips the write, and create_node still returns True.
@@ -1076,6 +1084,7 @@ class NodesEdgesMixin:
                     f'WHERE graph_id = ? AND s = ? AND "key" = ?)'
                 )
             else:
+                cursor.execute(f"DELETE FROM {self._t('rdf_props')} WHERE s = ?", [node_id])
                 prop_sql = f'INSERT INTO {self._t("rdf_props")} (s, "key", val) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM {guard_from(self._t("rdf_props"))} WHERE s = ? AND "key" = ?)'
             cursor.executemany(prop_sql, prop_data)
             check_rowcount(cursor, prop_data, "property", self.conn)  # the node is new, so the guard skips none
