@@ -10706,6 +10706,41 @@ def translate_delete_clause(delete, context, metadata):
         )
 
 
+def _merge_string_id(merge_node, context):
+    """The string a MERGE's `{id: ...}` names, when the CREATE half made it the new node's node_id (a literal or a
+    parameter); else None (a number, or a value read per row, takes the generated-id path)."""
+    v = (merge_node.properties or {}).get("id")
+    if isinstance(v, ast.Literal):
+        val = v.value
+    elif isinstance(v, ast.Variable) and v.is_parameter:
+        val = (context.input_params or {}).get(v.name)
+    else:
+        return None
+    return val if isinstance(val, str) else None
+
+
+def _merge_id_keyed_guards(context, start, node_id, exist_sql, exist_params) -> None:
+    """A MERGE whose `id` is the new node's node_id creates only when its pattern matched nothing.
+
+    The CREATE half guarded the node insert by node_id alone, so after `SET n.id = 'new'` on a node made as 'old',
+    `MERGE (n:L {id: 'new'}) SET n.v = 7` set v on that node (the lookup reads the property) and made a second node
+    'new' as well (4.6.5 and 4.7.0). The node insert now also needs the pattern to match nothing, and the label and
+    property rows of the new id are written only when that node is there.
+    """
+    nodes = _table("nodes")
+    g = getattr(context, "graph_context", None)
+    in_graph = f"graph_id = '{_sql_literal(g)}'" if g is not None else "COALESCE(graph_id, '') = ''"
+    node_there = f" AND EXISTS (SELECT 1 FROM {nodes} WHERE node_id = ? AND {in_graph})"
+    for i in range(start, len(context.dml_statements)):
+        sql, params = context.dml_statements[i]
+        if not params or node_id not in params or not sql.rstrip().endswith(")") or " WHERE NOT EXISTS (" not in sql:
+            continue
+        if f"INSERT INTO {nodes} " in sql:
+            context.dml_statements[i] = (f"{sql} AND NOT EXISTS ({exist_sql})", list(params) + list(exist_params))
+        elif f"INSERT INTO {_table('rdf_labels')} " in sql or f"INSERT INTO {_table('rdf_props')} " in sql:
+            context.dml_statements[i] = (sql + node_there, list(params) + [node_id])
+
+
 def _merge_val_match(p_alias: str, val) -> str:
     """Existing-node probe for one MERGE property: a boolean or a number matches any spelling (4.6.0 R168)."""
     if isinstance(val, bool):
@@ -11315,6 +11350,10 @@ def translate_merge_clause(merge, context, metadata):
         gate, gate_params = "", []
         if _rows is not None and not _rows[4]:
             gate, gate_params = f" AND EXISTS (SELECT 1 {_rows[2]})", list(_rows[3])
+
+        id_keyed = None if new_uuid else _merge_string_id(merge_node, context)
+        if id_keyed is not None:
+            _merge_id_keyed_guards(context, _pre_dml_len, id_keyed, exist_sql, exist_params)
 
         if new_uuid and (_has_uuid_from or _has_uuid_where or True):
             # Replace UUID-based node DML statements with label/prop-aware equivalents.
