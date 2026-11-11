@@ -15969,13 +15969,11 @@ def _marker_free_side(sql: str, expr, context) -> Optional[str]:
     inlined when it is that parameter's `?`, else None (the copy cannot be written without binding again)."""
     if "?" not in sql:
         return sql
-    if isinstance(expr, ast.Variable) and getattr(expr, "is_parameter", False):
+    if sql.count("?") == 1 and isinstance(expr, ast.Variable) and getattr(expr, "is_parameter", False):
         value = (context.input_params or {}).get(expr.name)
         if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
             text = repr(float(value)) if isinstance(value, float) else str(value)
-            inlined = sql.replace("?", text)
-            if sql.count("?") == 1:
-                return inlined
+            return sql.replace("?", text)
     return None
 
 
@@ -18781,7 +18779,7 @@ def _translate_boolean_expression(expr, context, direct: bool) -> str:
         if isinstance(right_expr, ast.PropertyReference) and not _other_is_str(left_expr):
             cast_right = f"CAST({right} AS DOUBLE)"
             right = _as_number(right)
-        if typed and direct:
+        if typed and direct and _unwind_by_index.get() is None:
             # only where null and false both drop the row: under NOT, or as a value, the twin's false would not be
             # the CASE's null (a string '.5' against 0.9). The copy's markers would have no values bound (a $p side
             # is `?`, bound once: 4.7.0 gate, "Incorrect number of parameters"), so a number parameter is inlined in
@@ -18789,8 +18787,9 @@ def _translate_boolean_expression(expr, context, direct: bool) -> str:
             # Not in the long-list fallback (`unwind_by_index`): there the copy beside the CASE made IRIS 2026.3 refuse
             # the statement at Prepare (<LIST>LoadTableFunction+10^%qTable; either comparison alone answers, 4.7.0
             # gate, test_460_r310 n = 200).
-            sides = [_marker_free_side(cast_left, left_expr, context), _marker_free_side(cast_right, right_expr, context)]
-            hint = tuple(sides) if None not in sides and _unwind_by_index.get() is None else None
+            sides = (_marker_free_side(cast_left, left_expr, context), _marker_free_side(cast_right, right_expr, context))
+            if None not in sides:
+                hint = sides
         # Numeric literal type promotion: IRIS treats 1 <> 1.0 due to INTEGER vs DOUBLE.
         # When comparing int with float literal, cast both to DOUBLE.
         _left_is_int = (
