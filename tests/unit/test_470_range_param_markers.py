@@ -70,3 +70,32 @@ def test_the_long_list_fallback_reads_the_type_through_cy_typed():
     assert "$LISTBUILD(%EXACT(p2.val))" in usual
     assert "$LISTBUILD(" not in fallback.split("Stage2 AS")[0], fallback
     assert "SUBSTRING(Graph_KG.CY_TYPED(%EXACT(p2.val)), 1, 2) IN (CHAR(1) || 'N', CHAR(1) || 'D')" in fallback
+
+
+class _OneGraph:
+    """An engine whose namespace holds one graph: the read is not graph-correlated (the shape the gate's USER had)."""
+
+    _props_value_key = True
+    _schema_prefix = None
+
+    def get_table_mapping(self, label):
+        return None
+
+    def _more_than_one_graph(self):
+        return False
+
+
+@pytest.mark.parametrize("engine", [None, _OneGraph()], ids=["several-graphs", "one-graph"])
+def test_the_fallback_reads_the_type_through_cy_typed_in_either_shape(engine):
+    """Correction to a70fe2c3's account: what decided the Prepare refusal was the statement's shape, not rdf_props'
+    column order. Measured on new-layout namespaces (IVG470LC): with one graph the fallback with `$LISTBUILD` in its
+    SQL was refused, with a second graph present (the graph-correlated shape, which an engine-less translation also
+    writes) it answered 39,800; copies of rdf_props in both column orders were refused alike."""
+    from iris_vector_graph.cypher.translator import unwind_by_index
+
+    q = ("MATCH (n:L310D) WHERE n.v <= 200 WITH collect(n) AS ns UNWIND range(0, size(ns) - 1) AS i "
+         "UNWIND range(0, size(ns) - 1) AS j WITH i, j WHERE i <> j RETURN count(*) AS c")
+    with unwind_by_index([]):
+        fallback = translate_to_sql(parse_query(q), {}, engine=engine).sql
+    assert "$LISTBUILD(" not in fallback.split("Stage2 AS")[0], fallback
+    assert "CY_TYPED(%EXACT(p2.val)), 1, 2) IN (CHAR(1) || 'N', CHAR(1) || 'D')" in fallback
