@@ -33,7 +33,10 @@ def test_nan_orders_nothing(op):
 
 def test_a_number_bound_still_casts():
     sq = translate_to_sql(parse_query("MATCH (n:L) WHERE n.p >= $v RETURN n.id"), {"v": 0.5})
-    assert "AS DOUBLE) >= ?" in sq.sql, sq.sql
+    # the bound value meets the row's number (row 24's typed CASE, `... AS DOUBLE) END) >= ?`); its plain copy for
+    # the plan inlines the number, as it may not repeat the marker (4.7.0 gate: "Incorrect number of parameters")
+    assert "AS DOUBLE) END) >= ?" in sq.sql, sq.sql
+    assert sq.sql.count("?") == len(sq.parameters[0]), sq.sql
 
 
 @pytest.mark.parametrize("v,texts,double", [

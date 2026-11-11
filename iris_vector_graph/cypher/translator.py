@@ -15964,6 +15964,21 @@ def _static_number(expr, context, infinite_ok: bool = False):
 _NODE_VAL_RE = re.compile(r"(p\d+)\.val")
 
 
+def _marker_free_side(sql: str, expr, context) -> Optional[str]:
+    """`sql` for a second copy of a comparison operand: as it is when it has no `?`, a number parameter's value
+    inlined when it is that parameter's `?`, else None (the copy cannot be written without binding again)."""
+    if "?" not in sql:
+        return sql
+    if isinstance(expr, ast.Variable) and getattr(expr, "is_parameter", False):
+        value = (context.input_params or {}).get(expr.name)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            text = repr(float(value)) if isinstance(value, float) else str(value)
+            inlined = sql.replace("?", text)
+            if sql.count("?") == 1:
+                return inlined
+    return None
+
+
 def _stored_number_test(col_sql: str) -> str:
     """True when a node property row's `val` holds a number, read from the value's `$LISTBUILD` type byte (4.7.0
     row 24; row 35): 4 to 7 an integer or a decimal, 8 or 9 a `$DOUBLE`; a string is 1 or 2. A number's element is
@@ -18766,8 +18781,11 @@ def _translate_boolean_expression(expr, context, direct: bool) -> str:
             right = _as_number(right)
         if typed and direct:
             # only where null and false both drop the row: under NOT, or as a value, the twin's false would not be
-            # the CASE's null (a string '.5' against 0.9)
-            hint = (cast_left, cast_right)
+            # the CASE's null (a string '.5' against 0.9). The copy's markers would have no values bound (a $p side
+            # is `?`, bound once: 4.7.0 gate, "Incorrect number of parameters"), so a number parameter is inlined in
+            # it and any other marker leaves the copy out.
+            sides = [_marker_free_side(cast_left, left_expr, context), _marker_free_side(cast_right, right_expr, context)]
+            hint = tuple(sides) if None not in sides else None
         # Numeric literal type promotion: IRIS treats 1 <> 1.0 due to INTEGER vs DOUBLE.
         # When comparing int with float literal, cast both to DOUBLE.
         _left_is_int = (
