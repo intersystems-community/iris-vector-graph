@@ -67,8 +67,10 @@ Row 6: a temporal purge retires the endpoints it leaves bare by default (Tom, 20
 
 Found during 4.7.0 and not in its cut (the list is frozen).
 
-- **Orphaned label rows.** A node removed by SQL leaves its `rdf_labels` rows too; `create_node` of that id in that
-  graph with one of those labels is refused (-119) and raises `GraphWriteError`. 4.7.0 replaces orphaned property rows
-  only.
-- **`bulk_create_nodes` over orphaned property rows** keeps the old values (it merges), where `create_node` now
-  replaces them.
+- **`bulk_create_nodes` over orphaned property rows** keeps the old values, where `create_node` now replaces them.
+  Measured on 4.7.0: a node made with `{a: 1}` and removed by SQL (its `rdf_props` rows stay; `rdf_props` has no
+  foreign key on `nodes`), then `bulk_create_nodes([{"id": ..., "properties": {"a": 2}}])` returned the id, and
+  `RETURN n.a` answered 1. (Label rows cannot be orphaned this way: `fk_labels_node` refuses the node's DELETE, -124.)
+- **A MATCH with many property equalities can take minutes to prepare** (4.6.5 and 4.7.0, docs/KNOWN_ISSUES.md): five
+  or more `n.p = v` on one node do not prepare in 60 s on 2026.3. `test_stress_api::test_very_long_query_string`
+  skips until then (tests/e2e/gate_skips.txt).

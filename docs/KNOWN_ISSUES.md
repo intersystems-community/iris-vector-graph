@@ -550,6 +550,31 @@ tables`), as such a write fails anyway (the entry below).
   plan, so only the first run of a query text pays the price; a query you run often pays it once.
 - **Check:** the first run of the query is much slower than the second.
 
+### A MATCH with many property equalities can take minutes to prepare
+
+- **Symptom:** the first run of `MATCH (n:X) WHERE n.prop0 = 0 AND n.prop1 = 1 AND ... RETURN n` does not return
+  for minutes once it has five or more equalities. Measured on 2026.3 enterprise (x86), namespace IVG470RR with 732
+  `rdf_props` rows, running the translated SQL: 4.7.0 took 21.9 s at k = 4 equalities, and k = 5 did not finish in
+  60 s; 4.6.5's translation took 5.9 s at k = 3 and 23.2 s at k = 4, and k = 5 did not finish in 60 s. At k = 10 a
+  run was stopped after 13 minutes. The map pattern `MATCH (n:X {prop0: 0, ..., prop5: 5})` and the same six
+  equalities did not finish in 60 s at k = 6 on either route. The cost is the first run's: once IRIS has a plan, the
+  query answers in milliseconds. The number of graphs in the namespace decides how bad it is: on 2026.3.0AI (ARM64,
+  770 `rdf_props` rows), a namespace holding one graph took 1.0 s at k = 5 and 21 s at k = 10, and one holding two
+  graphs took 23 s at k = 4, and k = 5 did not finish in 60 s. A later `TUNE TABLE` (setup runs one) marks the cached plan stale, and IRIS's
+  background regeneration plans it again while holding the cached query's lock, so other statements on that query
+  wait.
+- **Cause:** the SQL route joins `rdf_props` once per equality and adds an `EXISTS` on `rdf_props` for each, so k
+  equalities give IRIS 2k `rdf_props` references (each also matched on `graph_id`), and its search over their join
+  order at Prepare grows exponentially. A Prepare the client gives up on keeps running on the server.
+- **Versions:** 4.6.5 and 4.7.0; planned for 4.7.1.
+- **Workaround:** keep one equality in the `MATCH` and compare the rest on the properties map:
+  `MATCH (n:X) WHERE n.prop0 = 0 WITH n, properties(n) AS p WHERE p.prop1 = 1 AND ... RETURN n`. With a node
+  matching all of them and one differing in the last, k = 6 answered the matching node in 0.39 s on the SQL route
+  and 0.02 s natively, and k = 10 in 0.32 s and 0.02 s. Splitting the equalities over `WITH n WHERE` steps of three
+  is not enough: k = 6 took 44 to 50 s the first time and k = 7 took 78 s.
+- **Check:** time the first run of the query in a new process; minutes, against milliseconds for the second run,
+  is this issue.
+
 ### The first call of a query with undirected hops compiles slowly
 
 - **Symptom:** a query with up to three anchored undirected hops (`(a {name: $n})-[:L]-(b)-[:L]-(c)`) is rewritten into
