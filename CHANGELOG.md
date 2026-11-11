@@ -137,8 +137,24 @@ WHERE label = 'A' RETURN label` answered every label; it answers the filtered on
   path's list reversed its JSON text character by character (`']"R"['`). An unwound boolean or `''` of a list built
   while the query runs reads as itself (`1`, `0`, null before), and an UNWIND reads a nested list, map or boolean as
   itself (`['[1]', 'a', true]` was answered for `[[1], 'a', true]`), including from `UNWIND $p` over mixed values.
-- **SET of an UNWIND variable writes each row's value**, and the batch idiom `UNWIND $rows AS r MATCH (n {id: r.id})
-SET n += r` works (both raised); `MERGE ... ON MATCH SET` after an UNWIND wrote nothing silently and writes.
+- **SET of an UNWIND variable writes each row's value.** `UNWIND $p AS e MATCH (n {id: 'x'}) SET n.f = e` (and after a
+  `CREATE`) raised `UndefinedVariable`, and the batch idiom `UNWIND $rows AS r MATCH (n {id: r.id}) SET n += r` (and
+  `SET n = r`) raised "SET n += takes a map literal or a map parameter"; they write each row's value or map, `true` as
+  `true` and `[2]` as a list. `UNWIND ... MERGE (n {id: e}) ON MATCH SET` wrote nothing, silently, and writes;
+  `ON CREATE SET n.f = e` (which failed "Bad argument") writes the row's value; a boolean carried through a `WITH` was
+  written as the string `'1'` and is written as `true`. TCK merge, set, unwind, create, remove, delete: 294 of 294
+  before and after. A `CREATE` or `MERGE` after `UNWIND $p AS e WITH e` still fails with SQLCODE -119 (Known issues).
+- **An UNWIND element compared with a stored property compares as the same literal would.**
+  `UNWIND $p AS e WITH e MATCH (n) WHERE n.f = e DETACH DELETE n` with `true` in `$p` compared it as the text `1`: it
+  deleted a node whose `f` is the string `'1'` and kept the one whose `f` is `true`; without the `WITH`, a list
+  element (`[1]`) failed with SQLCODE -12. Every form (a `WHERE` or `{f: e}`, with or without a `WITH`, a `DELETE`,
+  `SET`, `REMOVE` or a read) now answers as `WHERE n.f = true` / `= [1]` does, the legacy boolean spellings included
+  (a boolean in an equality also matches a stored `'1'` or `'True'`, as IVG before 4.1.0 stored booleans; Known
+  issues). TCK merge, set, unwind, create, remove, delete, match-where, with-where: 347 of 347 before and after.
+- **A `MERGE` whose pattern matched a node makes no second one.** After `CREATE (:L {id: 'old', w: 1})` and
+  `MATCH (n:L {w: 1}) SET n.id = 'new'`, `MERGE (n:L {id: 'new'}) SET n.v = 7` set `v` on that node and also inserted
+  a node `new`: two nodes, both `v = 7`, on both routes. The insert now also needs the pattern lookup to find nothing.
+  TCK merge, create, set, delete, remove, match: 661 of 661.
 - **Writers that dropped rows or values without a word.** `bulk_create_nodes` returned every id with a too-wide label
   missing, and `create_node(id, labels=["A", long])` answered True with only `A` (the driver skips a refused row of a
   batch); widths are checked first and a shortfall of rows raises `GraphWriteError`. `BulkLoader` and `load_networkx`
@@ -177,6 +193,12 @@ SET n += r` works (both raised); `MERGE ... ON MATCH SET` after an UNWIND wrote 
 
 **Speed**
 
+- **A `MERGE`'s lookup of a string value reads the `(key, val_key)` index.** On a namespace tuned at 50,000 nodes,
+  3,000 `MERGE (n:L {id: $id}) SET n.v = $v` took 24 to 37 s per 1,000 on 4.6.5 against 2.1 to 5.0 s on 4.4.1
+  (interleaved): the SET's UPDATE and INSERT took 11.4 and 11.6 ms of each MERGE on 4.6.5, against 1.95 and 2.28 ms
+  on 4.4.1. The lookup read every row of the key, and since 4.6.0 (R089) every node has an `id` row (59,300 in the
+  4.6.5 namespace, 9,600 in the 4.4.1 one). It now also compares `val_key`, so that index drives it: the UPDATE took
+  10.8 ms before this fix and 0.30 ms after. <!-- cy's final tuned and cold timings go here -->
 - Number equality on a node property reads the `(key, val_key)` index, where it read every row of the key. On 50,000
   nodes, median of 7 in three interleaved pairs: a labelled `n.p = 0.95` 14.2 to 14.7 ms before, 1.4 to 1.6 ms after;
   the inline `{p: 0.95}` without a label 14.0 to 14.3 ms and 1.1 to 1.5 ms; `{q: 777}` 10.7 to 11.4 ms and 0.9 to 1.1
@@ -196,7 +218,10 @@ SET n += r` works (both raised); `MERGE ... ON MATCH SET` after an UNWIND wrote 
 - `Graph.KG.PropWrite` and `Graph_KG.Prop_Set`; `CY_LIST_KINDS`; `kg_PPR`'s seventh parameter, `rowLimit`.
 - `tzdata` (2025.2 or later) is a dependency.
 
-<!-- opened / closed: the count from the lead goes here -->
+**Opened against closed.** Of the 55 defects open on 4.6.5, 29 are closed in 4.7.0. Of the release's cut, three stay open (the other 23 were outside it):
+a variable-length read from Mindwalk waits on their rerun; typed relationship storage and the parallel-relationship
+default go to 4.8.0. 33 more were found during 4.7.0 and fixed. Of those found and not fixed, 10 are queued for
+4.7.1 and 3 for 4.8.0 with typed storage; [Known issues](docs/KNOWN_ISSUES.md) has the ones with a workaround.
 
 ### v4.6.5 (2026-11-09)
 
