@@ -26,7 +26,8 @@ engine.initialize_schema()
 
 - **Symptom:** outside multigraph mode, `CREATE (a)-[:R]->(b)` between a pair that already has an `R` relationship
   returns no error and writes nothing. openCypher adds a second, parallel relationship.
-- **Versions:** all 4.x. Early 4.0 builds raised `SQLCODE -119` here instead.
+- **Versions:** all 4.x. Early 4.0 builds raised `SQLCODE -119` here instead. Parallel relationships by default come
+  with typed storage, planned for 4.8.0.
 - **Workaround:** turn on multigraph mode for the graph (`engine.set_multigraph(graph, True)`) when you need parallel
   relationships, or use `MERGE` when you mean "at most one".
 - **Check:** count the relationships after the write.
@@ -122,7 +123,7 @@ r = engine.execute_cypher(
   bytes. A number filter on a relationship property therefore cannot tell 0.95 from `'0.95'`: `WHERE r.p = 0.95`
   matches both (and `'.95'`, `create_edge`'s JSON number 0.95 too), and `RETURN r.p` and `properties(r)` read the
   string `'0.95'` back as the number 0.95. A node property keeps the type, and its filters read it from 4.7.0.
-- **Versions:** all 4.x. Re-typing needs a stored marker, planned with the typed relationship storage (4.8.0).
+- **Versions:** all 4.x. Relationship property types come with typed storage, planned for 4.8.0.
 - **Workaround:** write a numeric relationship property with `create_edge`, which stores a
   JSON number, and keep number-like text under a property name of its own; read a numeric one with `toFloat(r.p)`.
 - **Check:** `SELECT qualifiers FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?` shows `"p": "0.95"`
@@ -170,7 +171,7 @@ r = engine.execute_cypher(
   Cypher-written double). From 4.7.0 a node filter matches a stored number only. From 4.6.0 a node
   value reads with the type it is stored with whatever the driver version; before, which type a Cypher-written number
   read as depended on the query's path and on the driver (5.4.0 read the number, 5.4.1 the text). The Python writers
-  store a node number as a number from 4.6.4.
+  store a node number as a number from 4.6.4. Relationship property types come with typed storage, planned for 4.8.0.
 - **Workaround:** keep a property either numeric or text on every node or relationship that has it, and put
   number-like text under a property name of its own. Read a numeric property with `toFloat(x.score)`, which answers
   the float for every stored form. `toString(x.score)` answers a stored string as it is, and a stored number in
@@ -244,7 +245,7 @@ engine.execute_cypher(
 - **Versions:** every release with the ledger (spec 213).
 - **Workaround:** write a value whose type matters with Cypher (`SET n.p = 30`, or `SET n.p = toInteger(n.p)` to
   retype the text) or `store_node`, outside the changeset; read a ledger-written number with `toInteger()` or
-  `toFloat()`. Typed changesets are planned for 4.8.0.
+  `toFloat()`. Typed changesets come with typed storage, planned for 4.8.0.
 - **Check:** the ledger's record and the stored value are both the text.
 
 ```python
@@ -501,7 +502,7 @@ tables`), as such a write fails anyway (the entry below).
   as `'true'`/`'false'`, and an equality with one names every spelling, so rows those writers stored still match.
   An `UNWIND` element compares as the same literal would (4.7.0; before, a `true` element was compared as `'1'`
   only, missing a stored `true`, and a list element failed with SQLCODE -12).
-- **Versions:** 4.1.0 and later. A typed storage (4.8.0, if it goes ahead) is where this goes away.
+- **Versions:** 4.1.0 and later. The boolean legacy match goes away with typed storage, planned for 4.8.0.
 - **Workaround:** compare with the string you mean when the property holds strings (`n.id = '1'`, `{id: 'x'}`), and
   keep booleans out of a parameter or list you match string ids with. To match only a boolean, check the stored text
   too: `WHERE n.p = true AND toString(n.p) = 'true'`.
