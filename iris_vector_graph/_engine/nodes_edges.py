@@ -1071,7 +1071,7 @@ class NodesEdgesMixin:
             # the skip (4.7.0). A new node holds what it is given.
             if _children_scoped:
                 cursor.execute(
-                    f"DELETE FROM {self._t('rdf_props')} WHERE graph_id = ? AND s = ?",
+                    f"DELETE FROM {self._t('rdf_props')} WHERE COALESCE(graph_id, '') = COALESCE(?, '') AND s = ?",
                     [graph_id, node_id],
                 )
                 # The guard is scoped as well as the insert: keyed on (s, "key") alone it
@@ -1629,8 +1629,8 @@ class NodesEdgesMixin:
                 marks = ", ".join("?" * len(chunk))
                 if scoped:
                     cursor.execute(
-                        f"DELETE FROM {props} WHERE graph_id = ? AND s IN ({marks}) AND s NOT IN "
-                        f"(SELECT node_id FROM {node_table} WHERE graph_id = ? AND node_id IN ({marks}))",
+                        f"DELETE FROM {props} WHERE COALESCE(graph_id, '') = COALESCE(?, '') AND s IN ({marks}) AND s NOT IN "
+                        f"(SELECT node_id FROM {node_table} WHERE COALESCE(graph_id, '') = COALESCE(?, '') AND node_id IN ({marks}))",
                         [graph_id, *chunk, graph_id, *chunk],
                     )
                 else:  # a pre-227 schema: a node of that id in any graph keeps the rows
