@@ -95,10 +95,12 @@ def test_distinct_and_a_later_aggregating_with(eng):
 
 
 def test_the_fallback_ran_and_logged_once(eng, caplog):
+    """A list of nodes: IRIS refuses its plain read in both plans. A 2000-element list of numbers prepared in IRIS's
+    parallel plan on 32 cores (4.7.0 gate, the Studio) and only the serial plan refused it, so no fallback ran there."""
     import logging
 
     _grouped(eng, 2000)
-    q = "MATCH (n:L310D) WITH n.k AS k, collect(n.p) AS ps UNWIND ps AS x RETURN k, count(x) AS c ORDER BY k"
+    q = "MATCH (n:L310D) WITH n.k AS k, collect(n) AS ns UNWIND ns AS x RETURN k, count(x) AS c ORDER BY k"
     with caplog.at_level(logging.INFO, logger="iris_vector_graph._engine.query"):
         first = _rows(eng, q)
         second = _rows(eng, q)

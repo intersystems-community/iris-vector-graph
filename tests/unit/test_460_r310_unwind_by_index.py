@@ -76,12 +76,25 @@ class TestSignature:
 
         assert _is_long_list_temp_error(SIGNATURE)
 
+    def test_the_form_without_the_temporary_named_is_recognised(self):
+        """4.7.0 gate (the Studio's fresh USER, 2000 nodes): the same refusal, with the key past 32767 bytes, names no
+        ^||%t; the fallback never ran and the read failed."""
+        from iris_vector_graph._engine.query import _is_long_list_temp_error
+
+        assert _is_long_list_temp_error(
+            "<SQL ERROR>; Details: [SQLCODE: <-400>:<Fatal error occurred>] [Location: <ServerLoop - Query Fetch>] "
+            "[%msg: <Unexpected error occurred:  <SUBSCRIPT>%0AmPk2+10^%sqlcq.USER.cls2747.1 *() Encoded subscript 1 "
+            "> 32767 bytes>]"
+        )
+
     @pytest.mark.parametrize("msg", [
         None,
         "",
         "SQLCODE: <-400> <SUBSCRIPT> somewhere else",  # no ^||%t(
         '[SQLCODE: <-400>] ^||%t(1,"x") <UNDEFINED>',  # not a SUBSCRIPT
         '[SQLCODE: <-1>] <SUBSCRIPT> ^||%t(1,"x")',  # not -400
+        "SQLCODE: <-400> <SUBSCRIPT>%0Ax+1^User.Mine.1 *() Encoded subscript 1 > 32767 bytes",  # not a query's class
+        "SQLCODE: <-1> <SUBSCRIPT>%0AmPk2+10^%sqlcq.NS.cls1.1 *() Encoded subscript 1 > 32767 bytes",  # not -400
     ])
     def test_another_error_is_not(self, msg):
         from iris_vector_graph._engine.query import _is_long_list_temp_error
@@ -129,6 +142,21 @@ class TestRetry:
         assert "JSON_TABLE(Stage1.ns," in e._store.sql[0] and "CY_LIST_ELEM" in e._store.sql[1]
         notes = [rec for rec in caplog.records if "UNWIND" in rec.getMessage()]
         assert len(notes) == 1 and notes[0].levelno == logging.INFO, [n.getMessage() for n in notes]
+
+    def test_the_fallback_is_not_run_in_parallel(self, monkeypatch):
+        """4.7.0 gate (the Studio, 32 cores): IRIS's auto-parallel plan of the position read keyed a temporary by the
+        whole list and failed the same way; each clause's FROM of the retry carries %NOPARALLEL, the first run none."""
+        import re
+
+        import iris_vector_graph._engine.query as q
+
+        monkeypatch.setattr(q, "_finish_sql_result", lambda r, s, **k: r)
+        e = _engine([(SIGNATURE, []), (None, [[0, 15]])])
+        e._execute_parsed_sql(parse_query(GROUPED), {})
+        first, retry = e._store.sql
+        assert "%NOPARALLEL" not in first
+        clause_froms = re.findall(r"(?m)^FROM .*", retry)
+        assert clause_froms and all(f.startswith("FROM %NOPARALLEL ") for f in clause_froms), clause_froms
 
     def test_a_failed_fallback_answers_the_first_error_with_a_note(self, monkeypatch):
         import iris_vector_graph._engine.query as q

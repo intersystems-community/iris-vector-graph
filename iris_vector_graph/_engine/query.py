@@ -1664,10 +1664,18 @@ def _fill_empty_columns(result, parsed) -> None:
     result.columns = [it.alias or _return_item_name(it) for it in items]
 
 
+#: A clause's FROM in generated SQL starts its line; a nested subquery's does not (the R310 retry's %NOPARALLEL).
+_CLAUSE_FROM = re.compile(r"(?m)^FROM ")
+
+
 def _is_long_list_temp_error(error) -> bool:
     """IRIS 2026.3's failure for a grouping read over an UNWIND of a list longer than 511 characters: -400 <SUBSCRIPT>
-    in a ^||%t temporary keyed by the list's text (4.6.0 R310). Exactly that, so no other error retries."""
-    return isinstance(error, str) and "<-400>" in error and "<SUBSCRIPT>" in error and "^||%t(" in error
+    in a ^||%t temporary keyed by the list's text (4.6.0 R310). With the key past 32767 bytes the message names no
+    temporary, only the query's class and `Encoded subscript ... > 32767 bytes` (4.7.0 gate). Exactly those, so no
+    other error retries."""
+    if not (isinstance(error, str) and "<-400>" in error and "<SUBSCRIPT>" in error):
+        return False
+    return "^||%t(" in error or ("^%sqlcq." in error and "Encoded subscript" in error and "> 32767 bytes" in error)
 
 
 def _raise_if_error(result, raise_on_error) -> None:
@@ -2262,7 +2270,10 @@ class QueryMixin:
                 "Cypher UNWIND of a list over 511 characters under grouping failed on IRIS 2026.3 (<SUBSCRIPT>); "
                 "reading it by position instead, which costs time quadratic in the list's length (4.6.0 R310)"
             )
-        again = self._store.execute_sql(retry.sql, retry.parameters[0] if retry.parameters else [])
+        # On a many-core server IRIS plans the position read in parallel, and that plan keys a temporary by the whole
+        # list and fails the same way (4.7.0 gate, 32 cores): each clause's FROM (a line's first word) runs serially.
+        serial = _CLAUSE_FROM.sub("FROM %NOPARALLEL ", retry.sql) if isinstance(retry.sql, str) else retry.sql
+        again = self._store.execute_sql(serial, retry.parameters[0] if retry.parameters else [])
         if getattr(again, "error", None):
             result.error = (
                 f"{result.error}\n(the 2026.3 long-list UNWIND fallback, which reads the list by position, also "
