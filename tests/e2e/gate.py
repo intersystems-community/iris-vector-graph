@@ -185,9 +185,10 @@ SESSION_NAMESPACES: Dict[str, str] = {
     "IVG_ISSUE13_NS": (
         "USER on a throwaway IRIS Community 2026.1 container, the build GitHub #13 failed on "
         "(tests/e2e/test_470_issue13_count_distinct_limit_e2e.py), which the gate cannot make. On a free port P: "
-        "`docker run -d --name ivg-c261 -p P:1972 containers.intersystems.com/intersystems/iris-community:2026.1`; "
-        "once healthy, `docker exec -i ivg-c261 iris session IRIS -U %SYS` and "
-        "`Do ##class(Security.Users).UnExpireUserPasswords(\"*\")` (the password stays SYS); then IVG_ISSUE13_NS=USER "
+        "`docker run -d --name ivg-c261 -p P:1972 -v \"$PWD/scripts/dev/no-expire-passwords.cpf:/ivg/merge.cpf:ro\" "
+        "-e ISC_CPF_MERGE_FILE=/ivg/merge.cpf containers.intersystems.com/intersystems/iris-community:2026.1` from "
+        "the checkout (the merge file clears _SYSTEM's and SuperUser's password change at start, so the password "
+        "stays SYS and nothing has to be typed into the container); once healthy, IVG_ISSUE13_NS=USER "
         "IVG_ISSUE13_PORT=P and IVG_GATE_NAMESPACES=0, one connection at a time (Community), and `docker rm -f "
         "ivg-c261` after. On the enterprise container it runs in an IVG470* scratch namespace; unset, the file skips"
     ),

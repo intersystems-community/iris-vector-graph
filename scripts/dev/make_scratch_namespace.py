@@ -14,6 +14,8 @@ PYTHONPATH (which checks where it imported `iris_vector_graph` from), the classe
 `scripts/enterprise-container.sh tcp-deploy` run in that checkout. The venv's editable install may point elsewhere.
 
 Container and port come from IVG_TEST_CONTAINER and IVG_PORT (tests/conftest.py's defaults: ivg-iris-enterprise, 31972).
+The namespace and its databases are made and dropped over TCP on 127.0.0.1:IVG_PORT (scripts/dev/tcp_setup.py), never
+through `iris session`, which Cortex XDR kills; the container name only reaches the install (IVG_ARNO_CONTAINER).
 """
 
 from __future__ import annotations
@@ -22,6 +24,11 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+
+_DEV_DIR = str(Path(__file__).resolve().parent)
+if _DEV_DIR not in sys.path:
+    sys.path.insert(0, _DEV_DIR)
+import tcp_setup  # noqa: E402  (scripts/dev/tcp_setup.py: namespaces and databases over TCP, no `iris session`)
 
 #: The checkout this script belongs to: what `install_ivg` installs.
 REPO = Path(__file__).resolve().parents[2]
@@ -49,89 +56,33 @@ def may_drop(ns: str) -> bool:
     return _upper_starting(ns, DROPPABLE)
 
 
-def _objectscript(lines: list[str]) -> str:
-    """Run ObjectScript lines in %SYS through `iris session`: Config.* take their properties as a local array by
-    reference, which the Native API cannot pass."""
-    script = "\n".join(lines + ["halt"]) + "\n"
-    out = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "%SYS"],
-        input=script, capture_output=True, text=True, timeout=120, check=True,
-    )
-    return out.stdout
-
-
 def split_databases(ns: str) -> dict:
     """`--split`'s two databases of `ns`, each with a resource of its own: {"globals"|"routines": (name, resource)}."""
     return {"globals": (f"{ns}D", f"%DB_{ns}D"), "routines": (f"{ns}R", f"%DB_{ns}R")}
 
 
-def _database_lines(db: str, resource: str = "") -> list[str]:
-    """Create database `db` in /usr/irissys/mgr/<db>/ and its configuration; with `resource`, that resource too, and
-    the database on it (otherwise IRIS gives it %DB_%DEFAULT)."""
-    directory = f"/usr/irissys/mgr/{db.lower()}/"
-    lines = []
-    on_resource = ""
-    if resource:
-        lines.append(f'if \'##class(Security.Resources).Exists("{resource}") set sc=##class(Security.Resources).Create("{resource}","scratch database {db}","","") if \'sc write "FAIL res ",$system.Status.GetErrorText(sc),! halt')
-        on_resource = f', db.ResourceName="{resource}"'
-    return lines + [
-        f'do ##class(%File).CreateDirectoryChain("{directory}")',
-        f'if \'##class(SYS.Database).%ExistsId("{directory}") set db=##class(SYS.Database).%New(), db.Directory="{directory}"{on_resource}, sc=db.%Save() if \'sc write "FAIL db ",$system.Status.GetErrorText(sc),! halt',
-        f'kill p set p("Directory")="{directory}" if \'##class(Config.Databases).Exists("{db}") set sc=##class(Config.Databases).Create("{db}",.p) if \'sc write "FAIL cfgdb ",$system.Status.GetErrorText(sc),! halt',
-    ]
-
-
 def make(ns: str, split: bool = False) -> bool:
     """Create `ns` with a database of the same name; False when it already existed. `split`: its globals in `<ns>D`
-    and its routines in `<ns>R` instead, each database on a resource of its own (`%DB_<ns>D`, `%DB_<ns>R`)."""
-    if split:
+    and its routines in `<ns>R` instead, each database on a resource of its own (`%DB_<ns>D`, `%DB_<ns>R`).
+    Over TCP (scripts/dev/tcp_setup.py), as _SYSTEM in %SYS on 127.0.0.1:IVG_PORT."""
+    with tcp_setup.sys_native(PORT) as native:
+        if not split:
+            return tcp_setup.make_namespace(native, ns)
         dbs = split_databases(ns)
-        globals_db, routines_db = dbs["globals"][0], dbs["routines"][0]
-        databases = [line for name, resource in dbs.values() for line in _database_lines(name, resource)]
-    else:
-        globals_db = routines_db = ns
-        databases = _database_lines(ns)
-    out = _objectscript([
-        f'if ##class(Config.Namespaces).Exists("{ns}") write "EXISTS",! halt',
-        *databases,
-        f'kill p set p("Globals")="{globals_db}",p("Routines")="{routines_db}" set sc=##class(Config.Namespaces).Create("{ns}",.p) if \'sc write "FAIL ns ",$system.Status.GetErrorText(sc),! halt',
-        'write "CREATED",!',
-    ])
-    if "EXISTS" in out:
-        return False
-    if "CREATED" not in out:
-        raise RuntimeError(f"{ns}: {out.strip()[-400:]}")
-    return True
+        return tcp_setup.make_namespace(
+            native, ns, globals_db=dbs["globals"][0], routines_db=dbs["routines"][0], resources=dict(dbs.values()),
+        )
 
 
 def drop(ns: str) -> bool:
     """Delete `ns`, its Task Manager tasks and the databases it maps (DROPPABLE only): the one wipe that leaves nothing
     behind, classes and globals included. Only a database `make` names for `ns` is deleted (`ns`, or `--split`'s
-    `<ns>D` and `<ns>R`, with their resources), read from the namespace's configuration. False when it did not exist."""
+    `<ns>D` and `<ns>R`, with their resources), read from the namespace's configuration. False when it did not exist.
+    Over TCP, as `make`."""
     if not may_drop(ns):
         raise ValueError(f"refusing to drop {ns!r}: only upper-case {'* or '.join(DROPPABLE)}* namespaces are dropped")
-    out = _objectscript([
-        f'if \'##class(Config.Namespaces).Exists("{ns}") write "ABSENT",! halt',
-        f'kill p do ##class(Config.Namespaces).Get("{ns}",.p) set dbs=$lb(p("Globals"),p("Routines"))',
-        # a Task Manager task (IVG's EmbedQueue worker) outlives its namespace and keeps running against it
-        f'set rs=##class(%SQL.Statement).%ExecDirect(,"SELECT ID FROM %SYS.Task WHERE NameSpace = ?","{ns}") '
-        'while rs.%Next() { set sc=##class(%SYS.Task).%DeleteId(rs.%Get("ID")) if \'sc write "FAIL task ",$system.Status.GetErrorText(sc),! halt }',
-        f'set sc=##class(Config.Namespaces).Delete("{ns}") if \'sc write "FAIL ns ",$system.Status.GetErrorText(sc),! halt',
-        # Braces throughout: a one-line `if` would govern everything after it on the line
-        f'set ok=1 for i=1:1:2 {{ set db=$li(dbs,i) continue:\'$lf($lb("{ns}","{ns}D","{ns}R"),db)  '
-        'continue:\'##class(Config.Databases).Exists(db)  kill d do ##class(Config.Databases).Get(db,.d) '
-        'set sc=##class(Config.Databases).Delete(db) if \'sc { write "FAIL cfgdb ",$system.Status.GetErrorText(sc),! set ok=0 quit } '
-        'set sc=##class(SYS.Database).DeleteDatabase(d("Directory")) if \'sc { write "FAIL db ",$system.Status.GetErrorText(sc),! set ok=0 quit } '
-        # DeleteDatabase leaves the directory and its empty stream folder behind
-        'do ##class(%File).RemoveDirectoryTree(d("Directory")) '
-        f'if (db\'="{ns}"),##class(Security.Resources).Exists("%DB_"_db) {{ set sc=##class(Security.Resources).Delete("%DB_"_db) }} }}',
-        'if ok write "DROPPED",!',
-    ])
-    if "ABSENT" in out:
-        return False
-    if "DROPPED" not in out:
-        raise RuntimeError(f"{ns}: {out.strip()[-400:]}")
-    return True
+    with tcp_setup.sys_native(PORT) as native:
+        return tcp_setup.drop_namespace(native, ns, own=(ns, f"{ns}D", f"{ns}R"))
 
 
 def recreate(ns: str) -> None:

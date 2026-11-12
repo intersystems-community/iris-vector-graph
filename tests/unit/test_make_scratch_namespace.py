@@ -150,3 +150,64 @@ def test_install_deploys_this_checkouts_classes(msn):
     assert Path(deploy[0]) == REPO / "scripts" / "enterprise-container.sh"
     assert deploy[1:] == ["tcp-deploy"]
     assert Path(cwd) == REPO
+
+
+# ── make and drop over TCP (4.7.0: no `iris session`) ─────────────────────────
+
+
+@pytest.fixture
+def sysiris(msn, monkeypatch):
+    """msn's TCP handle replaced by the fake %SYS (tests/helpers/fake_setup_iris.py)."""
+    import contextlib
+
+    from tests.helpers.fake_setup_iris import FakeIRIS
+
+    native = FakeIRIS(loaded_hash="current")
+
+    @contextlib.contextmanager
+    def ctx(*a, **k):
+        yield native
+
+    monkeypatch.setattr(msn.tcp_setup, "sys_native", ctx)
+    return native
+
+
+def test_make_and_drop_go_through_tcp_setup_not_a_session(msn):
+    text = SCRIPT.read_text()
+    assert '"iris", "session"' not in text and "docker" not in text.split('"""', 2)[2].split("def _env")[0]
+    assert Path(msn.tcp_setup.__file__) == REPO / "scripts" / "dev" / "tcp_setup.py"
+
+
+def test_make_creates_namespace_on_a_database_of_its_own(msn, sysiris):
+    assert msn.make("IVG470SU1") is True
+    assert sysiris.namespaces == {"IVG470SU1": ("IVG470SU1", "IVG470SU1")}
+    assert sysiris.databases == {"IVG470SU1": "/usr/irissys/mgr/ivg470su1/"}
+    assert msn.make("IVG470SU1") is False
+
+
+def test_make_split(msn, sysiris):
+    assert msn.make("IVG470SP", split=True) is True
+    assert sysiris.namespaces == {"IVG470SP": ("IVG470SPD", "IVG470SPR")}
+    assert sysiris.resources == {"%DB_IVG470SPD", "%DB_IVG470SPR"}
+
+
+def test_drop_removes_what_make_made_and_its_tasks(msn, sysiris):
+    msn.make("IVG470SP", split=True)
+    sysiris.tasks["3"] = "IVG470SP"
+    assert msn.drop("IVG470SP") is True
+    assert sysiris.namespaces == {} and sysiris.databases == {} and sysiris.resources == set()
+    assert sysiris.tasks == {}
+    assert msn.drop("IVG470SP") is False
+
+
+def test_drop_leaves_a_mapped_database_it_did_not_make(msn, sysiris):
+    sysiris.namespaces["IVG470MAP"] = ("USER", "USER")
+    sysiris.databases["USER"] = "/usr/irissys/mgr/user/"
+    assert msn.drop("IVG470MAP") is True
+    assert sysiris.databases == {"USER": "/usr/irissys/mgr/user/"}
+
+
+def test_drop_refuses_before_connecting(msn, monkeypatch):
+    monkeypatch.setattr(msn.tcp_setup, "sys_native", lambda *a, **k: pytest.fail("connected"))
+    with pytest.raises(ValueError, match="refusing to drop"):
+        msn.drop("IVG460DOC")

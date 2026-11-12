@@ -163,7 +163,8 @@ def get_connection(container_name: str | None = None):
     except Exception as e:
         if "password" in str(e).lower() and "change" in str(e).lower():
             raise Exception(f"Failed to connect to IRIS: Password change required for {username}. "
-                          f"Run 'docker exec -it <container> iris session iris -U %SYS \"##class(Security.Users).UnExpirePassword(\\\"{username}\\\")\"'")
+                          "Clear it in the Management Portal (System Administration > Security > Users), or start the "
+                          "container with scripts/dev/no-expire-passwords.cpf as its ISC_CPF_MERGE_FILE.")
         raise Exception(f"Failed to connect to IRIS database at {host}:{port}: {e}")
 
 

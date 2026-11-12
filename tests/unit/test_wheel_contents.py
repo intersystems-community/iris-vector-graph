@@ -75,6 +75,14 @@ def test_an_installed_wheel_routes_pagerank_by_its_own_proof(wheel, tmp_path):
     assert (pagerank, wcc) == (2, None)
 
 
+def test_the_test_setup_helper_is_not_in_the_wheel(wheel):
+    """4.7.0: IVGDev.Setup (scripts/dev/objectscript, loaded into %SYS by scripts/dev/tcp_setup.py to make and drop
+    scratch namespaces over TCP) is test tooling only."""
+    with zipfile.ZipFile(wheel) as zf:
+        names = zf.namelist()
+    assert not [n for n in names if "IVGDev" in n or "tcp_setup" in n or "no-expire-passwords" in n], names
+
+
 def test_the_wheel_carries_the_classes(wheel_names):
     assert len([n for n in wheel_names if n.startswith("Graph/KG/") and n.endswith(".cls")]) > 50
 
