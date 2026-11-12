@@ -23,6 +23,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(REPO / "scripts" / "dev"))
+import tcp_setup  # noqa: E402  (scripts/dev/tcp_setup.py: ObjectScript over TCP, no `iris session`)
+
 OUT = Path.home() / ".cache" / "ivg-bench" / "nkg-swap"
 SOURCE = "ivg-iris-enterprise"
 
@@ -31,12 +34,22 @@ def sh(*args, **kw) -> str:
     return subprocess.run(args, check=True, capture_output=True, text=True, **kw).stdout
 
 
-def session(name: str, script: str, timeout: int = 3600) -> list[str]:
-    out = subprocess.run(
-        ["docker", "exec", "-i", name, "iris", "session", "IRIS", "-U", "USER"],
-        input=script + "\nHalt\n", capture_output=True, text=True, timeout=timeout,
-    ).stdout
-    return out.splitlines()
+def session(port: int, script: str, timeout: int = 3600) -> list[str]:
+    """Run ObjectScript lines in the lab container's USER over TCP on 127.0.0.1:`port` (not `iris session`, which
+    Cortex XDR kills); the lines they wrote."""
+    return tcp_setup.session(script, "USER", port=port, timeout=timeout).splitlines()
+
+
+def wait_ready(port: int, tries: int = 120) -> bool:
+    """True once the lab container answers ObjectScript over TCP; False after `tries` attempts 5 s apart."""
+    for _ in range(tries):
+        try:
+            if "READY" in tcp_setup.session(['Write "READY",!'], "USER", port=port, timeout=60):
+                return True
+        except Exception as exc:  # not up yet (the port refuses, or IRIS refuses the login): said, then retried
+            print(f"waiting for 127.0.0.1:{port}: {exc}", file=sys.stderr)
+        time.sleep(5)
+    return False
 
 
 def results(lines: list[str]) -> list[dict]:
@@ -58,13 +71,8 @@ def create(name: str, port: int) -> None:
        "-e", "ISC_CPF_MERGE_FILE=/home/irisowner/merge.cpf",
        "-v", f"{key}:/usr/irissys/mgr/iris.key:ro", "-v", f"{cpf}:/home/irisowner/merge.cpf:ro",
        "-v", f"{so}:/tmp/libarno_callout.so:ro", image)
-    for _ in range(120):
-        probe = subprocess.run(["docker", "exec", "-i", name, "iris", "session", "IRIS", "-U", "USER"],
-                               input='Write "READY",!\nHalt\n', capture_output=True, text=True, timeout=60)
-        if "READY" in probe.stdout:
-            return
-        time.sleep(5)
-    raise SystemExit(f"{name} did not become healthy")
+    if not wait_ready(port):
+        raise SystemExit(f"{name} did not become healthy")
 
 
 def deploy(name: str, port: int) -> None:
@@ -82,13 +90,13 @@ def deploy(name: str, port: int) -> None:
     sh("docker", "cp", f"{REPO}/iris_src/src/.", f"{name}:/tmp/nkgsrc/")
     sh("docker", "exec", name, "mkdir", "-p", "/tmp/nkgsrc/IVGLab")
     sh("docker", "cp", f"{HERE}/IVGLab/.", f"{name}:/tmp/nkgsrc/IVGLab/")
-    lines = session(name, 'Set tSC=$system.OBJ.LoadDir("/tmp/nkgsrc","ck-d",.err,1) Write "RESULT ",{"ok":($system.Status.IsOK(tSC))}.%ToJSON(),!')
+    lines = session(port, 'Set tSC=$system.OBJ.LoadDir("/tmp/nkgsrc","ck-d",.err,1) Write "RESULT ",{"ok":($system.Status.IsOK(tSC))}.%ToJSON(),!')
     print("deploy:", results(lines) or lines[-5:])
 
 
-def step(name: str, label: str, call: str, raw: list) -> dict:
+def step(port: int, label: str, call: str, raw: list) -> dict:
     load = load_avg()
-    lines = session(name, f'Write "RESULT ",{call},!')
+    lines = session(port, f'Write "RESULT ",{call},!')
     res = results(lines)
     if not res:
         print("\n".join(lines[-10:]))
@@ -120,18 +128,18 @@ def main() -> int:
             create(a.name, a.port)
             deploy(a.name, a.port)
         g = 'IVGLab.NkgScale'
-        step(a.name, "gen", f'{{"edges":(##class({g}).GenKG({a.nodes},{a.deg})),"warm":(##class(Graph.KG.Adj).WarmCache())}}.%ToJSON()', raw)
-        step(a.name, "initial_new", f'##class({g}).Run("new","n99999",0)', raw)
+        step(a.port, "gen", f'{{"edges":(##class({g}).GenKG({a.nodes},{a.deg})),"warm":(##class(Graph.KG.Adj).WarmCache())}}.%ToJSON()', raw)
+        step(a.port, "initial_new", f'##class({g}).Run("new","n99999",0)', raw)
         for pair in range(1, a.pairs + 1):
             order = ("old", "new") if pair % 2 else ("new", "old")
             for which in order:
-                step(a.name, f"p{pair}_{which}_quiet", f'##class({g}).Run("{which}","n99999",0)', raw)
-                step(a.name, f"p{pair}_{which}_reader", f'##class({g}).Run("{which}","n99999",1)', raw)
-            step(a.name, f"p{pair}_drift", f'{{"changes":(##class({g}).Drift({a.nodes},1))}}.%ToJSON()', raw)
-            step(a.name, f"p{pair}_new_after_drift_reader", f'##class({g}).Run("new","n99999",1)', raw)
-            step(a.name, f"p{pair}_new_unchanged_quiet", f'##class({g}).Run("new","n99999",0)', raw)
-            session(a.name, 'Do ##class(Graph.KG.GraphIndex).DropNKG()')
-            step(a.name, f"p{pair}_new_from_empty_quiet", f'##class({g}).Run("new","n99999",0)', raw)
+                step(a.port, f"p{pair}_{which}_quiet", f'##class({g}).Run("{which}","n99999",0)', raw)
+                step(a.port, f"p{pair}_{which}_reader", f'##class({g}).Run("{which}","n99999",1)', raw)
+            step(a.port, f"p{pair}_drift", f'{{"changes":(##class({g}).Drift({a.nodes},1))}}.%ToJSON()', raw)
+            step(a.port, f"p{pair}_new_after_drift_reader", f'##class({g}).Run("new","n99999",1)', raw)
+            step(a.port, f"p{pair}_new_unchanged_quiet", f'##class({g}).Run("new","n99999",0)', raw)
+            session(a.port, 'Do ##class(Graph.KG.GraphIndex).DropNKG()')
+            step(a.port, f"p{pair}_new_from_empty_quiet", f'##class({g}).Run("new","n99999",0)', raw)
             path.write_text(json.dumps(raw, indent=1))
     finally:
         path.write_text(json.dumps(raw, indent=1))

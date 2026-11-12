@@ -8,7 +8,7 @@ embedded Python operations like PageRank with 10-50x performance improvement.
 Usage:
     python scripts/deploy_objectscript.py [--host localhost] [--port 1972]
 
-For Docker deployments, this script copies files to the container and loads them.
+The classes are sent over TCP (--host/--port) and loaded with %SYSTEM.OBJ.LoadStream.
 
 Constitutional Principle I: IRIS-Native Development
 - Leverage IRIS embedded Python for performance
@@ -18,7 +18,6 @@ Constitutional Principle I: IRIS-Native Development
 import sys
 import os
 import argparse
-import subprocess
 import logging
 from pathlib import Path
 from typing import List, Optional
@@ -37,7 +36,6 @@ def parse_arguments():
     parser.add_argument('--namespace', default='USER', help='IRIS namespace (default: USER)')
     parser.add_argument('--username', default='_SYSTEM', help='IRIS username (default: _SYSTEM)')
     parser.add_argument('--password', default='SYS', help='IRIS password (default: SYS)')
-    parser.add_argument('--container', help='Docker container name (for container deployments)')
     parser.add_argument('--classes', nargs='+', help='Specific class files to deploy (default: all in iris/src/)')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be deployed without executing')
     parser.add_argument('--sql-only', action='store_true', help='Only deploy SQL functions, skip ObjectScript')
@@ -61,30 +59,20 @@ def find_objectscript_classes(classes: Optional[List[str]] = None) -> List[Path]
     return []
 
 
-def find_docker_container() -> Optional[str]:
-    """Find running IRIS Docker container"""
-    try:
-        result = subprocess.run(
-            ['docker', 'ps', '--format', '{{.Names}}'],
-            capture_output=True, text=True, check=True
-        )
-        containers = result.stdout.strip().split('\n')
+def connect_native(host: str, port: int, namespace: str, username: str, password: str):
+    """A Native API handle on host:port in `namespace` (the caller closes `handle.conn`)."""
+    import iris
 
-        # Look for IRIS containers
-        for container in containers:
-            if 'iris' in container.lower():
-                return container
-
-        return None
-    except Exception as e:
-        logger.debug(f"Docker not available: {e}")
-        return None
+    conn = iris.createConnection(hostname=host, port=port, namespace=namespace, username=username, password=password)
+    native = iris.createIRIS(conn)
+    native.conn = conn
+    return native
 
 
-def deploy_via_docker(container: str, class_files: List[Path], namespace: str, dry_run: bool = False) -> bool:
-    """Deploy ObjectScript classes via Docker exec"""
-    logger.info(f"Deploying via Docker container: {container}")
-
+def deploy_via_tcp(native, class_files: List[Path], dry_run: bool = False) -> bool:
+    """Load and compile each class file into `native`'s namespace over TCP: the source is written to a stream and
+    loaded with %SYSTEM.OBJ.LoadStream (no docker exec, no `iris session`, which Cortex XDR kills). True when every
+    file loaded."""
     success_count = 0
 
     for class_file in class_files:
@@ -96,49 +84,19 @@ def deploy_via_docker(container: str, class_files: List[Path], namespace: str, d
         logger.info(f"Deploying {class_name}...")
 
         if dry_run:
-            logger.info(f"  [DRY RUN] Would copy {class_file} to container and load")
+            logger.info(f"  [DRY RUN] Would load {class_file} over TCP")
             continue
 
-        try:
-            # Copy file to container
-            with open(class_file, 'r') as f:
-                class_content = f.read()
-
-            copy_cmd = f'cat > /tmp/{class_file.name}'
-            result = subprocess.run(
-                ['docker', 'exec', '-i', container, 'bash', '-c', copy_cmd],
-                input=class_content, text=True, capture_output=True
-            )
-
-            if result.returncode != 0:
-                logger.error(f"Failed to copy {class_file.name}: {result.stderr}")
-                continue
-
-            # Load class via iris session
-            load_cmd = f'printf "Do \\$system.OBJ.Load(\\"/tmp/{class_file.name}\\", \\"ck\\")\\nHalt\\n" | iris session iris -U {namespace}'
-            result = subprocess.run(
-                ['docker', 'exec', '-u', 'irisowner', container, 'bash', '-c', load_cmd],
-                capture_output=True, text=True
-            )
-
-            if 'Load finished successfully' in result.stdout:
-                logger.info(f"  ✅ {class_name} loaded successfully")
-                success_count += 1
-            elif 'error' in result.stdout.lower() or 'error' in result.stderr.lower():
-                logger.error(f"  ❌ {class_name} failed to load")
-                logger.debug(f"stdout: {result.stdout}")
-                logger.debug(f"stderr: {result.stderr}")
-            else:
-                # Check if it compiled
-                if 'Compiling class' in result.stdout:
-                    logger.info(f"  ✅ {class_name} compiled successfully")
-                    success_count += 1
-                else:
-                    logger.warning(f"  ⚠️  {class_name} - uncertain status")
-                    logger.debug(f"stdout: {result.stdout}")
-
-        except Exception as e:
-            logger.error(f"  ❌ Failed to deploy {class_name}: {e}")
+        stream = native.classMethodObject("%Stream.GlobalCharacter", "%New")
+        stream.invoke("Write", class_file.read_text())
+        stream.invoke("Rewind")
+        status = native.classMethodValue("%SYSTEM.OBJ", "LoadStream", stream, "ck")
+        if status == 1 or str(status) == "1":
+            logger.info(f"  ✅ {class_name} loaded successfully")
+            success_count += 1
+        else:
+            text = native.classMethodValue("%SYSTEM.Status", "GetErrorText", status)
+            logger.error(f"  ❌ {class_name} failed to load: {text}")
 
     return success_count == len(class_files)
 
@@ -269,20 +227,19 @@ def main():
         for f in class_files:
             logger.info(f"  - {f.name}")
 
-    # Determine deployment method
-    container = args.container or find_docker_container()
-
-    if container and class_files and not args.sql_only:
-        # Deploy via Docker
-        success = deploy_via_docker(container, class_files, args.namespace, args.dry_run)
+    if class_files and not args.sql_only:
+        # Load over TCP into --namespace on --host:--port
+        if args.dry_run:
+            success = deploy_via_tcp(None, class_files, dry_run=True)
+        else:
+            native = connect_native(args.host, args.port, args.namespace, args.username, args.password)
+            try:
+                success = deploy_via_tcp(native, class_files)
+            finally:
+                native.conn.close()
         if not success and not args.dry_run:
             logger.error("ObjectScript deployment failed")
             sys.exit(1)
-    elif class_files and not args.sql_only:
-        logger.warning("No Docker container found - ObjectScript classes must be loaded manually")
-        logger.info("Manual loading command:")
-        for f in class_files:
-            logger.info(f'  IRIS> Do $system.OBJ.Load("{f}", "ck")')
 
     # Deploy SQL functions
     if not args.dry_run or args.sql_only:

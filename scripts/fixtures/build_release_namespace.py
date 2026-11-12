@@ -34,6 +34,9 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "scripts" / "dev"))
+import tcp_setup  # noqa: E402  (scripts/dev/tcp_setup.py: ObjectScript over TCP, no `iris session`)
+
 RELEASES = Path.home() / ".cache" / "ivg-bench" / "releases"
 PORT = int(os.environ.get("IVG_PORT", "31972"))
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
@@ -290,11 +293,9 @@ def _stage_release_src(src: Path, tag: str) -> str:
 def _load_from_container(src: Path, ns: str, tag: str) -> None:
     """Copy a release's classes into the container and LoadDir them: what 3.2.0's own deploy expected done."""
     stage = _stage_release_src(src, tag)
-    script = f'set sc=$system.OBJ.LoadDir("{stage}","ck-d",,1) write "LOADED ",$system.Status.IsOK(sc),!\nhalt\n'
-    out = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", ns],
-        input=script, capture_output=True, text=True, timeout=900, check=True,
-    ).stdout
+    # over TCP (scripts/dev/tcp_setup.py), not `iris session`, which Cortex XDR kills
+    lines = [f'set sc=$system.OBJ.LoadDir("{stage}","ck-d",,1) write "LOADED ",$system.Status.IsOK(sc),!']
+    out = tcp_setup.session(lines, ns, port=PORT, timeout=900, check=True)
     print(f"LoadDir {tag}: {out.strip().splitlines()[-2:] if out.strip() else out}", file=sys.stderr)
 
 

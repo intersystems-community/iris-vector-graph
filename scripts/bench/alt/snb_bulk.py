@@ -33,6 +33,9 @@ try:
 except ImportError:  # run as a script from another tree
     import snb_model as model
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "dev"))
+import tcp_setup  # noqa: E402  (scripts/dev/tcp_setup.py: ObjectScript over TCP, no `iris session`)
+
 SEP = "\x1f"  # unit separator: the data holds tabs (SF1 post text), never this
 FILES = ("nodes.tsv", "labels.tsv", "props.tsv", "edges.tsv")
 IFIND_INDEX = "idx_props_val_ifind"  # SQL name; the class index is IFIND_CLASS_INDEX
@@ -399,21 +402,22 @@ def _say(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
 
 
+#: How long one run of lines may take: an SF10 load or index build runs for hours.
+RUN_TIMEOUT = 48 * 3600
+PORT = 31972
+
+
 def run_session(ns, script, label):
-    """Run ObjectScript in ``ns`` through `iris session`, echoing progress lines; returns all output lines."""
+    """Run ObjectScript in ``ns`` over TCP (scripts/dev/tcp_setup.py, not `iris session`, which Cortex XDR kills), then
+    echo its progress lines; returns all output lines, with an ``ERROR line <n>: <error>`` line for each line that
+    raised. The progress lines come when the run ends, not as they are written."""
     _check_ns(ns)
-    p = subprocess.Popen(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", ns],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-    )
-    p.stdin.write(script)
-    p.stdin.close()
-    lines = []
-    for ln in p.stdout:
-        lines.append(ln.rstrip("\n"))
+    result = tcp_setup.run(script, ns, timeout=RUN_TIMEOUT, port=PORT)
+    lines = result.output.splitlines()
+    lines += [f"ERROR line {n}: {error}" for n, error in result.failures]
+    for ln in lines:
         if ln.startswith(("PROGRESS", "RESULT", "ERROR", "WARN")):
             _say(f"[{label}] {ln.rstrip()}")
-    p.wait()
     return lines
 
 

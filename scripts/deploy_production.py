@@ -7,73 +7,41 @@ Configurable via CLI arguments or environment variables.
 
 import argparse
 import os
-import subprocess
 import sys
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def run_command(cmd, input_text=None, check=True):
-    """Execute a system command and return the result."""
+def _connect(host, port, namespace, user, password):
+    import iris
+
+    return iris.connect(hostname=host, port=port, namespace=namespace, username=user, password=password)
+
+
+def _deploy_packaged_classes(conn):
+    from iris_vector_graph._engine.class_deploy import deploy_packaged_classes
+
+    return deploy_packaged_classes(conn)
+
+
+def deploy_classes(host, port, namespace, user, password):
+    """Load and compile IVG's ObjectScript classes (iris_src/src) into `namespace` over TCP, as the engine's own
+    deploy does: no docker exec and no `iris session`, which Cortex XDR kills. Raises on a class that failed."""
+    logger.info(f"Deploying ObjectScript classes over TCP to {host}:{port} ({namespace})")
+    conn = _connect(host, port, namespace, user, password)
     try:
-        result = subprocess.run(
-            cmd, 
-            input=input_text, 
-            capture_output=True, 
-            text=True, 
-            errors='replace',
-            check=check
-        )
-        return result
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Command failed: {' '.join(e.cmd)}")
-        if e.stdout:
-            logger.error(f"Stdout: {e.stdout}")
-        if e.stderr:
-            logger.error(f"Stderr: {e.stderr}")
-        raise
+        result = _deploy_packaged_classes(conn)
+    finally:
+        conn.close()
+    errors = list(result.errors) if result is not None else []
+    if errors:
+        raise RuntimeError(f"ObjectScript class deploy failed: {errors}")
+    logger.info("ObjectScript classes deployed.")
 
-def deploy_via_docker(container_name, schema, namespace):
-    """Deploy using docker exec and file copying (recommended for IRIS)."""
-    logger.info(f"Deploying to Docker container: {container_name}")
-    
-    status = run_command(['docker', 'inspect', '-f', '{{.State.Running}}', container_name], check=False)
-    if status.returncode != 0 or 'true' not in status.stdout.lower():
-        logger.error(f"Container '{container_name}' is not running or does not exist.")
-        sys.exit(1)
-
-    run_command(['docker', 'exec', container_name, 'mkdir', '-p', '/tmp/src'])
-    
-    logger.info("Copying source and SQL files to container...")
-    run_command(['docker', 'cp', 'iris_src/src/.', f"{container_name}:/tmp/src/"])
-    run_command(['docker', 'cp', 'sql/schema.sql', f"{container_name}:/tmp/schema.sql"])
-    run_command(['docker', 'cp', 'sql/operators_fixed.sql', f"{container_name}:/tmp/operators_fixed.sql"])
-    run_command(['docker', 'cp', 'scripts/setup_security.sql', f"{container_name}:/tmp/setup_security.sql"])
-    
-    setup_script = f"""iris session iris -U {namespace} <<EOF
-sql
-SET SCHEMA {schema};
-\\i /tmp/schema.sql
-\\i /tmp/operators_fixed.sql
-\\i /tmp/setup_security.sql
-SELECT count(*) as table_count FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{schema}';
-q
--- Load IRIS ObjectScript classes
-Do \\$system.OBJ.LoadDir("/tmp/src", "ck", .errors, 1)
-H
-EOF
-"""
-    logger.info("Executing deployment script inside IRIS session...")
-    result = run_command(['docker', 'exec', '-i', container_name, 'bash'], input_text=setup_script)
-    
-    if result.stdout:
-        logger.info(f"Deployment Output:\n{result.stdout}")
-    
-    logger.info("Docker deployment completed successfully.")
 
 def deploy_via_sql(host, port, namespace, user, password, schema):
-    """Deploy using direct SQL connection (limited - cannot load ObjectScript)."""
+    """Run the SQL files over a direct SQL connection (the ObjectScript classes are deploy_classes')."""
     try:
         import iris
     except ImportError:
@@ -111,17 +79,16 @@ def deploy_via_sql(host, port, namespace, user, password, schema):
         cursor.close()
         conn.close()
         
-        logger.warning("SQL deployment completed (PARTIAL: ObjectScript classes were NOT deployed).")
+        logger.info("SQL files applied.")
     except Exception as e:
         logger.error(f"SQL deployment failed: {e}")
         raise
 
 def main():
     parser = argparse.ArgumentParser(description="Production Deployment for IRIS Vector Graph")
-    parser.add_argument("--mode", choices=['docker', 'sql'], default='docker', 
-                        help="Deployment mode (docker recommended for full deployment)")
-    parser.add_argument("--container", default=os.getenv("IRIS_CONTAINER", "iris-vector-graph"), 
-                        help="Docker container name (docker mode only)")
+    parser.add_argument("--mode", choices=['full', 'docker', 'sql'], default='full',
+                        help="full: the SQL files, then the ObjectScript classes, both over TCP (docker: the same, the "
+                             "name it had when it ran docker exec); sql: the SQL files only")
     parser.add_argument("--host", default=os.getenv("IRIS_HOST", "localhost"), help="IRIS host")
     parser.add_argument("--port", type=int, default=int(os.getenv("IRIS_PORT", "1972")), help="IRIS port")
     parser.add_argument("--namespace", default=os.getenv("IRIS_NAMESPACE", "USER"), help="IRIS namespace")
@@ -132,10 +99,11 @@ def main():
     args = parser.parse_args()
     
     try:
-        if args.mode == 'docker':
-            deploy_via_docker(args.container, args.schema, args.namespace)
+        deploy_via_sql(args.host, args.port, args.namespace, args.user, args.password, args.schema)
+        if args.mode in ('full', 'docker'):
+            deploy_classes(args.host, args.port, args.namespace, args.user, args.password)
         else:
-            deploy_via_sql(args.host, args.port, args.namespace, args.user, args.password, args.schema)
+            logger.warning("SQL deployment completed (PARTIAL: ObjectScript classes were NOT deployed).")
     except Exception as e:
         logger.error(f"Deployment failed: {e}")
         sys.exit(1)

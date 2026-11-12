@@ -37,6 +37,9 @@ if __package__ in (None, ""):  # run as a script
 
 from scripts.bench.alt import sides as sd  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "dev"))
+import tcp_setup  # noqa: E402  (scripts/dev/tcp_setup.py: ObjectScript over TCP, no `iris session`)
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MAIN_CHECKOUT = Path("/Users/tdyar/ws/iris-vector-graph")
 MAIN_DATA = MAIN_CHECKOUT / "data"
@@ -144,48 +147,19 @@ def imported_package_path(tree, python=None):
 # --------------------------------------------------------------------------- container
 
 
-def namespace_script(ns):
-    """ObjectScript (run in %SYS) that creates namespace ``ns`` with its own database; idempotent, never deletes."""
-    sd.check_namespace(ns)
-    low = ns.lower()
-    return f"""Set ns="{ns}", dir="/usr/irissys/mgr/{low}/"
-If ##class(Config.Namespaces).Exists(ns) {{ Write "RESULT namespace {ns} exists",! Halt }}
-If '##class(%File).DirectoryExists(dir) {{ Set ok=##class(%File).CreateDirectoryChain(dir) }}
-If '##class(%File).Exists(dir_"IRIS.DAT") {{
-  Set sc=##class(SYS.Database).CreateDatabase(dir)
-  If $System.Status.IsError(sc) {{ Write "RESULT ERROR createdb ",$System.Status.GetErrorText(sc),! Halt }}
-}}
-If '##class(Config.Databases).Exists(ns) {{
-  Set pdb("Directory")=dir
-  Set sc=##class(Config.Databases).Create(ns,.pdb)
-  If $System.Status.IsError(sc) {{ Write "RESULT ERROR config.databases ",$System.Status.GetErrorText(sc),! Halt }}
-}}
-Set pns("Globals")=ns, pns("Routines")=ns
-Set sc=##class(Config.Namespaces).Create(ns,.pns)
-If $System.Status.IsError(sc) {{ Write "RESULT ERROR config.namespaces ",$System.Status.GetErrorText(sc),! Halt }}
-Write "RESULT namespace {ns} created",!
-Halt
-"""
-
-
 def session(ns, script, container=sd.CONTAINER, timeout=1800):
-    """Run ObjectScript in ``ns`` via ``iris session``; returns stdout."""
-    p = subprocess.run(
-        ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", ns],
-        input=script,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    return p.stdout + p.stderr
+    """Run ObjectScript lines in ``ns`` over TCP on 127.0.0.1:``sd.PORT`` (scripts/dev/tcp_setup.py, not ``iris
+    session``, which Cortex XDR kills); returns what they wrote. ``container`` is kept for callers; the port names it."""
+    return tcp_setup.session(script, ns, port=sd.PORT, timeout=timeout)
 
 
 def create_namespace(ns):
-    out = session("%SYS", namespace_script(ns))
-    res = [ln for ln in out.splitlines() if ln.startswith("RESULT")]
-    if not res or "ERROR" in res[-1]:
-        raise RuntimeError(f"namespace {ns}: {out[-600:]}")
-    return res[-1]
+    """Create namespace ``ns`` with its own database (/usr/irissys/mgr/<ns>/), over TCP in %SYS; idempotent, never
+    deletes (tcp_setup.make_namespace leaves an existing namespace as it is)."""
+    sd.check_namespace(ns)
+    with tcp_setup.sys_native(sd.PORT) as native:
+        made = tcp_setup.make_namespace(native, ns)
+    return f"RESULT namespace {ns} {'created' if made else 'exists'}"
 
 
 def _side_python(side, code, extra_env=None):

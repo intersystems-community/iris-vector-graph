@@ -1,4 +1,5 @@
-"""Side trees, namespace guard and namespace script of scripts/bench/alt/setup_sides.py (spec 250).
+"""Side trees and namespace guard of scripts/bench/alt/setup_sides.py (spec 250); its namespace creation over TCP
+is tests/unit/test_470_scripts_tcp_run.py's.
 
 The tree export uses real `git archive` on this repository (commit 6f17be0f is the baseline);
 nothing here touches IRIS.
@@ -48,22 +49,6 @@ def test_namespace_guard_refuses_foreign_namespaces(ns):
 @pytest.mark.parametrize("ns", ["IVGBENCHA", "IVGBENCHB", "IVGBENCHSMOKE"])
 def test_namespace_guard_allows_ours(ns):
     assert sides.check_namespace(ns) == ns
-
-
-def test_namespace_script_creates_database_and_never_deletes():
-    text = ss.namespace_script("IVGBENCHA")
-    assert "Config.Namespaces" in text and "Config.Databases" in text
-    assert "/usr/irissys/mgr/ivgbencha/" in text
-    low = text.lower()
-    for forbidden in ("delete", "kill", "remove", "dismount", "rmdir"):
-        assert forbidden not in low
-    # Idempotent: an existing namespace is left alone.
-    assert "Exists" in text
-
-
-def test_namespace_script_refuses_foreign_namespace():
-    with pytest.raises(ValueError):
-        ss.namespace_script("USER")
 
 
 @needs_baseline
