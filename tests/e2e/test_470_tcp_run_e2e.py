@@ -4,7 +4,8 @@ Cortex XDR kills a process that pipes ObjectScript into `iris session`, so the t
 ns460alt.session, the doc harness and about 30 files; tests/unit/test_no_iris_session_pipes.py lists them) move to
 this runner, which goes over TCP and the Native API. What those callers relied on, each pinned here against the known
 answer written by hand:
-- output in order, across lines, with `!` and blocks;
+- output in order, across lines, with `!` and blocks, and a line that leaves the cursor mid-line ending on a new line
+  (the terminal's next prompt started one, and the docs' stated answers show it);
 - a line that errors writes the error where it happened, as the terminal did (`<UNDEFINED> *x`), the next line still
   runs, and the failure is reported with its line number (and raised with check=True);
 - Halt in a line ends the run there; a final `halt`, as every terminal script ends, is just the end of the lines;
@@ -43,8 +44,14 @@ def native():
 def test_output_comes_back_in_order(native):
     r = tcp_setup.run(['write "a",!', 'write "b"', 'write "c",!', "for i=1:1:3 { write i }", 'write !,"d",!'], NS,
                       native=native)
-    assert r.output == "a\nbc\n123\nd\n"
+    # a line that leaves the cursor mid-line ends on a new line, as the terminal's next prompt started one
+    assert r.output == "a\nb\nc\n123\n\nd\n"
     assert (r.state, r.failures) == ("ended", [])
+
+
+def test_lines_without_a_newline_read_as_the_terminal_showed_them(native):
+    """README's `write $data(...)` pair: the terminal showed 1 and 0 on two lines (the docs' stated answer)."""
+    assert tcp_setup.run(["write 1", "write 0"], NS, native=native).output == "1\n0\n"
 
 
 def test_a_failing_line_writes_its_error_and_the_next_line_runs(native):
@@ -118,7 +125,7 @@ def test_a_run_past_its_timeout_is_ended(native):
 def test_sys_needs_allow_sys(native):
     with pytest.raises(ValueError, match="allow_sys"):
         tcp_setup.run(["write 1"], "%SYS", native=native)
-    assert tcp_setup.run(["write $namespace"], "%SYS", native=native, allow_sys=True).output == "%SYS"
+    assert tcp_setup.run(["write $namespace"], "%SYS", native=native, allow_sys=True).output == "%SYS\n"
 
 
 def test_session_is_the_text_and_nothing_ran_iris_session(native):

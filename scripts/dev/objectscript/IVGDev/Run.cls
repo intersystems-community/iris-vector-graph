@@ -82,6 +82,8 @@ ClassMethod Child(pId As %String)
         }
         // a line may Use another device; what it writes after that line is still this run's output
         Use tFile
+        // the terminal's next prompt started on a new line: `write 1` then `write 0` printed "1", "0" on two lines
+        Write:$X>0 !
     }
     Close tFile
     Set ^IRIS.TempIVGRun(pId, "end") = 1
