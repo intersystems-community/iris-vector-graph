@@ -178,26 +178,26 @@ class _HeldGraphLock:
     to ObjectScript's Lock command)."""
 
     def __init__(self, graph, seconds=14):
-        import os
-        import subprocess
+        import threading
         import time
 
-        container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
-        self.proc = subprocess.Popen(
-            ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", NAMESPACE],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
-        )
-        self.proc.stdin.write(f'lock +^IVG.FHIRGraph("{graph}")\nhang {seconds}\nhalt\n')
-        self.proc.stdin.flush()
+        from tests.helpers.iris_lines import run
+
+        # an ObjectScript process of its own, started over TCP (tests/helpers/iris_lines.py; 4.7.0: no
+        # `iris session`), in a thread so the test goes on while it holds the lock
+        self.thread = threading.Thread(
+            target=run, args=([f'lock +^IVG.FHIRGraph("{graph}")', f"hang {seconds}"], NAMESPACE),
+            kwargs={"timeout": seconds + 60}, daemon=True)
+        self.thread.start()
         self.until = time.time() + seconds
         time.sleep(4)
 
     def release(self):
         import time
 
-        self.proc.terminate()
-        self.proc.wait(timeout=30)
-        time.sleep(max(0.0, self.until - time.time()) + 1)
+        # the process ends when its hang does, and the lock with it
+        self.thread.join(timeout=max(0.0, self.until - time.time()) + 60)
+        time.sleep(1)
 
 
 def test_rebuild_sync_and_reinterpret_answer_busy_while_another_process_holds_the_graph(fhir_conn, loaded):
@@ -222,15 +222,11 @@ def test_rebuild_sync_and_reinterpret_answer_busy_while_another_process_holds_th
 
 
 def _ivgfhir_session(*statements):
-    import os
-    import subprocess
+    from tests.helpers.iris_lines import session
 
-    container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
-    script = 'write "<<"_"OUT",!\n' + "\n".join(statements) + '\nwrite !,"OUT"_">>",!\nhalt\n'
-    out = subprocess.run(
-        ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", NAMESPACE],
-        input=script, capture_output=True, text=True, timeout=180,
-    ).stdout
+    # over TCP (tests/helpers/iris_lines.py; 4.7.0: no `iris session`)
+    script = ['write "<<"_"OUT",!', *statements, 'write !,"OUT"_">>",!']
+    out = session(script, NAMESPACE, timeout=180)
     body = out.split("<<OUT", 1)[1].split("OUT>>", 1)[0]
     return "\n".join(line for line in body.splitlines() if line.strip() and not line.startswith(NAMESPACE)).strip()
 

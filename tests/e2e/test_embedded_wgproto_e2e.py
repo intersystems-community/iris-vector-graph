@@ -54,18 +54,36 @@ def _docker_irispython(container: str, code: str, timeout: int = 30) -> str:
     return result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace")
 
 
+#: The SuperServer port of ENTERPRISE_CONTAINER: the ObjectScript below goes over TCP (4.7.0: no `irissession`).
+ENTERPRISE_PORT = int(os.environ.get("IVG_ENTERPRISE_PORT") or os.environ.get("IVG_PORT") or "31972")
+
+
 def _docker_objectscript(container: str, *statements: str, timeout: int = 30) -> str:
-    script_lines = "\n".join(statements) + "\nHalt\n"
-    shell = textwrap.dedent(f"""
-        /usr/irissys/bin/irissession IRIS -U USER << 'OSEOF'
-        {script_lines}
-        OSEOF
-    """).strip()
-    result = subprocess.run(
-        ["docker", "exec", container, "bash", "-c", shell],
-        capture_output=True, timeout=timeout
-    )
-    return result.stdout.decode(errors="replace") + result.stderr.decode(errors="replace")
+    """What `statements` write in USER, run as `irissession` with them on its input ran them, over TCP on
+    ENTERPRISE_PORT (tests/helpers/iris_lines.py; 4.7.0: Cortex XDR kills a piped `irissession`). `container` is
+    the one ENTERPRISE_PORT belongs to."""
+    from tests.helpers.iris_lines import session
+
+    return session(list(statements), "USER", timeout=timeout, port=ENTERPRISE_PORT)
+
+
+def _load_class(cls_src: str) -> str:
+    """Load and compile `cls_src` into USER over the Native API ("cuk"); the text $SYSTEM.OBJ.Load's caller read:
+    "Load finished successfully." or the error. Replaces writing the file into the container with a here-document."""
+    import iris
+
+    conn = iris.createConnection("127.0.0.1", ENTERPRISE_PORT, "USER", "_SYSTEM", "SYS")
+    try:
+        native = iris.createIRIS(conn)
+        stream = native.classMethodObject("%Stream.GlobalCharacter", "%New")
+        stream.invoke("Write", cls_src)
+        stream.invoke("Rewind")
+        status = native.classMethodValue("%SYSTEM.OBJ", "LoadStream", stream, "cuk")
+        if status == 1 or str(status) == "1":
+            return "Load finished successfully."
+        return "ERROR " + str(native.classMethodValue("%SYSTEM.Status", "GetErrorText", status))
+    finally:
+        conn.close()
 
 
 def _compile_and_run_py_method(container: str, method_body: str,
@@ -80,17 +98,7 @@ def _compile_and_run_py_method(container: str, method_body: str,
         }}
         }}
     """).strip()
-    tmp = f"/tmp/{cls}.cls"
-    subprocess.run(
-        ["docker", "exec", container, "bash", "-c",
-         f"cat > {tmp} << 'CLSEOF'\n{cls_src}\nCLSEOF"],
-        capture_output=True, timeout=15
-    )
-    compile_out = _docker_objectscript(
-        container,
-        f'Do ##class(%SYSTEM.OBJ).Load("{tmp}", "cuk")',
-        timeout=30
-    )
+    compile_out = _load_class(cls_src)
     if "ERROR" in compile_out and "successfully" not in compile_out.lower():
         return f"COMPILE_ERROR: {compile_out}"
     run_out = _docker_objectscript(

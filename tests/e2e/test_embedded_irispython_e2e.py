@@ -37,7 +37,11 @@ def _docker(*args, input=None, timeout=900, user=None):
 
 
 def _session(namespace, script):
-    return _docker("exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", namespace, input=script, timeout=300).stdout
+    """What `script` writes in `namespace`, over TCP (tests/helpers/iris_lines.py; 4.7.0: no `iris session`). Both
+    callers make or delete the IVGEMB* namespace and its database, in %SYS."""
+    from tests.helpers.iris_lines import session
+
+    return session(script, namespace, allow_sys=namespace == "%SYS", timeout=300)
 
 
 @pytest.fixture(scope="module")
