@@ -79,3 +79,9 @@ Found during 4.7.0 and not in its cut (the list is frozen).
   `create_node` and the bulk writers do since 4.7.0. Found by the integration gate's audit (f2c6c2a6).
 - **`RETURN r.p` of a relationship number past 64-bit integers reads an int** (4.6.5 and 4.7.0): `SET r.p = 1e20`
   returns 100000000000000000000 where UNWIND and `collect` read the float 1e+20 (d4ac7523).
+- **A map's boolean in `CASE WHEN` reads as false** (4.6.5 and 4.7.0; silent wrong answer): `CASE WHEN input.fixed`
+  over `UNWIND [{fixed: true, ...}] AS input` translates to `JSON_VALUE(..) = 'true'`, and `Graph_KG.JSON_VALUE` answers
+  `'1'` for a JSON true, so the branch never runs (docs/KNOWN_ISSUES.md; strict xfail in
+  tests/e2e/test_470_tck_unwind_shapes_e2e.py). The TCK's quantifier invariants compare the wrong value with itself.
+- **A subscript of a collected boolean expression answers 1 / 0** (4.7.0, as 4.6.5): `collect(a OR b)[0]` and
+  `head(...)` answer `0` for false; the list itself answers booleans (e521a35a, docs/KNOWN_ISSUES.md).
