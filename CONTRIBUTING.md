@@ -92,18 +92,27 @@ The FHIR E2E files (`test_231_fhir_*`, `test_232_fhir_*`, `test_233_*`, most of 
 `test_bio_demo_e2e.py`, `test_demo_browser_e2e.py`, `test_fhirgraph_*` and `test_411_rebuild_deleted_history_e2e.py`)
 run in the namespace `IVGFHIR`, against a FHIR R4 endpoint at `/csp/healthshare/ivgfhir/fhir/r4`. A container made by
 `scripts/enterprise-container.sh up` has neither, and those files skip with a reason that names this section. No
-script makes them. To make a container FHIR-capable, run this once (it needs the `irishealth` image: IRIS Community has
-no FHIR server):
+script makes them. To make a container FHIR-capable, run this once from the repository root (it needs the `irishealth`
+image: IRIS Community has no FHIR server). It runs the installer lines over TCP on `IVG_PORT` with
+`scripts/dev/tcp_setup.py`, in one fresh IRIS process that starts in HSLIB; it does not pipe them into `iris session`,
+which endpoint security on managed machines ends as malware:
 
 ```bash
-docker exec -i ivg-iris-enterprise iris session IRIS -U HSLIB <<'EOF'
-Set tSC=##class(HS.Util.Installer.Foundation).Install("IVGFHIR") Write "foundation ",$System.Status.IsOK(tSC),!
-ZNspace "IVGFHIR"
-Do ##class(HS.FHIRServer.Installer).InstallNamespace()
-Do ##class(HS.FHIRServer.Installer).InstallInstance("/csp/healthshare/ivgfhir/fhir/r4","HS.FHIRServer.Storage.JsonAdvSQL.InteractionsStrategy","hl7.fhir.r4.core@4.0.1")
-Halt
+IVG_PORT=31972 python - <<'EOF'
+import sys
+sys.path.insert(0, "scripts/dev")
+from tcp_setup import run
+print(run([
+    'Set tSC=##class(HS.Util.Installer.Foundation).Install("IVGFHIR") Write "foundation ",$System.Status.IsOK(tSC),!',
+    'ZNspace "IVGFHIR"',
+    'Do ##class(HS.FHIRServer.Installer).InstallNamespace()',
+    'Do ##class(HS.FHIRServer.Installer).InstallInstance("/csp/healthshare/ivgfhir/fhir/r4",'
+    '"HS.FHIRServer.Storage.JsonAdvSQL.InteractionsStrategy","hl7.fhir.r4.core@4.0.1")',
+], "HSLIB", timeout=1800, check=True).output)
 EOF
 ```
+
+It prints `foundation 1`, and raises naming any line that failed.
 
 Use a container name other than `ivg-iris-enterprise` for a second container. The namespace must be new: its first
 FHIR endpoint gets the repository package `X0001`, and the fixtures name it (graph `fhir:IVGFHIR:X0001`, table
