@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers.fake_setup_iris import FakeIRIS, class_methods
+from tests.helpers.fake_setup_iris import RUN_CLASS, FakeIRIS, class_methods
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "dev" / "tcp_setup.py"
@@ -29,6 +29,7 @@ CLASS = REPO / "scripts" / "dev" / "objectscript" / "IVGDev" / "Setup.cls"
 def ts():
     spec = importlib.util.spec_from_file_location("tcp_setup_470", SCRIPT)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclasses look their module up there
     spec.loader.exec_module(module)
     return module
 
@@ -49,10 +50,21 @@ def test_every_method_the_module_calls_is_in_the_class(ts):
     assert called <= set(class_methods()), called - set(class_methods())
 
 
-def test_the_class_lives_outside_the_shipped_sources(ts):
+def test_the_classes_live_outside_the_shipped_sources(ts):
     assert ts.HELPER_SOURCE == CLASS
-    assert "iris_src" not in CLASS.parts
-    assert re.search(r"^Class IVGDev\.Setup\b", CLASS.read_text(), re.M)
+    assert ts.HELPER_SOURCES == (RUN_CLASS, CLASS)
+    for path, name in ((CLASS, "IVGDev.Setup"), (RUN_CLASS, "IVGDev.Run")):
+        assert "iris_src" not in path.parts
+        assert re.search(rf"^Class {re.escape(name)}\b", path.read_text(), re.M)
+
+
+def test_the_hash_covers_both_classes(ts, monkeypatch, tmp_path):
+    """A change to IVGDev.Run alone reloads the helpers too."""
+    before = ts.source_hash()
+    changed = tmp_path / "Run.cls"
+    changed.write_text(RUN_CLASS.read_text() + "\n")
+    monkeypatch.setattr(ts, "HELPER_SOURCES", (changed, CLASS))
+    assert ts.source_hash() != before
 
 
 def test_the_class_refuses_to_delete_a_name_not_starting_ivg():
@@ -66,7 +78,8 @@ def test_the_helper_loads_when_absent(ts):
     native = FakeIRIS(loaded_hash=None)
     assert ts.ensure_helper(native) is True
     assert native.loaded_hash == ts.source_hash()
-    assert native.loads == ["ck-d"]
+    # IVGDev.Run first: IVGDev.Setup carries the hash, so a failed Run load leaves the hash stale and is retried
+    assert native.loads == [("IVGDev.Run", "ck-d"), ("IVGDev.Setup", "ck-d")]
     assert native.locks == [("lock", "^IVGDev.Setup"), ("unlock", "^IVGDev.Setup")]
 
 

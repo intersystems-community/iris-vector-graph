@@ -112,6 +112,7 @@ def test_a_graph_kg_kind_is_made_and_a_name_kind_is_left_to_its_file():
 @pytest.mark.parametrize("name, group", [
     ("test_470_node_load_new_namespace_e2e.py", "load470"),
     ("test_470_setup_compiles_every_class_e2e.py", "setup470"),
+    ("test_470_tcp_run_e2e.py", "tcprun"),
 ])
 def test_the_470_new_namespace_files_get_an_empty_one(name, group):
     """4.7.0 rows 2 and 5 time or inspect the first setup of a namespace, so the gate makes theirs and installs

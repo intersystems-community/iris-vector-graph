@@ -7,13 +7,16 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-CLASS = Path(__file__).resolve().parents[2] / "scripts" / "dev" / "objectscript" / "IVGDev" / "Setup.cls"
+CLASS_DIR = Path(__file__).resolve().parents[2] / "scripts" / "dev" / "objectscript" / "IVGDev"
+CLASS = CLASS_DIR / "Setup.cls"
+RUN_CLASS = CLASS_DIR / "Run.cls"
 
 
-def class_methods() -> dict:
-    """{method name: number of formal arguments} of IVGDev.Setup's class methods, read from the source."""
+def class_methods(path: Path = CLASS) -> dict:
+    """{method name: number of formal arguments} of a helper class's class methods, read from the source
+    (IVGDev.Setup by default)."""
     found = {}
-    for name, args in re.findall(r"^ClassMethod (\w+)\(([^)]*)\)", CLASS.read_text(), re.M):
+    for name, args in re.findall(r"^ClassMethod (\w+)\(([^)]*)\)", path.read_text(), re.M):
         found[name] = len([a for a in args.split(",") if a.strip()])
     return found
 
@@ -59,9 +62,10 @@ class FakeIRIS:
     def classMethodValue(self, cls, method, *args):
         if cls == "%SYSTEM.OBJ" and method == "LoadStream":
             stream, flags = args
-            self.loads.append(flags)
+            self.loads.append((re.search(r"^Class ([\w.]+)", stream.text, re.M).group(1), flags))
             m = re.search(r'Parameter SOURCEHASH = "(\w*)";', stream.text)
-            self.loaded_hash = m.group(1)
+            if m:
+                self.loaded_hash = m.group(1)
             return 1
         if cls == "%SYSTEM.Status":
             return "error text"

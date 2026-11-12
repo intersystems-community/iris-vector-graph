@@ -159,6 +159,9 @@ GROUPS: Dict[str, Group] = {
     # with nothing installed yet.
     "load470": Group("IVG_LOAD_NS", "470LD", "empty"),
     "setup470": Group("IVG_SETUP_NS", "470SU", "empty"),
+    # 4.7.0: test_470_tcp_run_e2e pins what scripts/dev/tcp_setup.run (the TCP stand-in for `iris session`) does with
+    # lines in a namespace; it writes only process-private and IRISTEMP data, so nothing needs installing.
+    "tcprun": Group("IVG_TCPRUN_NS", "470TR", "empty"),
 }
 #: Namespace variables an E2E module cannot be given per run, and why (tests/unit/test_460_gate_namespace_vars.py).
 SESSION_NAMESPACES: Dict[str, str] = {

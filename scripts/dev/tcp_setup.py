@@ -25,11 +25,17 @@ import hashlib
 import os
 import re
 import sys
+import time
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, Optional
+from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple, Union
 
 HELPER = "IVGDev.Setup"
+RUNNER = "IVGDev.Run"
 HELPER_SOURCE = Path(__file__).resolve().parent / "objectscript" / "IVGDev" / "Setup.cls"
+#: Loaded in this order: Setup last, as it carries the hash of both, so a Run that fails to load is loaded again.
+HELPER_SOURCES = (HELPER_SOURCE.with_name("Run.cls"), HELPER_SOURCE)
 HOST = "127.0.0.1"
 #: How long to wait for another process loading the helper.
 LOCK_TIMEOUT = 120
@@ -42,7 +48,11 @@ def mgr_directory(db: str) -> str:
 
 
 def source_hash() -> str:
-    return hashlib.sha256(HELPER_SOURCE.read_bytes()).hexdigest()[:24]
+    """The hash of both helper sources: a change to either reloads them."""
+    digest = hashlib.sha256()
+    for path in HELPER_SOURCES:
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:24]
 
 
 def helper_source() -> str:
@@ -63,21 +73,23 @@ def _loaded_hash(native) -> Optional[str]:
 
 
 def ensure_helper(native) -> bool:
-    """Load and compile IVGDev.Setup into `native`'s namespace (%SYS) unless the loaded one is this source; True when
-    it loaded. Under a lock, so two gate workers starting at once do not compile it over each other."""
+    """Load and compile IVGDev.Run and IVGDev.Setup into `native`'s namespace (%SYS) unless the loaded ones are these
+    sources; True when they loaded. Under a lock, so two gate workers starting at once do not compile them over each
+    other."""
     if _loaded_hash(native) == source_hash():
         return False
     native.lock("", LOCK_TIMEOUT, "^IVGDev.Setup")
     try:
         if _loaded_hash(native) == source_hash():
             return False
-        stream = native.classMethodObject("%Stream.GlobalCharacter", "%New")
-        stream.invoke("Write", helper_source())
-        stream.invoke("Rewind")
-        status = native.classMethodValue("%SYSTEM.OBJ", "LoadStream", stream, "ck-d")
-        if not (status == 1 or str(status) == "1"):
-            text = native.classMethodValue("%SYSTEM.Status", "GetErrorText", status)
-            raise RuntimeError(f"loading {HELPER} into %SYS failed: {text}")
+        for path in HELPER_SOURCES:
+            stream = native.classMethodObject("%Stream.GlobalCharacter", "%New")
+            stream.invoke("Write", helper_source() if path == HELPER_SOURCE else path.read_text())
+            stream.invoke("Rewind")
+            status = native.classMethodValue("%SYSTEM.OBJ", "LoadStream", stream, "ck-d")
+            if not (status == 1 or str(status) == "1"):
+                text = native.classMethodValue("%SYSTEM.Status", "GetErrorText", status)
+                raise RuntimeError(f"loading {path.stem} into %SYS failed: {text}")
     finally:
         native.unlock("", "^IVGDev.Setup")
     return True
@@ -161,6 +173,85 @@ def drop_namespace(native, ns: str, own: Iterable[str]) -> bool:
 
 def unexpire_passwords(native, pattern: str = "*") -> None:
     _call(native, "UnExpireUserPasswords", pattern)
+
+
+# --------------------------------------------------------------------------- running lines, as `iris session` did
+
+#: Bytes read per call when collecting a run's output.
+RUN_CHUNK = 1_000_000
+_END_OF_INPUT = re.compile(r"\s*(?i:h|halt)\s*")
+
+
+@dataclass
+class RunResult:
+    """What a run of lines did: the text they wrote (with each error written where it happened, as the terminal
+    printed it), "ended" (every line ran) or "halted" (a Halt, or an error outside a line, ended it first), and
+    [(line number, error)] for each line that raised. `str()` is the text."""
+
+    output: str
+    state: str
+    failures: List[Tuple[int, str]] = field(default_factory=list)
+
+    def __str__(self) -> str:
+        return self.output
+
+
+def _split(lines: Union[str, Sequence[str]]) -> List[str]:
+    lines = lines.splitlines() if isinstance(lines, str) else list(lines)
+    # a script's last `halt` is how a terminal script ended its input: the end of the lines, not a Halt
+    while lines and _END_OF_INPUT.fullmatch(lines[-1]):
+        lines.pop()
+    return lines
+
+
+def run(lines: Union[str, Sequence[str]], namespace: str, *, timeout: float = 180, native=None,
+        port: Optional[int] = None, allow_sys: bool = False, check: bool = False) -> RunResult:
+    """Run ObjectScript `lines` in `namespace` the way `docker exec -i <c> iris session IRIS -U <namespace>` with the
+    lines on its input did, over TCP (IVGDev.Run): in a fresh process, one line at a time with Xecute, each line's
+    error written where it happened and the next line run, a Halt ending the process, a `zn` lasting for the lines
+    after it. %SYS only with `allow_sys`. Raises TimeoutError after `timeout` seconds (the process is ended), and with
+    `check` RuntimeError naming each line that raised. `native`: a Native API handle in %SYS with the helpers loaded;
+    one is opened on 127.0.0.1:`port` when not given."""
+    if namespace.upper() == "%SYS" and not allow_sys:
+        raise ValueError("run: %SYS refused; pass allow_sys=True (only a %SYS setup helper should)")
+    if native is None:
+        with sys_native(port) as handle:
+            return run(lines, namespace, timeout=timeout, native=handle, allow_sys=allow_sys, check=check)
+    run_id = uuid.uuid4().hex
+    try:
+        for number, line in enumerate(_split(lines), 1):
+            native.set(line, "^IRIS.TempIVGRun", run_id, "line", number)
+        pid = str(native.classMethodValue(RUNNER, "Start", run_id, namespace, int(allow_sys)))
+        if pid.startswith("FAIL"):
+            raise RuntimeError(f"{namespace}: {pid}")
+        deadline = time.monotonic() + timeout
+        pause = 0.02
+        while (state := str(native.classMethodValue(RUNNER, "State", run_id))) == "running":
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"{namespace}: the lines did not finish in {timeout} s (process {pid} ended)")
+            time.sleep(pause)
+            pause = min(pause * 2, 0.25)
+        setup_error = str(native.classMethodValue(RUNNER, "SetupError", run_id) or "")
+        if setup_error:
+            raise RuntimeError(f"{namespace}: {setup_error}")
+        # the output file's UTF-8 bytes, read by byte offset (a character offset into UTF-8 repeats characters)
+        raw = b""
+        while chunk := native.classMethodValue(RUNNER, "Output", run_id, 1 + len(raw), RUN_CHUNK):
+            raw += chunk if isinstance(chunk, bytes) else str(chunk).encode("latin-1")
+        failures = []
+        for entry in filter(None, str(native.classMethodValue(RUNNER, "Failures", run_id) or "").split("\n")):
+            number, _, error = entry.partition("\t")
+            failures.append((int(number), error))
+    finally:
+        native.classMethodValue(RUNNER, "Cleanup", run_id)
+    if check and failures:
+        raise RuntimeError(f"{namespace}: " + "; ".join(f"line {n}: {e}" for n, e in failures))
+    return RunResult(raw.decode("utf-8", errors="replace"), state, failures)
+
+
+def session(lines: Union[str, Sequence[str]], namespace: str, **kwargs) -> str:
+    """`run`'s text: the drop-in for the stdout of `iris session` with `lines` on its input."""
+    return run(lines, namespace, **kwargs).output
 
 
 USAGE = "usage: tcp_setup.py make NS   (upper-case alphanumeric, not USER or %SYS)\n       tcp_setup.py unexpire"
