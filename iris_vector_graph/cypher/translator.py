@@ -8648,8 +8648,10 @@ def translate_unwind_clause(unwind, context):
         expr = context.add_join_param(None)
     else:
         expr = translate_expression(unwind.expression, context, segment="join")
-        if isinstance(unwind.expression, ast.Variable) and unwind.expression.name in getattr(
-                context, "bool_list_vars", ()):
+        if (
+            isinstance(unwind.expression, ast.Variable)
+            and unwind.expression.name in getattr(context, "bool_list_vars", ())
+        ):
             # 4.7.0 row 21: a WITH's collect() of a boolean expression holds JSON_ARRAYAGG's 1 / 0 (_expr_aggregation),
             # exactly a list of 1s and 0s: read as the JSON booleans it lists, which CY_LIST_KINDS then flags
             expr = f"REPLACE(REPLACE({expr}, '1', 'true'), '0', 'false')"
