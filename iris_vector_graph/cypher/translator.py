@@ -1421,6 +1421,9 @@ class SQLQuery(BaseModel):
     # engine rewrites bare-integer numeric tokens in the JSON array text to
     # X.0 form. By name, not index, like bool_expr_columns.
     float_list_expr_columns: List[str] = Field(default_factory=list)
+    # SQL aliases of RETURN items that are a collect() of a boolean expression (4.7.0 row 21): JSON_ARRAYAGG of its
+    # 1 / 0, which the engine answers as true / false. By name, like bool_expr_columns.
+    bool_list_expr_columns: List[str] = Field(default_factory=list)
     # SQL aliases of RETURN items that are a static map field access
     # (`m.existing`, ast.PropertyAccessExpression — not a node/relationship
     # property). JSON_VALUE always returns VARCHAR text, whatever the
@@ -7360,6 +7363,7 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     sql_query.float_expr_columns = list(context.float_expr_aliases)
     sql_query.sum_expr_columns = list(context.sum_expr_aliases)
     sql_query.float_list_expr_columns = list(context.float_list_expr_aliases)
+    sql_query.bool_list_expr_columns = list(getattr(context, "bool_list_expr_aliases", ()))
     sql_query.map_text_columns = list(context.map_text_aliases)
     sql_query.mixed_expr_columns = list(context.mixed_expr_aliases)
     sql_query.prop_text_expr_columns = list(context.prop_text_aliases)
@@ -7374,7 +7378,34 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     # a label mapped to a SQL table (the table bridge) counts that table's rows
     if not is_transactional and not context.mapped_node_aliases:
         _lone_label_count(cypher_query, sql_query, graph_context)
+    if isinstance(sql_query.sql, str):
+        sql_query.sql = _drop_unread_json_texts(sql_query.sql)
+    elif isinstance(sql_query.sql, list):
+        sql_query.sql = [_drop_unread_json_texts(s) if isinstance(s, str) else s for s in sql_query.sql]
     return sql_query
+
+
+#: A stage's head and select list (`StageN AS (\nSELECT ...\nFROM`), as build_stage_sql writes it
+_STAGE_SELECT = re.compile(r"(?<![\w.])(Stage\d+) AS \(\nSELECT (.*?)\nFROM ", re.S)
+
+
+def _drop_unread_json_texts(sql: str) -> str:
+    """`sql` without the JSON text columns (`_json_text_column`, 4.7.0 rows 21, 22) a WITH stage carries and no later
+    clause reads (`StageN.x__j` nowhere else). A WITH of a run-time list's row carries its text for a collect() or a
+    flag after it; carried unread through Quantifier9-12's statements, it failed them at Prepare on 2026.3
+    (<LIST>LoadTableFunction+10^%qTable), and without it each prepared. Only a column copied as it is
+    (`u1.x__j AS x__j`) is dropped."""
+    if "__j" not in sql:
+        return sql
+    for m in reversed(list(_STAGE_SELECT.finditer(sql))):
+        stage, items = m.group(1), m.group(2)
+        kept = items
+        for item in re.finditer(r', ((?:\w+|"[^"]+")\.("?)(\w+__j)\2) AS (\2\3\2)(?=,|$)', items):
+            if f"{stage}.{item.group(4)}" not in sql:
+                kept = kept.replace(item.group(0), "", 1)
+        if kept != items:
+            sql = sql[: m.start(2)] + kept + sql[m.end(2):]
+    return sql
 
 
 def _lone_label_count(cypher_query, sql_query, graph_context) -> None:
@@ -7517,7 +7548,8 @@ def _rel_prop_text_columns(cypher_query, context) -> List[int]:
 #: The RETURN column of an UNWIND row of a known list (translate_return_clause, 4.6.0 R308), whose group 1 is the row
 _UNWOUND_KNOWN_ROW = re.compile(r"^CASE WHEN (\w+\.\w+) IS NULL THEN NULL WHEN \S*CY_JSON_NUM\(\1\) IS NOT NULL ")
 #: A RETURN column of a run-time list's UNWIND row, its JSON text marked (4.7.0 rows 21, 22): the row is group 1.
-_UNWOUND_RUN_TIME_ROW = re.compile(r"^CHAR\(1\) \|\| 'J' \|\| (\w+\.\w+)__j$")
+#: The JSON text column is `_side_column(row, '__j')`, delimited whole when the name is (`u0."input__j"`): group 2 or 3.
+_UNWOUND_RUN_TIME_ROW = re.compile(r"""^CHAR\(1\) \|\| 'J' \|\| (\w+)\.(?:(\w+)__j|"((?:[^"]|"")+)__j")$""")
 
 
 def _unwrap_typed(sql_expr: str) -> str:
@@ -7528,7 +7560,9 @@ def _unwrap_typed(sql_expr: str) -> str:
         return known.group(1)  # TCK ReturnOrderBy1 [9]/[10]: CY_SORT_KEY read the marked text, sorting lists as strings
     run_time = _UNWOUND_RUN_TIME_ROW.match(sql_expr)
     if run_time:
-        return run_time.group(1)  # the row, not its J-marked boolean (4.7.0 row 21)
+        # the row, not its J-marked boolean (4.7.0 row 21)
+        name = run_time.group(2) or run_time.group(3).replace('""', '"')
+        return f"{run_time.group(1)}.{_safe_alias(name)}"
     head = next((h for h in (f"{_fn('CY_TYPED')}(", f"{_fn('CY_JSON_TYPED')}(") if sql_expr.startswith(h)), None)
     if head and sql_expr.endswith(")"):
         inner = sql_expr[len(head) : -1]
@@ -8553,10 +8587,11 @@ def translate_unwind_clause(unwind, context):
             context.add_join_param(None)
         else:
             parts = []
+            col_b, col_t = _side_column(col, "__b"), _side_column(col, "__t")
             for v, k in zip(_union_rows, _row_kinds):
-                flag = f", {int(isinstance(v, bool))} AS {col}__b" if _flagged else ""
+                flag = f", {int(isinstance(v, bool))} AS {col_b}" if _flagged else ""
                 if _kinded:
-                    flag += f", '{k}' AS {col}__t"
+                    flag += f", '{k}' AS {col_t}"
                 if v is None:
                     parts.append(f"SELECT NULL AS {col}{flag}")
                 elif isinstance(v, _UnwoundTemporal):
@@ -8566,9 +8601,9 @@ def translate_unwind_clause(unwind, context):
                     context.add_join_param(v)
             union_sql = f"({' UNION ALL '.join(parts)}) {alias}"
             if _flagged:
-                _bool_flags[unwind.alias] = (alias, f"{alias}.{col}__b")
+                _bool_flags[unwind.alias] = (alias, f"{alias}.{col_b}")
             if _kinded:
-                _rk[unwind.alias] = (alias, f"{alias}.{col}__t")
+                _rk[unwind.alias] = (alias, f"{alias}.{col_t}")
         if context.from_clauses:
             context.join_clauses.append(f"CROSS JOIN {union_sql}")
         else:
@@ -8613,6 +8648,11 @@ def translate_unwind_clause(unwind, context):
         expr = context.add_join_param(None)
     else:
         expr = translate_expression(unwind.expression, context, segment="join")
+        if isinstance(unwind.expression, ast.Variable) and unwind.expression.name in getattr(
+                context, "bool_list_vars", ()):
+            # 4.7.0 row 21: a WITH's collect() of a boolean expression holds JSON_ARRAYAGG's 1 / 0 (_expr_aggregation),
+            # exactly a list of 1s and 0s: read as the JSON booleans it lists, which CY_LIST_KINDS then flags
+            expr = f"REPLACE(REPLACE({expr}, '1', 'true'), '0', 'false')"
         if (
             isinstance(unwind.expression, ast.Variable)
             and unwind.expression.name in context.input_params
@@ -8753,28 +8793,53 @@ def _kind_guarded_ordering(expr, context) -> Optional[str]:
     return None
 
 
+def _side_column(column: str, suffix: str) -> str:
+    """The column beside an UNWIND row's `column` (a name, or a name as `_safe_alias` writes it) that holds its `suffix`
+    (__b, __t, __k, __j), delimited whole: `{col}__k` wrote `"input"__k` for the reserved `input`, -1 at Prepare (TCK
+    Quantifier9-12 invariants, 4.7.0 row 22)."""
+    if len(column) > 1 and column[0] == column[-1] == '"':
+        column = column[1:-1].replace('""', '"')
+    return _safe_alias(f"{column}{suffix}")
+
+
 def _list_kinds_columns(column: str) -> str:
     """The JSON_TABLE path and columns over CY_LIST_KINDS's answer: `column` (name and type) from $.v, its kind and its
     JSON text beside it (4.7.0 rows 21, 22)."""
-    col = column.split()[0]
-    return f"'$[*]' COLUMNS ({column} PATH '$.v', {col}__k VARCHAR(1) PATH '$.k', {col}__j VARCHAR(32000) PATH '$.j')"
+    col = column.rsplit(" ", 1)[0]
+    return (f"'$[*]' COLUMNS ({column} PATH '$.v', {_side_column(col, '__k')} VARCHAR(1) PATH '$.k', "
+            f"{_side_column(col, '__j')} VARCHAR(32000) PATH '$.j')")
 
 
 def _register_run_time_kinds(var: str, alias: str, bool_flags, context) -> None:
     """An UNWIND read through CY_LIST_KINDS: its boolean flag and JSON text (row 21), and its row kind, which an ordering
     comparison reads (row 22). The kind of a temporal element is its text's, s."""
-    col = _safe_alias(var)
-    bool_flags[var] = (alias, f"(CASE WHEN {alias}.{col}__k = 'b' THEN 1 ELSE 0 END)", "json", f"{alias}.{col}__j")
-    context.__dict__.setdefault("unwind_row_kinds", {})[var] = (alias, f"{alias}.{col}__k", "run_time")
+    k, j = f"{alias}.{_side_column(var, '__k')}", f"{alias}.{_side_column(var, '__j')}"
+    bool_flags[var] = (alias, f"(CASE WHEN {k} = 'b' THEN 1 ELSE 0 END)", "json", j)
+    context.__dict__.setdefault("unwind_row_kinds", {})[var] = (alias, k, "run_time")
 
 
 def _literal_holding_a_nested_value(expr) -> bool:
     """A list literal with a list or map element: JSON_TABLE reads that element as its JSON text, the same text as a
-    string that spells it ('[2]' beside [2]), and a boolean beside it as '1'; CY_LIST_KINDS tells them apart (row 22)."""
+    string that spells it ('[2]' beside [2]), and a boolean beside it as '1'; CY_LIST_KINDS tells them apart (row 22).
+
+    Not a literal of lists only, or of maps only (nulls aside): its rows are of one kind, which JSON_TABLE reads as
+    it read them before row 22. Through CY_LIST_KINDS, `UNWIND [[], [true], ..] AS c` under two collect()s of `b IN c`
+    failed at Prepare on 2026.3 (<LIST>LoadTableFunction, TCK Precedence1 [26], [28]), and `UNWIND [[1], [2, 3]] AS e
+    RETURN e < 3` with -14."""
     if not (isinstance(expr, ast.Literal) and isinstance(expr.value, list)):
         return False
-    return any(isinstance(v, ast.MapLiteral) or (isinstance(v, ast.Literal) and isinstance(v.value, (list, dict)))
-               for v in expr.value)
+
+    def kind(v):
+        if isinstance(v, ast.MapLiteral) or (isinstance(v, ast.Literal) and isinstance(v.value, dict)):
+            return "m"
+        if isinstance(v, ast.Literal) and isinstance(v.value, list):
+            return "l"
+        if isinstance(v, ast.Literal) and v.value is None:
+            return None
+        return "z"  # a scalar, or an expression
+
+    kinds = {kind(v) for v in expr.value} - {None}
+    return bool(kinds & {"l", "m"}) and len(kinds) > 1
 
 
 def _is_run_time_list(expr, context) -> bool:
@@ -21271,10 +21336,12 @@ def _register_stage_bool_flags(context, stage) -> None:
         flags = context.unwind_bool_flags = {}
     for alias, kind in pending.items():
         if context.variable_aliases.get(alias) == stage:
-            entry = (stage, f"{stage}.{_bool_flag_column(alias)}", kind)
             if alias in texts:
-                entry += (f"{stage}.{_json_text_column(alias)}",)
-            flags[alias] = entry
+                # 4.7.0 rows 21, 22: a run-time list's row carries its JSON text only; a boolean's is true / false
+                text = f"{stage}.{_json_text_column(alias)}"
+                flags[alias] = (stage, f"(CASE WHEN {text} IN ('true', 'false') THEN 1 ELSE 0 END)", kind, text)
+            else:
+                flags[alias] = (stage, f"{stage}.{_bool_flag_column(alias)}", kind)
 
 
 def _unwind_json_text(expr, context) -> Optional[str]:
@@ -21328,8 +21395,21 @@ def _list_element_text(expr, sql, context=None) -> Optional[str]:
         return f"CASE WHEN {_bool_flag} = 1 THEN {_flagged_bool_text(sql, kind)} ELSE {other} END"
     if context is not None and not isinstance(expr, ast.Literal) and _is_bool_valued(expr, context):
         # 4.7.0 row 21: a boolean expression's 1 / 0 as the JSON boolean (collect(exists(n.p)) answered [1, 0])
-        return f"CASE ({sql}) WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE 'null' END"  # read once (TCK, R203)
+        return _bool_json_text(sql)
     return _list_element_text_plain(expr, sql, context)
+
+
+def _bool_json_text(sql) -> str:
+    """A boolean expression's 1 / 0 as the JSON text true / false, or null (4.7.0 row 21). The expression is read
+    once, as a simple CASE's operand (TCK, R203). A collect() of it does not use this (_expr_aggregation)."""
+    return f"CASE ({sql}) WHEN 1 THEN 'true' WHEN 0 THEN 'false' ELSE 'null' END"
+
+
+def _is_bool_list_valued(expr, context) -> bool:
+    """A collect() of a boolean expression (JSON_ARRAYAGG of its 1 / 0, _expr_aggregation), or a WITH variable holding
+    one (4.7.0 row 21)."""
+    return id(expr) in getattr(context, "bool_collects", ()) or (
+        isinstance(expr, ast.Variable) and expr.name in getattr(context, "bool_list_vars", ()))
 
 
 def _unwound_known_text(expr, sql, context) -> Optional[str]:
@@ -24055,6 +24135,15 @@ def _expr_aggregation(expr, context, segment):
         if fn == "JSON_ARRAYAGG"
         else None
     )
+    if _elem_text == _bool_json_text(arg):
+        # 4.7.0: a boolean expression's collect() is JSON_ARRAYAGG of its 1 / 0, as in 4.6.5, and a RETURN column of it
+        # is answered as booleans by the engine (bool_list_expr_columns). Row 21 listed it as
+        # '[' || LIST(NULLIF(CASE (..) WHEN 1 THEN 'true' ..)) || ']', and IRIS 2026.3 failed that at Prepare with
+        # <LIST>LoadTableFunction+10^%qTable in TCK Precedence1 [25]-[28]; every LIST() form tried failed some of
+        # Precedence1 [21], [25]-[28] (in a WITH, any expression around LIST() of an operand holding a correlated
+        # JSON_TABLE subquery does), and JSON_ARRAYAGG prepared in all 23. A later reader takes 1 / 0 as true / false
+        _elem_text = None
+        context.__dict__.setdefault("bool_collects", set()).add(id(expr))
     if _elem_text is not None:
         # collect(n {.name}) lists maps and collect(r.km) numbers, not strings (R253); a null is skipped
         return _json_text_list_agg(f"NULLIF({_elem_text}, 'null')", expr.distinct)
@@ -30436,6 +30525,9 @@ def translate_return_clause(ret, context):
                 context.typed_value_aliases.append(safe)  # R250: the CY_TYPED sum carries its own mark
             if _is_bool_valued(item.expression, context):
                 context.bool_expr_aliases.append(safe)
+            if _is_bool_list_valued(item.expression, context):
+                # 4.7.0 row 21: collect() of a boolean expression, JSON_ARRAYAGG of its 1 / 0 (_expr_aggregation)
+                context.__dict__.setdefault("bool_list_expr_aliases", []).append(safe)
             if _is_map_access_valued(item.expression, context):
                 context.map_text_aliases.append(safe)
             _num_t = _numeric_static_type(item.expression, context)
@@ -30828,6 +30920,11 @@ def translate_with_clause(with_clause, context):
             _json_vars.add(alias)  # an unwound element carried on (4.6.0 R310)
         else:
             _json_vars.discard(alias)
+        _bool_lists = context.__dict__.setdefault("bool_list_vars", set())
+        if _is_bool_list_valued(item.expression, context):
+            _bool_lists.add(alias)  # a collect() of a boolean expression, its 1 / 0, carried to a RETURN (4.7.0 row 21)
+        else:
+            _bool_lists.discard(alias)
         _ck = _container_kind(item.expression, context)
         if _ck is not None:
             context.container_kind_vars[alias] = _ck  # a list or map carried to a RETURN (4.6.0 R311)
@@ -31031,7 +31128,6 @@ def translate_with_clause(with_clause, context):
             _flag_kind = "text" if _flag_sql else None
         context._typed_list_elem_args = None
         if _flag_sql is not None:
-            context.select_items.append(f"{_flag_sql} AS {_bool_flag_column(alias)}")
             _pending = getattr(context, "_pending_bool_flags", None)
             if _pending is None:
                 _pending = context._pending_bool_flags = {}
@@ -31039,13 +31135,16 @@ def translate_with_clause(with_clause, context):
             # 4.7.0 row 22: a run-time list's row goes on with its JSON text too, which a collect() after the WITH lists
             _json_text = _unwind_json_text(item.expression, context)
             if _json_text is not None:
+                # its flag is read from that text ('true' / 'false' is a boolean's, '"true"' the string's), not carried
+                # as a column of its own: the two columns per WITH of an unwound row failed TCK Quantifier10 [4] at
+                # Prepare on 2026.3 (<LIST>LoadTableFunction), and either one alone prepared
                 context.select_items.append(f"{_json_text} AS {_json_text_column(alias)}")
                 context.__dict__.setdefault("_pending_json_texts", set()).add(alias)
+            else:
+                context.select_items.append(f"{_flag_sql} AS {_bool_flag_column(alias)}")
             if has_agg and not _contains_aggregation(item.expression):
                 # a grouping column's flag groups with it; one of an aggregate (`head(collect(x))`) is the aggregate's
-                if _json_text is not None:
-                    context.group_by_items.append(_json_text)
-                context.group_by_items.append(_flag_sql)
+                context.group_by_items.append(_json_text if _json_text is not None else _flag_sql)
         if has_agg and not _contains_aggregation(item.expression):
             # For edge variables in GROUP BY, also include s/p/o identity columns so that
             # edges with the same qualifiers (e.g. both {}) are not collapsed into one group.

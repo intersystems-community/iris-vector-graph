@@ -1282,6 +1282,20 @@ def _float_list_expr_value(v):
     return _JSON_BARE_INT_RE.sub(lambda m: m.group(0) + ".0", v)
 
 
+_BOOL_LIST_TEXT = re.compile(r"\[(?:[01](?:,[01])*)?\]")
+
+
+def _bool_list_expr_value(v):
+    """A value from a collect() of a boolean expression (SQLQuery.bool_list_expr_columns, 4.7.0 row 21): the SQL lists
+    the expression's 1 / 0 (JSON_ARRAYAGG, nulls skipped), which a Cypher list of booleans answers as true / false.
+    Only JSON text that is exactly a list of 1s and 0s, or a list of those ints, is read; anything else passes."""
+    if isinstance(v, str) and _BOOL_LIST_TEXT.fullmatch(v):
+        return v.replace("1", "true").replace("0", "false")
+    if isinstance(v, list) and all(type(x) is int and x in (0, 1) for x in v):
+        return [x == 1 for x in v]
+    return v
+
+
 def _sum_expr_value(v):
     """A value from a sum() of unknown argument type (SQLQuery.sum_expr_columns):
     whole -> INTEGER (the 5.2.1 driver's answer; 5.4 returns every SUM as a float)."""
@@ -1304,10 +1318,13 @@ def _decode_numeric_expr_columns(result, sql_query) -> None:
     float_list_names = {
         n.strip('"').lower() for n in getattr(sql_query, "float_list_expr_columns", None) or []
     }
+    bool_list_names = {
+        n.strip('"').lower() for n in getattr(sql_query, "bool_list_expr_columns", None) or []
+    }
     sum_names = {
         n.strip('"').lower() for n in getattr(sql_query, "sum_expr_columns", None) or []
     }
-    if not (int_names or float_names or float_list_names or sum_names):
+    if not (int_names or float_names or float_list_names or bool_list_names or sum_names):
         return
     if not getattr(result, "rows", None):
         return
@@ -1317,8 +1334,9 @@ def _decode_numeric_expr_columns(result, sql_query) -> None:
     float_list_cols = [
         i for i, c in enumerate(cols) if str(c).strip('"').lower() in float_list_names
     ]
+    bool_list_cols = [i for i, c in enumerate(cols) if str(c).strip('"').lower() in bool_list_names]
     sum_cols = [i for i, c in enumerate(cols) if str(c).strip('"').lower() in sum_names]
-    if not (int_cols or float_cols or float_list_cols or sum_cols):
+    if not (int_cols or float_cols or float_list_cols or bool_list_cols or sum_cols):
         return
     rows = []
     for row in result.rows:
@@ -1335,6 +1353,9 @@ def _decode_numeric_expr_columns(result, sql_query) -> None:
         for i in float_list_cols:
             if i < len(row):
                 row[i] = _float_list_expr_value(row[i])
+        for i in bool_list_cols:
+            if i < len(row):
+                row[i] = _bool_list_expr_value(row[i])
         rows.append(row)
     result.rows = rows
 
