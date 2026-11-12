@@ -1618,17 +1618,19 @@ class NodesEdgesMixin:
         """Delete the property rows of each of ``nodes`` whose ``nodes`` row is not there yet, in its graph: rows a
         node removed by SQL left (rdf_props has no foreign key on nodes). Run before the nodes are inserted, so a node
         the batch inserts holds what it is given, as create_node's does, and a node already there keeps its rows
-        (the batch merges into it). One DELETE per graph and 500 ids (4.7.0 gate: the old values stood)."""
+        (the batch merges into it). One DELETE per graph and 250 ids: the statement binds each chunk twice, and IRIS
+        refused to prepare it at 500 (4.7.0 gate: tests/unit/test_470_orphan_props_chunks.py)."""
         by_graph: Dict[str, Dict[str, None]] = {}
         for n in nodes:
             if n.get("id"):
                 by_graph.setdefault(n.get("graph") or "", {})[n["id"]] = None
         scoped = getattr(self, "_nodes_has_graph_id", True) and getattr(self, "_children_have_graph_id", True)
         props, node_table = self._t("rdf_props"), self._t("nodes")
+        step = _DELETE_LOOKUP_CHUNK // 2
         for graph_id, id_set in by_graph.items():
             ids = list(id_set)
-            for i in range(0, len(ids), _DELETE_LOOKUP_CHUNK):
-                chunk = ids[i : i + _DELETE_LOOKUP_CHUNK]
+            for i in range(0, len(ids), step):
+                chunk = ids[i : i + step]
                 marks = ", ".join("?" * len(chunk))
                 if scoped:
                     cursor.execute(
