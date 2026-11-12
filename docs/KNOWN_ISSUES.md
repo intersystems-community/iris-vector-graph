@@ -312,6 +312,41 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
 # → [[[1, 2], ['a', 'b']]]
 ```
 
+<a id="an-element-of-a-collected-boolean-expression-read-by-position-answers-1-or-0"></a>
+
+### An element of a collected boolean expression, read by position, answers `1` or `0`
+
+- **Symptom:** `UNWIND [1, 2, 3] AS k WITH k ORDER BY k WITH collect(k > 1) AS l RETURN l[0], head(l)`
+  answers `0`, `0` where openCypher answers `false`, `false`. `RETURN l`, a `RETURN collect(k > 1)` and an
+  `UNWIND l` answer booleans (measured 2026-11-11, 2026.3, both routes).
+- **Cause:** the SQL lists a boolean expression's `1` / `0` with `JSON_ARRAYAGG`, as 4.6.5 did. Row 21's first form,
+  `'[' || LIST(CASE ... THEN 'true' ...) || ']'`, failed at Prepare on IRIS 2026.3
+  (`<LIST>LoadTableFunction+10^%qTable`) in TCK Precedence1 [21], [25]-[28]; the engine reads a `RETURN` column of
+  such a list as booleans, and an `UNWIND` of it reads `true` / `false`, but a subscript reads the stored `1` / `0`.
+- **Versions:** all 4.x.
+- **Workaround:** `l[0] = 1` tests the element (`[b IN l | b = 1]` still answers `1` / `0`; measured
+  2026-11-11).
+- **Check:** `RETURN l[0]` of the Symptom's query answers `0`.
+
+<a id="a-boolean-property-of-a-map-row-reads-as-false-in-a-case-when"></a>
+
+### A boolean property of a map row reads as false in a `CASE WHEN`
+
+- **Symptom:** the query below answers null on both rows (openCypher: `[2]`, then null), and `NOT input.fixed` is
+  true on both. TCK Quantifier9-12's invariants hold anyway, since both sides read the same value (measured
+  2026-11-11 on 4.6.5 and 4.7.0, both routes).
+
+```cypher
+UNWIND [{list: [2], fixed: true}, {list: [1, 2, 3], fixed: false}] AS input
+RETURN CASE WHEN input.fixed THEN input.list ELSE null END AS l
+```
+
+- **Cause:** the predicate is `JSON_VALUE(..) = 'true'`, and `Graph_KG.JSON_VALUE` answers `'1'` for a JSON `true`.
+- **Versions:** all 4.x.
+- **Workaround:** `CASE WHEN input.fixed = true THEN ...` tests the boolean (measured 2026-11-11, both routes;
+  the list it answers there still comes back as its text, `'[2]'`).
+- **Check:** the Symptom's query answers null on its first row.
+
 <a id="an-unwound-boolean-or-empty-string-of-a-list-built-at-run-time-reads-as-1-0-or-null"></a>
 
 ### `toString()` of an unwound boolean of a list built at run time answers `'1'` or `'0'`
@@ -479,9 +514,10 @@ engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN count
     `collect()` of `[date('2020-01-01'), 'b']`, `x < 'c'` answers true for the date (openCypher: null). Against a
     number, a string or a boolean, an element of another kind answers null, as openCypher does (4.7.0).
 - **Cause:** IRIS's `JSON_TABLE` reads each element into one text column: a nested list as its JSON text and a
-  boolean as `'1'` or `'0'`, the same text as the string `'[1]'` or `'1'`. A list literal, a list built at run time
-  and (since 4.7.0) a read opening with `UNWIND $p` go through `CY_LIST_KINDS`, which puts each element's kind and JSON
-  text beside it (the read is `WITH $p AS __l0 UNWIND __l0 AS e`). A `?` inside `JSON_TABLE(fn(...))` fails the
+  boolean as `'1'` or `'0'`, the same text as the string `'[1]'` or `'1'`. A list literal that holds a list or map
+  beside a value of another kind (a literal of lists only, or of maps only, is read by `JSON_TABLE` alone), a list
+  built at run time and (since 4.7.0) a read opening with `UNWIND $p` go through `CY_LIST_KINDS`, which puts each
+  element's kind and JSON text beside it (the read is `WITH $p AS __l0 UNWIND __l0 AS e`). A `?` inside `JSON_TABLE(fn(...))` fails the
   statement on IRIS, so the parameter is held in a `WITH` first. IVG does not do that before a `CREATE`, `MERGE` or
   `DELETE` that follows a `WITH`: there the `WITH` form fails (SQLCODE -23, `Label is not listed among the applicable
 tables`), as such a write fails anyway (the entry below).
