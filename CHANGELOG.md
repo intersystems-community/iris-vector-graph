@@ -201,6 +201,17 @@ WHERE label = 'A' RETURN label` answered every label; it answers the filtered on
   `<LIST>LoadTableFunction`; and a relationship number past 64-bit integers (`SET r.p = 1e20`) read back through
   `collect` and UNWIND as the integer 10\*\*20 rather than the float 1e+20. A string `'inf'` compares as an infinity
   in `=` and range filters, as on 4.6.5 (Known issues).
+- Two more faults in 4.7.0's own changes, found by the gate on a 32-core host, answer as on 4.6.5: `bulk_create_nodes`
+  of more than 400 nodes in one graph failed at Prepare (its new orphaned-property DELETE bound 1,002 parameters; it
+  binds 250 ids a statement now), and `UNWIND $p AS e WITH e ...` over a `$p` of mixed kinds failed with "Field
+  `Stage2.e__j` not found" (a stage without FROM lent its name to the next when unread JSON text columns were dropped).
+- **A grouping read over an UNWIND of a long collected list answers on a many-core server.** Since 4.6.0 such a read
+  (`MATCH (n:L) WITH n.k AS k, collect(n) AS ns UNWIND ns AS x RETURN k, count(x)`) on 2026.3 retries with the list
+  read by position when IRIS refuses it. On a 32-core host IRIS reported the refusal as `Encoded subscript 1 > 32767
+bytes`, which the retry did not recognise, and its parallel plan of the retry failed the same way: 2,000 nodes failed
+  with `-400 <SUBSCRIPT>`. The retry recognises that form and runs with `%NOPARALLEL`; the first attempt is unchanged.
+- `examples/demo_rdf_semantic_layer.py` declares the README's embedding width (768). It asked for 4 though it stores no
+  vector, and run after the other examples it stopped at `initialize_schema()` on 4.7.0's width refusal.
 - `status()` as a reading or writing role (ADMIN_GUIDE §3) reported the adjacency index probe as a privilege error
   (SQLCODE -99 on `%Dictionary.CompiledIndex`), and a read before setup went to SQL instead of the native executor and
   was refused (-99). The probe falls back to `Graph.KG.Adjacency.IndexKind()` over the Native API; if that is refused
