@@ -11002,55 +11002,53 @@ def _validate_merge_pattern_no_null_properties(merge_node):
             )
 
 
-def _reads_only_own_node(v, var, context) -> bool:
-    """Does ON CREATE / ON MATCH value `v` read a property of the merged node `var`, and otherwise only literals and
-    parameters? Such a value (`n.count + 1`, `n.count * 10`, `n.id + '-x'`) is computed in the write of `var`'s rows,
-    as `MATCH ... SET` computes it (`_set_node_prop_dml`). Rendered as a RETURN reads it, it named the RETURN's alias
-    n0, which the UPDATE of rdf_props does not have (SQLCODE -23, nothing written; 4.7.0)."""
-    if isinstance(v, ast.Literal):
-        return False
-    reads_own = False
-    for e in _walk_expr_nodes(v):
-        if isinstance(e, ast.PropertyReference):
-            if e.variable != var:
-                return False
-            reads_own = True
-        elif isinstance(e, ast.Variable) and not (e.is_parameter and e.name in context.input_params):
-            return False
-        elif isinstance(e, _OWN_NODE_SKIPPED):
-            # a pattern or a local variable of its own: left to the translation of the expression as it was
-            return False
-    return reads_own
-
-
-#: Expressions that bind variables or match patterns of their own; `_reads_only_own_node` leaves them out.
+#: Expressions that bind variables or match patterns of their own; `_reads_only_properties` leaves them out.
 _OWN_NODE_SKIPPED = (
     ast.ListComprehension, ast.ListPredicateExpression, ast.PatternComprehension, ast.ReduceExpression,
     ast.ExistsExpression, ast.NodePattern, ast.GraphPattern,
 )
 
 
-def _reads_only_bound_nodes(v, var, context) -> bool:
-    """Does ON CREATE / ON MATCH value `v` of node `var` read properties of other node variables the MATCH bound, and
-    otherwise only literals and parameters (`m.count + 1`, `m.name + '-y'`, `m.count > 4`)?"""
+def _reads_only_properties(v, context, reads_variable) -> bool:
+    """Does ON CREATE / ON MATCH value `v` read at least one property, each of a variable `reads_variable` accepts,
+    and otherwise only literals and parameters?"""
     if isinstance(v, ast.Literal):
         return False
     reads = False
     for e in _walk_expr_nodes(v):
         if isinstance(e, ast.PropertyReference):
-            if (
-                e.variable == var
-                or e.variable in context.rel_variables
-                or e.variable in context.scalar_variables
-                or _is_with_value(e.variable, context)
-            ):
+            if not reads_variable(e.variable):
                 return False
             reads = True
         elif isinstance(e, ast.Variable) and not (e.is_parameter and e.name in context.input_params):
             return False
         elif isinstance(e, _OWN_NODE_SKIPPED):
+            # a pattern or a local variable of its own: left to the translation of the expression as it was
             return False
     return reads
+
+
+def _reads_only_own_node(v, var, context) -> bool:
+    """Does ON CREATE / ON MATCH value `v` read a property of the merged node `var`, and otherwise only literals and
+    parameters? Such a value (`n.count + 1`, `n.count * 10`, `n.id + '-x'`) is computed in the write of `var`'s rows,
+    as `MATCH ... SET` computes it (`_set_node_prop_dml`). Rendered as a RETURN reads it, it named the RETURN's alias
+    n0, which the UPDATE of rdf_props does not have (SQLCODE -23, nothing written; 4.7.0)."""
+    return _reads_only_properties(v, context, lambda name: name == var)
+
+
+def _reads_only_bound_nodes(v, var, context) -> bool:
+    """Does ON CREATE / ON MATCH value `v` of node `var` read properties of other node variables the MATCH bound, and
+    otherwise only literals and parameters (`m.count + 1`, `m.name + '-y'`, `m.count > 4`)?"""
+
+    def is_other_bound_node(name) -> bool:
+        return not (
+            name == var
+            or name in context.rel_variables
+            or name in context.scalar_variables
+            or _is_with_value(name, context)
+        )
+
+    return _reads_only_properties(v, context, is_other_bound_node)
 
 
 def _merge_action_typed_sql(v, context, var, from_len, join_len) -> Optional[tuple]:
@@ -11107,21 +11105,15 @@ def _merge_rel_value_sql(context, rel_var, k, v) -> tuple:
     `MATCH ()-[r]->() SET r.k = v` writes it (`_rel_value_copy_sql`, `_qualifier_write_sql`): `r.w + 1` from the
     edge's own `w`, a parameter with its JSON type. A value read from another variable raises SyntaxError, as that
     SET path does for what it cannot read; before, the expression's AST was bound and its repr stored (4.7.0)."""
-    if isinstance(v, ast.PropertyReference):
-        if v.variable != rel_var:
-            raise SyntaxError(
-                f"MERGE ... SET {rel_var}.{k} = {v.variable}.{v.property_name}: a relationship's ON CREATE / ON MATCH "
-                f"value read from another variable is not supported; SET it after the MERGE "
-                f"(`MERGE ... SET {rel_var}.{k} = {v.variable}.{v.property_name}`)"
-            )
-        sql, params, _ = _rel_value_copy_sql(context, rel_var, None, _QUALIFIERS_OR_EMPTY, k, v)
-        return sql, params
     for e in _walk_expr_nodes(v):
         if isinstance(e, ast.PropertyReference) and e.variable != rel_var:
             raise SyntaxError(
                 f"MERGE ... SET {rel_var}.{k} = <value>: a relationship's ON CREATE / ON MATCH value read from another "
                 f"variable (`{e.variable}`) is not supported; SET it after the MERGE"
             )
+    if isinstance(v, ast.PropertyReference):
+        sql, params, _ = _rel_value_copy_sql(context, rel_var, None, _QUALIFIERS_OR_EMPTY, k, v)
+        return sql, params
     return _qualifier_write_sql(
         "qualifiers", k, _translate_set_value(v, context, k), _QUALIFIERS_OR_EMPTY,
         as_json=_set_value_is_json(v, context),
