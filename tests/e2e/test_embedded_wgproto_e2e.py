@@ -55,7 +55,7 @@ def _docker_irispython(container: str, code: str, timeout: int = 30) -> str:
 
 
 #: The SuperServer port of ENTERPRISE_CONTAINER: the ObjectScript below goes over TCP (4.7.0: no `irissession`).
-ENTERPRISE_PORT = int(os.environ.get("IVG_ENTERPRISE_PORT") or os.environ.get("IVG_PORT") or "31972")
+ENTERPRISE_PORT = int(os.environ.get("IVG_PORT", "31972"))
 
 
 def _docker_objectscript(container: str, *statements: str, timeout: int = 30) -> str:

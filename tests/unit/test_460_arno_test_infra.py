@@ -92,7 +92,9 @@ def test_arno_modules_are_not_skipped_whole_outside_user(path):
             assert "requires_user_namespace" not in ast.unparse(node.value), path.name
 
 
-TEST_NAMESPACE_ARG = '"-U", TEST_NAMESPACE'
+#: 4.7.0: the session runs over TCP (tests/helpers/iris_lines.session), not as `iris session -U`
+TEST_NAMESPACE_ARG = "TEST_NAMESPACE, timeout="
+
 
 
 def test_execution_contexts_uses_the_test_container():

@@ -41,10 +41,14 @@ ALLOWED: dict[str, str] = {
     "tests/integration/test_236_capabilities.py:"
     "test_the_sentinel_check_refuses_a_connection_that_is_not_in_the_scratch_namespace":
         "opens USER only to show the scratch sentinel check refuses it; nothing is written through it",
-    "tests/e2e/test_embedded_wgproto_e2e.py:_docker_objectscript":
+    "tests/e2e/test_embedded_wgproto_e2e.py:_load_class":
         "USER-only: irispython in the container starts in USER, so the class it compiles must be there too",
     "tests/unit/test_alt_bench_shim.py:test_install_wraps_connect_once":
         "a fake iris module: the call checks the bench shim rewrites USER to the bench namespace; no server",
+    "tests/unit/test_no_iris_session_pipes.py:test_python_shapes_that_run_a_session":
+        "a script text the XDR guard must flag (a session in USER); nothing is executed",
+    "tests/unit/test_no_iris_session_pipes.py:test_python_text_that_only_describes":
+        "a script text the XDR guard must leave alone (it only describes a session in USER); nothing is executed",
     "tests/unit/test_doctest_harness.py:test_bash_refusal":
         "a script text the doc harness must refuse to run (a session in USER); nothing is executed",
     "tests/unit/test_engine_unit.py:TestConnectionSeam.test_from_connect_uses_dbapi_connect":

@@ -158,32 +158,50 @@ def test_without_a_record_a_missing_dimension_is_still_the_value_error():
 # --------------------------------------------------------------------------- the test session's raw class load
 
 
+class _DeployNative:
+    """A Native API handle for the session's class load: every LoadStream answers OK, and each call is kept."""
+
+    def __init__(self):
+        self.calls: list = []
+
+    def classMethodObject(self, cls, method, *args):
+        self.calls.append((cls, method))
+        return MagicMock()
+
+    def classMethodValue(self, cls, method, *args):
+        self.calls.append((cls, method))
+        return 1
+
+    def set(self, *args):
+        self.calls.append(("set",) + args[1:])
+
+    def loads(self):
+        return [c for c in self.calls if c == ("%SYSTEM.OBJ", "LoadStream")]
+
+
 def test_the_session_class_load_refuses_a_namespace_recorded_under_another_schema(monkeypatch):
     """tests/conftest.py loads iris_src/src as written (it names Graph_KG); on a namespace recorded as RAG that put
     Graph_KG schema classes beside RAG's. It reads the record first and loads nothing."""
     import tests.conftest as session
 
-    ran: list = []
-    monkeypatch.setattr(session, "_recorded_schema", lambda container, ns: "RAG")
-    monkeypatch.setattr(session.subprocess, "run", lambda *a, **k: ran.append(a) or MagicMock(stdout=""))
+    native = _DeployNative()
+    monkeypatch.setattr(session, "_recorded_schema", lambda native: "RAG")
     with pytest.raises(IVGSchemaError) as raised:
-        session._deploy_objectscript("ivg-iris-enterprise", "IVG460FXE")
+        session._deploy_objectscript("ivg-iris-enterprise", "IVG460FXE", native=native)
     assert "RAG" in str(raised.value) and "IVG460FXE" in str(raised.value)
-    assert ran == []
+    assert native.calls == []
 
 
 @pytest.mark.parametrize("record", [None, "Graph_KG", "GRAPH_KG"])
 def test_the_session_class_load_goes_on_for_a_graph_kg_namespace(monkeypatch, record):
     import tests.conftest as session
 
-    ran: list = []
-    monkeypatch.setattr(session, "_recorded_schema", lambda container, ns: record)
-    monkeypatch.setattr(session, "_recorded_deploy_hashes", lambda container, sources, ns=None: {})
-    # each class load answers OK: since 4.6.0 R235 a load that reports no status fails the deploy
-    monkeypatch.setattr(session.subprocess, "run",
-                        lambda *a, **k: ran.append(a[0]) or MagicMock(stdout="IVGLOAD=OK\n"))
-    session._deploy_objectscript("ivg-iris-enterprise", "IVG460FXE")
-    assert any(cmd[:2] == ["docker", "cp"] for cmd in ran)
+    native = _DeployNative()
+    monkeypatch.setattr(session, "_recorded_schema", lambda native: record)
+    monkeypatch.setattr(session, "_recorded_deploy_hashes", lambda native, sources, ns=None: {})
+    session._deploy_objectscript("ivg-iris-enterprise", "IVG460FXE", native=native)
+    sources = list(Path("iris_src/src").rglob("*.cls"))
+    assert sources and len(native.loads()) == len(sources)
 
 
 def test_tcp_deploy_reads_the_record_before_it_writes_a_file():
