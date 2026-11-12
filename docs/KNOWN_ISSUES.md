@@ -336,6 +336,8 @@ engine.execute_cypher("MATCH (n:Note {id: 'note1'}) RETURN n.text, n.tags")["row
   true on both. TCK Quantifier9-12's invariants hold anyway, since both sides read the same value (measured
   2026-11-11 on 4.6.5 and 4.7.0, both routes).
 
+<!-- doc-test: skip reason="shows a wrong answer; tests/e2e/test_470_tck_unwind_shapes_e2e.py pins the right one as a strict xfail" -->
+
 ```cypher
 UNWIND [{list: [2], fixed: true}, {list: [1, 2, 3], fixed: false}] AS input
 RETURN CASE WHEN input.fixed THEN input.list ELSE null END AS l
