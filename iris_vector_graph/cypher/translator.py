@@ -11002,6 +11002,34 @@ def _validate_merge_pattern_no_null_properties(merge_node):
             )
 
 
+def _reads_only_own_node(v, var, context) -> bool:
+    """Does ON CREATE / ON MATCH value `v` read a property of the merged node `var`, and otherwise only literals and
+    parameters? Such a value (`n.count + 1`, `n.count * 10`, `n.id + '-x'`) is computed in the write of `var`'s rows,
+    as `MATCH ... SET` computes it (`_set_node_prop_dml`). Rendered as a RETURN reads it, it named the RETURN's alias
+    n0, which the UPDATE of rdf_props does not have (SQLCODE -23, nothing written; 4.7.0)."""
+    if isinstance(v, ast.Literal):
+        return False
+    reads_own = False
+    for e in _walk_expr_nodes(v):
+        if isinstance(e, ast.PropertyReference):
+            if e.variable != var:
+                return False
+            reads_own = True
+        elif isinstance(e, ast.Variable) and not (e.is_parameter and e.name in context.input_params):
+            return False
+        elif isinstance(e, _OWN_NODE_SKIPPED):
+            # a pattern or a local variable of its own: left to the translation of the expression as it was
+            return False
+    return reads_own
+
+
+#: Expressions that bind variables or match patterns of their own; `_reads_only_own_node` leaves them out.
+_OWN_NODE_SKIPPED = (
+    ast.ListComprehension, ast.ListPredicateExpression, ast.PatternComprehension, ast.ReduceExpression,
+    ast.ExistsExpression, ast.NodePattern, ast.GraphPattern,
+)
+
+
 def _merge_action_value_sql(v, context, pre):
     """SQL for a non-literal ON CREATE / ON MATCH SET value, as a scalar subquery.
 
@@ -11222,20 +11250,23 @@ def _merge_action_list_value(item, context):
     """An ON CREATE / ON MATCH `SET n.k = v` of a node, `v` a list literal or a NaN or infinity (4.6.5). A list is
     stored as the JSON text `SET` stores: the value reached the statement as the list of its Literal elements, which
     the driver refuses (`<ARGUMENT ERROR> Unsupported argument type`), with or without a parameter in it. A
-    relationship's property keeps its own branch."""
+    relationship's list keeps its own branch.
+
+    A value computed from literals and parameters (`1 + 1`, `1.5 + 1`, `'a' + 'b'`, `1 < 2`, `$p * 2`), of a node or a
+    relationship, is worked out here and bound as the literal of its type, as CREATE and SET bind it (4.7.0). Its SQL
+    was CAST to VARCHAR, so `ON CREATE SET n.count = 1 + 1` stored the text '2' and `1 < 2` the text '1'; on a
+    relationship the AST's repr was stored."""
     value = getattr(item, "value", None)
-    if not (
-        isinstance(item, ast.SetItem)
-        and isinstance(item.expression, ast.PropertyReference)
-        and item.expression.variable not in context.rel_variables
-    ):
+    if not (isinstance(item, ast.SetItem) and isinstance(item.expression, ast.PropertyReference)):
         return item
     if isinstance(value, (ast.FunctionCall, ast.CaseExpression, ast.BooleanExpression)):
         # `ON CREATE SET n.v = 0.0 / 0.0`: NaN or an infinity, bound as the float, as SET and `= $v` store it. The SQL
-        # of the division stored the text 'NAN'.
+        # of the division stored the text 'NAN'. A null, list or map result keeps the expression's own path.
         folded = _fold_constant(value, context)
-        if isinstance(folded, float) and not math.isfinite(folded):
+        if isinstance(folded, (bool, int, float, str)):
             return dataclasses.replace(item, value=ast.Literal(folded))
+        return item
+    if item.expression.variable in context.rel_variables:
         return item
     if not (isinstance(value, ast.Literal) and isinstance(value.value, list)):
         return item
@@ -11940,6 +11971,12 @@ def translate_merge_clause(merge, context, metadata):
                     == var
                 ):
                     _kv = item.value
+                    if isinstance(item.expression, ast.PropertyReference) and _reads_only_own_node(_kv, var, context):
+                        _set_node_prop_dml(
+                            context, item.expression.property_name, _kv, "", _keyed_ids[0 if is_create else 1], [],
+                            var=var,
+                        )
+                        continue
                     _kvsql = ("?", [_kv.value if isinstance(_kv, ast.Literal) else _kv])
                     if isinstance(_kv, ast.Variable) and _kv.name in context.input_params:
                         _kvsql = ("?", [context.input_params[_kv.name]])
@@ -11961,6 +11998,28 @@ def translate_merge_clause(merge, context, metadata):
                         raise SyntaxError(f"Undefined variable: {var_name}")
                     k, v = item.expression.property_name, item.value
                     val = v.value if isinstance(v, ast.Literal) else v
+                    if (
+                        actual_id
+                        and var_name not in context.rel_variables
+                        and _reads_only_own_node(v, var_name, context)
+                    ):
+                        # A value reading the merged node itself (`ON MATCH SET n.count = n.count + 1`), computed
+                        # in the write from the node's stored row, as `MATCH ... SET` computes it.
+                        _own_ids, _own_params = None, []
+                        if is_create:
+                            # ON CREATE: the node this MERGE generated the id of, only when it created it
+                            _own_ids, _own_params = "?", [actual_id]
+                        else:
+                            _own_mn = merge.pattern.nodes[0] if merge.pattern.nodes else None
+                            if _own_mn is not None and (_own_mn.labels or _own_mn.properties):
+                                _own_es, _own_ep = _merge_pattern_existence_sql(_own_mn, context)
+                                _own_ids = _on_match_ids(
+                                    _own_es.replace("SELECT 1 FROM ", "SELECT _ml0.node_id FROM ", 1), _own_ep,
+                                    actual_id,
+                                )
+                        if _own_ids is not None:
+                            _set_node_prop_dml(context, k, v, "", _own_ids, _own_params, var=var_name)
+                            continue
                     # A value read from the bound rows (`= person.bornIn`) is rendered
                     # as SQL; `?` + [val] is the literal form of the same slot.
                     _vsql, _vparams = "?", [val]
