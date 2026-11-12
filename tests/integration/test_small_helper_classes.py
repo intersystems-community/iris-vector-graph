@@ -1,4 +1,8 @@
-"""User.funcSTRSPLIT, User.Exec and Graph.KG.Benchmark: three small classes nothing else exercised."""
+"""Graph.KG.funcSTRSPLIT, User.Exec and Graph.KG.Benchmark: three small classes nothing else exercised.
+
+STR_SPLIT has been Graph_KG.STR_SPLIT (projected as Graph.KG.funcSTRSPLIT) since spec 262; User.funcSTRSPLIT is a legacy
+object (iris_vector_graph/legacy_manifest.py) only an old USER still holds, so the test passed there and failed on a
+fresh one (4.7.0 gate, the Studio)."""
 
 from __future__ import annotations
 
@@ -23,11 +27,17 @@ def obj(iris_connection):
 
 @pytest.mark.parametrize(
     "s,delim,expected",
-    [("a,b,c", ",", ["a", "b", "c"]), ("a", ",", ["a"]), ("a,,c", ",", ["a", "", "c"]), ("", ",", [])],
+    # SQL's '' reaches the function as $Char(0): split('', ',') is [''] (openCypher; 4.6.0 R274)
+    [("a,b,c", ",", ["a", "b", "c"]), ("a", ",", ["a"]), ("a,,c", ",", ["a", "", "c"]), ("\x00", ",", [""])],
 )
 def test_str_split_returns_a_json_array(obj, s, delim, expected):
-    out = obj.classMethodValue("User.funcSTRSPLIT", "STRSPLIT", s, delim)
+    out = obj.classMethodValue("Graph.KG.funcSTRSPLIT", "STRSPLIT", s, delim)
     assert json.loads(str(out)) == expected
+
+
+def test_str_split_of_null_is_null(obj):
+    """"" is how SQL NULL arrives (4.6.0 R274): no list, where the legacy User.funcSTRSPLIT answered []."""
+    assert obj.classMethodValue("Graph.KG.funcSTRSPLIT", "STRSPLIT", "", ",") in (None, "")
 
 
 def test_exec_runs_a_command_string_and_returns_empty(obj):

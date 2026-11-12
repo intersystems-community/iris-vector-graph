@@ -8,7 +8,7 @@ Tests the end-to-end deployment path for libarno_callout.so:
   5. Graceful degradation when IVG_DISABLE_ARNO=1 (no container needed)
   6. IVG_ARNO_LIB env var override path
 
-Requires: ivg-iris-enterprise container with .so volume-mounted at /tmp/libarno_callout.so
+Requires: ivg-iris-enterprise container with the .so at /usr/irissys/mgr/libarno_callout.so (tcp-load-arno)
   IVG_TEST_CONTAINER=ivg-iris-enterprise IVG_PORT=31972 pytest tests/integration/test_arno_deploy_flow.py
 
 The `arno_iris_connection` fixture skips automatically when the container is absent.
@@ -23,8 +23,11 @@ import pytest
 from tests.conftest import arno_native_connection
 
 SO_LOCAL = "docker/enterprise/libarno_callout.so"
-SO_CONTAINER = "/tmp/libarno_callout.so"
-SO_TCP_PATH = "/tmp/libarno_tcp_deploy_test.so"
+#: In the manager directory: since 4.6.0 R311 the Arno SQL functions open only the library Graph.KG.ArnoAccel.LibPath()
+#: trusts (the default, or a file directly in the manager or binary directory), so one loaded from /tmp was
+#: refused and the probe answered False (4.7.0 gate, the Studio; these files skip where the .so is not in the repo).
+SO_CONTAINER = "/usr/irissys/mgr/libarno_callout.so"
+SO_TCP_PATH = "/usr/irissys/mgr/libarno_tcp_deploy_test.so"
 
 _ARNO_CONTAINER = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
 
@@ -129,7 +132,7 @@ class TestArnoTcpLoadPath:
                 pass
 
         clear_probe_cache()
-        # Probe must use the same path we loaded to; SO_CONTAINER = /tmp/libarno_callout.so
+        # Probe must use the same path we loaded to; SO_CONTAINER = /usr/irissys/mgr/libarno_callout.so
         monkeypatch.setenv("IVG_ARNO_LIB", SO_CONTAINER)
         result = arno_available(arno_iris_connection)
         assert result is True, (

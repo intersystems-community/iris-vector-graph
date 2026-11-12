@@ -19,7 +19,10 @@ import pytest
 from tests.conftest import arno_native_connection
 
 _SO_REPO_PATH = Path(__file__).parent.parent.parent / "docker" / "enterprise" / "libarno_callout.so"
-_SO_CONTAINER_PATH = "/tmp/libarno_tcp_208.so"
+#: In the manager directory: since 4.6.0 R311 the Arno SQL functions open only the library Graph.KG.ArnoAccel.LibPath()
+#: trusts (the default, or a file directly in the manager or binary directory), so one loaded from /tmp was
+#: refused and the probe answered False (4.7.0 gate, the Studio; these files skip where the .so is not in the repo).
+_SO_CONTAINER_PATH = "/usr/irissys/mgr/libarno_tcp_208.so"
 _ARNO_CONTAINER = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
 
 
