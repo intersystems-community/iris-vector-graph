@@ -130,3 +130,81 @@ def test_on_create_set_reading_the_new_node(engines, route):
     e, nid = engines[route], _id(route, "oc")
     ns463.rows(e, f"MERGE (n:{LABEL} {{id: $id}}) ON CREATE SET n.tag = n.id + '-x'", {"id": nid})
     assert _read(e, nid, "n.tag") == [[(nid + "-x", "str")]]
+
+
+# ── the lead's review of 54860387 ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("route", ns463.ROUTES)
+def test_a_parameter_expression_takes_each_calls_value(engines, route):
+    """Two calls of one query text, p = 3 then p = 5: 6 and 10, the second not the first call's value."""
+    e = engines[route]
+    q = f"MERGE (n:{LABEL} {{id: $id}}) ON CREATE SET n.v = $p * 2"
+    ns463.rows(e, q, {"id": _id(route, "p3"), "p": 3})
+    ns463.rows(e, q, {"id": _id(route, "p5"), "p": 5})
+    assert _read(e, _id(route, "p3"), "n.v") == [[(6, "int")]]
+    assert _read(e, _id(route, "p5"), "n.v") == [[(10, "int")]]
+
+
+def _with_source(e, route):
+    src = _id(route, "src")
+    ns463.rows(e, f"CREATE (:{LABEL} {{id: $id, count: 4, f: 1.5, name: 'src'}})", {"id": src})
+    return src
+
+
+@pytest.mark.parametrize("route", ns463.ROUTES)
+def test_on_create_set_from_another_bound_node_stores_the_typed_value(engines, route):
+    """With m.count = 4, m.f = 1.5, m.name = 'src': 5, 2.5, 'src-y' and true, as `MATCH (m), (n) SET ...` stores
+    them (measured on that path: 5 int, 2.5 float, 'src-y', true)."""
+    e = engines[route]
+    src, nid = _with_source(e, route), _id(route, "x")
+    ns463.rows(e, f"MATCH (m:{LABEL} {{id: $src}}) MERGE (n:{LABEL} {{id: $id}}) "
+                  "ON CREATE SET n.v = m.count + 1, n.g = m.f + 1, n.s = m.name + '-y', n.b = m.count > 1",
+               {"src": src, "id": nid})
+    assert _read(e, nid, "n.v, n.v > 4, n.g, n.s, n.b") == [
+        [(5, "int"), (True, "bool"), (2.5, "float"), ("src-y", "str"), (True, "bool")]]
+    assert [_node_prop(e, nid, k) for k in ("v", "g", "s", "b")] == [
+        (5, "int"), (2.5, "float"), ("src-y", "str"), (True, "bool")]
+
+
+@pytest.mark.parametrize("route", ns463.ROUTES)
+def test_on_match_set_from_another_bound_node_stores_the_typed_value(engines, route):
+    e = engines[route]
+    src, nid = _with_source(e, route), _id(route, "xm")
+    ns463.rows(e, f"CREATE (:{LABEL} {{id: $id}})", {"id": nid})
+    ns463.rows(e, f"MATCH (m:{LABEL} {{id: $src}}) MERGE (n:{LABEL} {{id: $id}}) ON MATCH SET n.v = m.count * 2",
+               {"src": src, "id": nid})
+    assert _read(e, nid, "n.v, n.v > 4") == [[(8, "int"), (True, "bool")]]
+
+
+def _edge(e, route):
+    a, b = _id(route, "ea"), _id(route, "eb")
+    ns463.rows(e, f"CREATE (:{LABEL} {{id: $a}}), (:{LABEL} {{id: $b}})", {"a": a, "b": b})
+    return a, b
+
+
+def _merge_edge(e, a, b, action, params=None):
+    ns463.rows(e, f"MATCH (a:{LABEL} {{id: $a}}), (b:{LABEL} {{id: $b}}) MERGE (a)-[r:R470M]->(b) {action}",
+               {"a": a, "b": b, **(params or {})})
+
+
+def _edge_w(e, a):
+    return ns463.typed(ns463.rows(e, f"MATCH (:{LABEL} {{id: $a}})-[r:R470M]->() RETURN r.w, r.w > 1", {"a": a}))
+
+
+@pytest.mark.parametrize("route", ns463.ROUTES)
+def test_on_match_set_of_a_relationship_from_its_own_value(engines, route):
+    """r.w = 1, then a MERGE that matches the edge: r.w + 1 is the integer 2 (it stored the AST's repr)."""
+    e = engines[route]
+    a, b = _edge(e, route)
+    _merge_edge(e, a, b, "ON CREATE SET r.w = 1")
+    _merge_edge(e, a, b, "ON MATCH SET r.w = r.w + 1")
+    assert _edge_w(e, a) == [[(2, "int"), (True, "bool")]]
+
+
+@pytest.mark.parametrize("route", ns463.ROUTES)
+def test_on_create_set_of_a_relationship_from_a_parameter(engines, route):
+    e = engines[route]
+    a, b = _edge(e, route)
+    _merge_edge(e, a, b, "ON CREATE SET r.w = $p + 1", {"p": 1})
+    assert _edge_w(e, a) == [[(2, "int"), (True, "bool")]]

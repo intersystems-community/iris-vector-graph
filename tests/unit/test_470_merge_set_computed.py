@@ -92,3 +92,74 @@ def test_a_value_reading_the_merged_node_names_no_return_alias(q):
         assert "n0." not in s, s
         assert "AS VARCHAR(4000)" not in s, s
 
+
+# ── the lead's review of 54860387 ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("p, expected", [(3, (6, "int")), (5, (10, "int"))])
+def test_a_parameter_expression_binds_this_calls_value(p, expected):
+    """`$p * 2` is worked out from this call's $p: the second call (p = 5) binds 10, not the first call's 6."""
+    stmts = _statements("MERGE (n:T {id: $id}) ON CREATE SET n.v = $p * 2", {"id": f"pm{p}", "p": p})
+    assert [_typed(b[0]) for s, b in stmts if s.startswith(_UPDATE_BOUND)] == [expected]
+    assert [_typed(b[1]) for s, b in stmts if s.startswith(_INSERT_BOUND)] == [expected]
+
+
+def _writes_of(q, key):
+    """The UPDATE / INSERT statements of rdf_props that write property `key`."""
+    return [
+        s for s, b in _statements(q)
+        if s.startswith(("UPDATE Graph_KG.rdf_props", "INSERT INTO Graph_KG.rdf_props")) and key in b
+    ]
+
+
+@pytest.mark.parametrize("action", ["ON CREATE", "ON MATCH"])
+@pytest.mark.parametrize("expr", ["m.count + 1", "m.f + 1", "m.name + '-y'", "m.count > 4"])
+def test_a_value_read_from_another_bound_node_is_not_cast_to_text(action, expr):
+    """`MATCH (m) MERGE (n {id: 'x'}) ON CREATE SET n.v = m.count + 1`: CAST((...) AS VARCHAR(4000)) stored the
+    number 5 as the text '5' (4.7.0 b9d779bc). The value is computed as `MATCH (m), (n) SET n.v = m.count + 1`
+    computes it."""
+    q = f"MATCH (m:T {{id: 'src'}}) MERGE (n:T {{id: 'x'}}) {action} SET n.v = {expr}"
+    _assert_no_ast_bound(q, {})
+    writes = _writes_of(q, "v")
+    assert len(writes) == 2, writes
+    for s in writes:
+        assert "AS VARCHAR(4000)" not in s, s
+
+
+def _assert_no_ast_bound(q, params):
+    """No statement binds an expression's AST (or its repr): the driver refuses it or stores the repr."""
+    from iris_vector_graph.cypher import ast as cypher_ast
+
+    for _, bound in _statements(q, params):
+        for b in bound:
+            assert not isinstance(
+                b, (cypher_ast.FunctionCall, cypher_ast.PropertyReference, cypher_ast.Literal, cypher_ast.BooleanExpression)
+            ), b
+            assert not (isinstance(b, str) and ("FunctionCall(" in b or "PropertyReference(" in b)), b
+
+
+@pytest.mark.parametrize("q, params", [
+    ("MATCH (a:T {id: 'd'}), (b:T {id: 'e'}) MERGE (a)-[r:R]->(b) ON MATCH SET r.w = r.w + 1", {}),
+    ("MATCH (a:T {id: 'd'}), (b:T {id: 'e'}) MERGE (a)-[r:R]->(b) ON CREATE SET r.w = r.w * 2", {}),
+    ("MATCH (a:T {id: 'd'}), (b:T {id: 'e'}) MERGE (a)-[r:R]->(b) ON MATCH SET r.w = r.w + $p", {"p": 1}),
+])
+def test_a_relationship_value_computed_from_the_edge_binds_no_ast(q, params):
+    """`ON MATCH SET r.w = r.w + 1` bound the expression's AST, stored as its repr (4.7.0 b9d779bc)."""
+    _assert_no_ast_bound(q, params)
+
+
+def test_a_relationship_parameter_expression_is_bound_with_its_type():
+    stmts = _statements(
+        "MATCH (a:T {id: 'd'}), (b:T {id: 'e'}) MERGE (a)-[r:R]->(b) ON CREATE SET r.w = $p + 1", {"p": 1}
+    )
+    assert [b[:3] for s, b in stmts if "CypherFn_IVGJSONSET" in s] == [["w", "2", "number"]]
+
+
+
+@pytest.mark.parametrize("value", ["a.count + 1", "a.count"])
+def test_a_relationship_value_read_from_another_variable_is_refused_by_name(value):
+    """Not supported in 4.7.0: refused before anything is written, where it stored the AST's repr."""
+    with pytest.raises(SyntaxError, match="read from another variable"):
+        translate_to_sql(parse_query(
+            f"MATCH (a:T {{id: 'd'}}), (b:T {{id: 'e'}}) MERGE (a)-[r:R]->(b) ON MATCH SET r.w = {value}"
+        ), {})
