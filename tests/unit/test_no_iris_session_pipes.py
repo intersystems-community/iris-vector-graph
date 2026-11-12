@@ -49,17 +49,6 @@ STILL_PIPING = {
     "scripts/install-embedded-deps.sh": "embedded deps check in USER",
     "scripts/line_coverage/run_gate.sh": "line-coverage gate (Cov.cls load and dumps)",
     "scripts/test-container.sh": "Community container class load",
-    "tests/integration/test_044_bm25_incremental.py": "ObjectScript caller",
-    "tests/integration/test_adjacency_from_seed.py": "ObjectScript caller",
-    "tests/integration/test_cypher_engine_objectscript.py": "ObjectScript caller",
-    "tests/integration/test_ivg400_rescue_resume_live.py": "%SYS setup",
-    "tests/integration/test_ledger_lock_and_chunks.py": "ObjectScript caller",
-    "tests/integration/test_mcp_tools.py": "ObjectScript caller",
-    "tests/integration/test_namespace_integration.py": "%SYS namespace setup",
-    "tests/integration/test_nkg_accel_no_library.py": "ObjectScript caller",
-    "tests/integration/test_rest_service_handlers.py": "ObjectScript caller",
-    "tests/integration/test_small_helper_classes.py": "ObjectScript caller",
-    "tests/integration/test_vecindex_trees.py": "ObjectScript caller",
 }
 
 

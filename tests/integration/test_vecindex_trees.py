@@ -149,19 +149,12 @@ def test_drop_removes_the_index(vi):
 
 
 def _session(*statements):
-    import os
-    import subprocess
+    from tests.integration import _tcp
 
-    container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
     script = 'write "<<"_"OUT",!\n' + "\n".join(statements) + '\nwrite !,"OUT"_">>",!\nhalt\n'
-    out = subprocess.run(
-        ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", TEST_NAMESPACE],
-        input=script, capture_output=True, text=True, timeout=120,
-    ).stdout
+    out = _tcp.session(script, TEST_NAMESPACE, timeout=120, check=True)
     body = out.split("<<OUT", 1)[1].split("OUT>>", 1)[0]
-    return dict(
-        line.split("=", 1) for line in body.splitlines() if "=" in line and not line.startswith(TEST_NAMESPACE)
-    )
+    return dict(line.split("=", 1) for line in body.splitlines() if "=" in line)
 
 
 def test_similarity_and_distance_follow_their_definitions_for_every_metric():

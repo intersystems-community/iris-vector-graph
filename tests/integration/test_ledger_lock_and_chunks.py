@@ -1,7 +1,7 @@
 """Ledger head-lock timeouts and the chunked large-result path (Graph.KG.Ledger).
 
 A Native API lock is invisible to ObjectScript's Lock command, so the head lock is held by
-an ObjectScript terminal process in the run's namespace (IVG_NAMESPACE; it was always USER,
+an ObjectScript process (tests/integration/_tcp.py, over TCP) in the run's namespace (IVG_NAMESPACE; it was always USER,
 so in a scratch namespace the lock guarded nothing, 4.6.0 R129) for longer than
 Ledger.LOCKTIMEOUT (30 s). Each lock test therefore takes about 35 s.
 """
@@ -9,14 +9,13 @@ Ledger.LOCKTIMEOUT (30 s). Each lock test therefore takes about 35 s.
 from __future__ import annotations
 
 import os
-import subprocess
-import time
 
 import pytest
 
 from iris_vector_graph.ledger import Changeset
 from iris_vector_graph.ledger.errors import LedgerLockTimeoutError
 from tests.conftest import TEST_NAMESPACE
+from tests.integration import _tcp
 from tests.integration._ledger_helpers import make_engine
 
 SKIP_IRIS_TESTS = os.environ.get("SKIP_IRIS_TESTS", "false").lower() == "true"
@@ -25,22 +24,8 @@ pytestmark = pytest.mark.skipif(SKIP_IRIS_TESTS, reason="SKIP_IRIS_TESTS=true")
 HOLD_SECONDS = 38
 
 
-class HeldHeadLock:
-    def __init__(self, seconds=HOLD_SECONDS, namespace=TEST_NAMESPACE):
-        container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
-        self.proc = subprocess.Popen(
-            ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", namespace],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
-        )
-        self.proc.stdin.write(f'lock +^IVG.Ledger("head")\nhang {seconds}\nhalt\n')
-        self.proc.stdin.flush()
-        self.until = time.time() + seconds
-        time.sleep(3)
-
-    def release(self):
-        self.proc.terminate()
-        self.proc.wait(timeout=30)
-        time.sleep(max(0.0, self.until - time.time()) + 1)
+def HeldHeadLock(seconds=HOLD_SECONDS, namespace=TEST_NAMESPACE):
+    return _tcp.HeldLock('^IVG.Ledger("head")', namespace, seconds)
 
 
 @pytest.fixture

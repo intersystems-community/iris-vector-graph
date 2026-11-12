@@ -7,13 +7,12 @@ which is the only way to reach a Private class method. Chain a->b->c->d plus x-U
 from __future__ import annotations
 
 import os
-import subprocess
 
 import pytest
 
+from tests.integration import _tcp
 from tests.integration._236_world import PRED, World
 
-CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 NS236 = os.environ.get("IVG_NS_IVG236", "")  # the fixture refuses to run without it (R287)
 PROBE = """Class IVG236Tmp.AdjProbe Extends Graph.KG.NKGAccelAdjacency
 {
@@ -28,16 +27,17 @@ ClassMethod Probe(pSeed As %String, pHops As %Integer, pPreds As %String) As %St
 
 
 @pytest.fixture(scope="module")
-def probe_class(tmp_path_factory):
-    path = tmp_path_factory.mktemp("probe") / "AdjProbe.cls"
-    path.write_text(PROBE)
-    subprocess.run(["docker", "cp", str(path), f"{CONTAINER}:/tmp/AdjProbe.cls"], check=True, capture_output=True)
-    out = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", NS236],
-        input='write $system.OBJ.Load("/tmp/AdjProbe.cls","ck"),!\nhalt\n',
-        capture_output=True, text=True, timeout=120,
-    ).stdout
-    assert "Load finished successfully" in out, out
+def probe_class():
+    out = _tcp.session(
+        [
+            "set s=##class(%Stream.GlobalCharacter).%New()",
+            f"do s.Write({_tcp.objectscript_string(PROBE)})",
+            'set sc=$system.OBJ.LoadStream(s,"ck")',
+            'write !,"LOADED:",sc,!',
+        ],
+        NS236, timeout=120, check=True,
+    )
+    assert "Load finished successfully" in out and "LOADED:1" in out, out
 
 
 @pytest.fixture

@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 
 import pytest
 
 from iris_vector_graph.engine import IRISGraphEngine
+from tests.integration import _tcp
 from tests.integration._236_world import PRED, World
 from tests.helpers.dev_classes import BENCHMARK, EXEC, ensure_dev_classes
 
-CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 NS236 = os.environ.get("IVG_NS_IVG236", "")  # the fixture refuses to run without it (R287)
 
 
@@ -51,11 +50,7 @@ def test_benchmark_compares_the_two_bfs_forms_on_a_small_graph(ivg_236_scratch):
         e.create_edge(s, PRED, o)
     w.commit()
     try:
-        script = 'do ##class(Graph.KG.Benchmark).Run("alice",3)\nhalt\n'
-        out = subprocess.run(
-            ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", NS236],
-            input=script, capture_output=True, text=True, timeout=120,
-        ).stdout
+        out = _tcp.session(['do ##class(Graph.KG.Benchmark).Run("alice",3)'], NS236, timeout=120, check=True)
         assert "Standard BFS (Objects):" in out and "Fast BFS (PPG):" in out, out
         assert "Count: 3" in out.split("Standard BFS")[1].split("\n")[0]
     finally:

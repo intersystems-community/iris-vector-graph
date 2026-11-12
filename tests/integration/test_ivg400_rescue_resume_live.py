@@ -39,6 +39,7 @@ from tests.conftest import (
     docker_container_id,
     probe_instance_hostname,
 )
+from tests.integration import _tcp
 
 CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 PORT = int(os.environ.get("IVG_PORT", "31972"))
@@ -59,27 +60,16 @@ def _running(name: str) -> bool:
 
 
 def _ensure_namespace() -> None:
-    """Create the IVGRESCUE database and namespace, idempotently."""
-    script = (
-        'Set dir="/usr/irissys/mgr/ivgrescue/"\n'
-        'If \'##class(Config.Namespaces).Exists("IVGRESCUE") { '
-        "Do ##class(%File).CreateDirectoryChain(dir)  "
-        "Set db=##class(SYS.Database).%New()  Set db.Directory=dir  Set sc=db.%Save()  "
-        'Kill p  Set p("Directory")=dir  Set sc=##class(Config.Databases).Create("IVGRESCUE",.p)  '
-        'Kill p  Set p("Globals")="IVGRESCUE",p("Routines")="IVGRESCUE"  '
-        'Set sc=##class(Config.Namespaces).Create("IVGRESCUE",.p) }\n'
-        'Write "IVGRESCUE_EXISTS=",##class(Config.Namespaces).Exists("IVGRESCUE"),!\n'
-        "Halt\n"
-    )
-    out = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "%SYS"],
-        input=script,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    ).stdout
-    if "IVGRESCUE_EXISTS=1" not in out:
-        pytest.skip(f"could not create namespace {NAMESPACE} in {CONTAINER}: {out[-400:]}")
+    """Create the IVGRESCUE database (/usr/irissys/mgr/ivgrescue/) and namespace, idempotently, over TCP in %SYS
+    (scripts/dev/tcp_setup.py: no `iris session`, which Cortex XDR kills)."""
+    try:
+        with _tcp.tcp_setup.sys_native(PORT) as native:
+            _tcp.tcp_setup.make_namespace(native, NAMESPACE)
+            exists = _tcp.tcp_setup.namespace_exists(native, NAMESPACE)
+    except RuntimeError as exc:
+        pytest.skip(f"could not create namespace {NAMESPACE} in {CONTAINER}: {exc}")
+    if not exists:
+        pytest.skip(f"could not create namespace {NAMESPACE} in {CONTAINER}")
 
 
 def _connect():

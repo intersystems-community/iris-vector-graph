@@ -1,8 +1,8 @@
 """Graph.KG.MCPTools: the tools Claude Desktop reaches through the MCP service.
 
-The tool methods are instance methods that touch only SQL, ^KG and embedded Python, so a
-terminal session that instantiates the class runs the same code an MCP call would. Output is
-wrapped in markers so the banner and prompts can be ignored.
+The tool methods are instance methods that touch only SQL, ^KG and embedded Python, so
+ObjectScript lines that instantiate the class (run over TCP, tests/integration/_tcp.py) run the
+same code an MCP call would. Output is wrapped in markers.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import uuid
 import pytest
 
 from tests.conftest import TEST_NAMESPACE
+from tests.integration import _tcp
 
 from iris_vector_graph.engine import IRISGraphEngine
 
@@ -32,12 +33,9 @@ def tool(expression: str, python: bool = False):
         'write "R"_">>",!\n'
         "halt\n"
     )
-    proc = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", TEST_NAMESPACE],
-        input=script, capture_output=True, text=True, timeout=180,
-    )
-    raw = proc.stdout.split("<<R", 1)[1].split("R>>", 1)[0]
-    body = "".join(line for line in raw.splitlines() if line.strip() and not line.startswith(TEST_NAMESPACE))
+    out = _tcp.session(script, TEST_NAMESPACE, timeout=180, check=True)
+    raw = out.split("<<R", 1)[1].split("R>>", 1)[0]
+    body = "".join(line for line in raw.splitlines() if line.strip())
     return json.loads(body)
 
 
@@ -111,12 +109,9 @@ def scratch_tool(expression: str):
         'write "R"_">>",!\n'
         "halt\n"
     )
-    proc = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", NS236],
-        input=script, capture_output=True, text=True, timeout=300,
-    )
-    raw = proc.stdout.split("<<R", 1)[1].split("R>>", 1)[0]
-    return json.loads("".join(line for line in raw.splitlines() if line.strip() and not line.startswith(NS236)))
+    out = _tcp.session(script, NS236, timeout=300, check=True)
+    raw = out.split("<<R", 1)[1].split("R>>", 1)[0]
+    return json.loads("".join(line for line in raw.splitlines() if line.strip()))
 
 
 @pytest.fixture

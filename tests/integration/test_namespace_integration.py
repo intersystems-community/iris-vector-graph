@@ -3,14 +3,12 @@
 Requires ivg-iris-enterprise container (port 31972) and an IVGTEST namespace
 with no ^KG globals and no Graph.KG.* classes compiled.
 
-Setup (idempotent):
-    docker exec ivg-iris-enterprise bash -c '
-      echo "Set ns = ##class(Config.Namespaces).%New()
-      Set ns.Name = \\"IVGTEST\\"
-      Set ns.Globals = \\"USER\\"
-      Set ns.Routines = \\"USER\\"
-      Set tSC = ns.%Save()
-      Halt" | iris session IRIS -U %SYS'
+Setup (once; IVGTEST maps USER's database for globals and routines), over TCP in %SYS:
+    python - <<'EOF'
+    import sys; sys.path.insert(0, "scripts/dev"); import tcp_setup
+    with tcp_setup.sys_native() as n:
+        print(tcp_setup._call(n, "CreateNamespace", "IVGTEST", "USER", "USER"))
+    EOF
 
 These tests auto-skip if the enterprise container is not running.
 """
@@ -24,6 +22,7 @@ import pytest
 
 from iris_vector_graph.exceptions import NamespaceMismatchWarning
 from tests.conftest import arno_port
+from tests.integration import _tcp
 
 _ENTERPRISE_CONTAINER = os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
 _ENTERPRISE_PORT = arno_port()  # IVG_ARNO_PORT, else IVG_PORT (4.6.0 R171: defaulted to 31971)
@@ -76,26 +75,12 @@ def enterprise_conn_user():
 def enterprise_conn_ivgtest():
     if not _enterprise_running():
         pytest.skip(f"{_ENTERPRISE_CONTAINER} not running")
-    # Verify IVGTEST namespace exists. The probe prints a sentinel because the
-    # session banner carries the container's hex node name ("d16bb70c311d"), so a
-    # bare `"1" not in stdout` check answered "the namespace exists" on every
-    # container whose ID happens to contain a 1 — and the connection below then
-    # failed with `Access Denied` as an *error* rather than skipping.
-    check = subprocess.run(
-        [
-            "docker",
-            "exec",
-            _ENTERPRISE_CONTAINER,
-            "bash",
-            "-c",
-            'echo "Write \\"IVGTEST_EXISTS=\\",'
-            '##class(Config.Namespaces).Exists(\\"IVGTEST\\"),!\nHalt" '
-            "| iris session IRIS -U %SYS 2>&1",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if "IVGTEST_EXISTS=1" not in check.stdout:
+    # Verify IVGTEST namespace exists, asked of %SYS over TCP (scripts/dev/tcp_setup.py). The terminal probe this
+    # replaced printed a sentinel because the session banner carries the container's hex node name, so a bare
+    # `"1" not in stdout` check had answered "the namespace exists" on any container whose ID contains a 1.
+    with _tcp.tcp_setup.sys_native(_ENTERPRISE_PORT) as native:
+        exists = _tcp.tcp_setup.namespace_exists(native, "IVGTEST")
+    if not exists:
         pytest.skip("IVGTEST namespace not found — run the setup step in this module's docstring")
     conn = _connect("IVGTEST")
     yield conn

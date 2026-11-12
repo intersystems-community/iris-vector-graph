@@ -16,6 +16,8 @@ import time
 
 import pytest
 
+from tests.integration import _tcp
+
 CLS = "Graph.KG.BM25Index"
 VOCAB = 2000
 
@@ -139,32 +141,14 @@ def search(ix, name, q, k=10_000):
     return {r["id"]: r["score"] for r in json.loads(str(ix.call("Search", name, q, k)))}
 
 
-class HeldLock:
-    """Hold ^BM25Idx(name,"lock") in a separate IRIS terminal process for a few seconds.
+def HeldLock(name, seconds=7):
+    """Hold ^BM25Idx(name,"lock") in a separate ObjectScript process for a few seconds (tests/integration/_tcp.py).
 
     A Native API lock is not seen by ObjectScript's Lock command (measured), so the holder
     has to be an ObjectScript process."""
+    import os
 
-    def __init__(self, name, seconds=7):
-        import os
-        import subprocess
-
-        container = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
-        self.proc = subprocess.Popen(
-            ["docker", "exec", "-i", container, "iris", "session", "IRIS", "-U", os.environ["IVG_NS_IVG236"]],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True,
-        )
-        self.proc.stdin.write(f'lock +^BM25Idx("{name}","lock")\nhang {seconds}\nhalt\n')
-        self.proc.stdin.flush()
-        self.until = time.time() + seconds
-        time.sleep(3)
-
-    def release(self):
-        # Killing the docker client does not stop the session inside the container; the
-        # lock is gone when its `hang` ends, so wait for that.
-        self.proc.terminate()
-        self.proc.wait(timeout=30)
-        time.sleep(max(0.0, self.until - time.time()) + 1)
+    return _tcp.HeldLock(f'^BM25Idx("{name}","lock")', os.environ["IVG_NS_IVG236"], seconds)
 
 
 # --------------------------------------------------------------------------- T060

@@ -1,21 +1,17 @@
-"""Graph.KG.Service handlers, driven from a terminal session with stub %request and %response.
+"""Graph.KG.Service handlers, driven from ObjectScript lines (over TCP) with stub %request and %response.
 
 There is no web gateway in the enterprise test container, so the dispatch layer cannot
 be exercised over HTTP. The handlers only read %request.Content and write through the
-current device, so a session that sets those two objects runs exactly the code a REST call
-would. Output is wrapped in markers so the session banner and prompts can be ignored.
+current device, so lines that set those two objects (tests/integration/_tcp.py) run exactly the code a
+REST call would. Output is wrapped in markers.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 
 from tests.conftest import TEST_NAMESPACE
-
-
-CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
+from tests.integration import _tcp
 
 
 def run_handler(method: str, body: str | None) -> tuple[str, str]:
@@ -35,14 +31,9 @@ def run_handler(method: str, body: str | None) -> tuple[str, str]:
         + 'write "<<"_"STATUS:",%response.Status,":",rc,":STATUS"_">>",!\n'
         + 'halt\n'
     )
-    proc = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", TEST_NAMESPACE],
-        input=script, capture_output=True, text=True, timeout=120,
-    )
-    out = proc.stdout
+    out = _session(script)
     raw = out.split("<<BODY", 1)[1].split("BODY>>", 1)[0]
-    # the terminal prints its prompt around the handler's own output
-    text = "\n".join(line for line in raw.splitlines() if line.strip() and not line.startswith(TEST_NAMESPACE)).strip()
+    text = "\n".join(line for line in raw.splitlines() if line.strip()).strip()
     status = out.split("<<STATUS:", 1)[1].split(":STATUS>>", 1)[0]
     return status, text
 
@@ -78,10 +69,7 @@ def test_vector_and_hybrid_search_write_a_json_document():
 
 
 def _session(script: str) -> str:
-    return subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", TEST_NAMESPACE],
-        input=script, capture_output=True, text=True, timeout=120,
-    ).stdout
+    return _tcp.session(script, TEST_NAMESPACE, timeout=120, check=True)
 
 
 def test_create_web_app_registers_the_dispatch_class_and_can_be_removed():
@@ -110,7 +98,7 @@ def test_create_web_app_registers_the_dispatch_class_and_can_be_removed():
 
 
 def dispatch(url: str, method: str, body: str | None):
-    """Run the REST dispatcher (URL map and all) in a terminal session, as a gateway would."""
+    """Run the REST dispatcher (URL map and all) from ObjectScript lines, as a gateway would."""
     content = ""
     if body is not None:
         escaped = body.replace('"', '""')
@@ -135,7 +123,7 @@ def dispatch(url: str, method: str, body: str | None):
     )
     out = _session(script)
     raw = out.split("<<B", 1)[1].split("B>>", 1)[0]
-    text = "\n".join(line for line in raw.splitlines() if line.strip() and not line.startswith(TEST_NAMESPACE)).strip()
+    text = "\n".join(line for line in raw.splitlines() if line.strip()).strip()
     status = out.split("<<ST:", 1)[1].split(":ST>>", 1)[0]
     return status, text
 
