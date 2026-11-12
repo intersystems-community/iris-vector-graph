@@ -153,7 +153,14 @@ def previous_release(published: Sequence[str], wheel_version: str) -> str:
     return max(candidates)[1]
 
 
-def isolated_override(container_name: str) -> str:
+#: The cores the Community container is pinned to on a bigger host: it logs "Too many Cores" and exits on one with more
+#: than it allows (docker-compose.yml's header), as on the 32-core Studio in the 4.7.0 gate.
+COMMUNITY_CORES = 8
+
+
+def isolated_override(container_name: str, ncpu: Optional[int] = None) -> str:
+    """No published ports and its own name; on a Docker VM with more than COMMUNITY_CORES cores, pinned to the first."""
+    pin = f'    cpuset: "0-{COMMUNITY_CORES - 1}"\n' if ncpu and ncpu > COMMUNITY_CORES else ""
     return textwrap.dedent(
         f"""\
         services:
@@ -162,7 +169,18 @@ def isolated_override(container_name: str) -> str:
             ports: !reset []
             network_mode: bridge
         """
-    )
+    ) + pin
+
+
+def docker_cpus() -> Optional[int]:
+    """The Docker VM's core count (`docker info`), None when it does not answer."""
+    r = subprocess.run(["docker", "info", "--format", "{{.NCPU}}"], text=True, capture_output=True)
+    if r.returncode != 0:
+        return None
+    try:
+        return int(r.stdout.strip())
+    except ValueError:
+        return None
 
 
 # ---------------------------------------------------------------- execution
@@ -195,7 +213,7 @@ class Stack:
         if isolated:
             self.container = f"ivg-quickstart-e2e-{os.getpid()}"
             override = work / "compose.isolated.yml"
-            override.write_text(isolated_override(self.container))
+            override.write_text(isolated_override(self.container, docker_cpus()))
             self.files.append(override)
 
     def _compose(self, *args, **kw):

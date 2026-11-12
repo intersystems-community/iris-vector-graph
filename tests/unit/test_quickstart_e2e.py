@@ -151,6 +151,24 @@ class TestTheIsolatedOverride:
         assert "container_name: ivg-quickstart-e2e" in text
         assert "network_mode: bridge" in text
 
+    @pytest.mark.parametrize("ncpu, pinned", [(32, '"0-7"'), (9, '"0-7"'), (8, None), (4, None), (None, None)])
+    def test_community_is_pinned_to_eight_cores_on_a_bigger_host(self, ncpu, pinned):
+        """IRIS Community logs "Too many Cores" and exits on a host with more cores than it allows (docker-compose.yml),
+        so the 4.7.0 gate's run on the 32-core Studio stopped at `compose up`. An unknown count pins nothing."""
+        text = q.isolated_override("ivg-quickstart-e2e", ncpu)
+        if pinned:
+            assert f"cpuset: {pinned}" in text
+        else:
+            assert "cpuset" not in text
+
+    def test_the_stack_reads_the_docker_vms_core_count(self, monkeypatch, tmp_path):
+        import subprocess
+
+        monkeypatch.setattr(q.subprocess, "run",
+                            lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, stdout="32\n", stderr=""))
+        q.Stack(tmp_path, isolated=True, pull=False)
+        assert 'cpuset: "0-7"' in (tmp_path / "compose.isolated.yml").read_text()
+
 
 class TestTheComposeContainer:
     """docker-compose.yml names no container (4.6.0 R022): the shared run asks compose which one it started."""
