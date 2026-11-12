@@ -191,73 +191,73 @@ def probe_instance_hostname(conn):
                 native.close()
 
 
-def _recorded_schema(container_name: str, namespace: str) -> Optional[str]:
+def _deploy_native(namespace: str, port: Optional[int] = None):
+    """(connection, Native API handle) in `namespace` on 127.0.0.1:`port` (IVG_PORT, default 31972), as IRIS_USERNAME /
+    IRIS_PASSWORD (default _SYSTEM / SYS). The class deploy runs over TCP: piping ObjectScript into `iris session`
+    is what Cortex XDR kills (4.7.0)."""
+    import iris
+
+    conn = iris.createConnection(
+        hostname="127.0.0.1", port=int(port or os.environ.get("IVG_PORT", "31972")), namespace=namespace,
+        username=os.environ.get("IRIS_USERNAME", "_SYSTEM"), password=os.environ.get("IRIS_PASSWORD", "SYS"),
+    )
+    return conn, iris.createIRIS(conn)
+
+
+def _recorded_schema(native) -> Optional[str]:
     """The namespace's recorded IVG Schema (``^IVG.Deploy("schema")``), None when nothing is recorded."""
-    out = subprocess.run(
-        ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", namespace],
-        input='Write "IVGSCHEMA=",$Get(^IVG.Deploy("schema")),!\nH\n',
-        capture_output=True, text=True, timeout=120,
-    ).stdout
-    for line in out.splitlines():
-        if line.startswith("IVGSCHEMA="):
-            return line.partition("=")[2].strip() or None
-    raise RuntimeError(f"could not read the IVG Schema record of {namespace} in {container_name}: {out[-300:]!r}")
+    value = native.get("^IVG.Deploy", "schema")
+    if value is None:
+        return None
+    return str(value).strip() or None
 
 
-def _deploy_objectscript(container_name: str, namespace: Optional[str] = None) -> None:
+def _deploy_objectscript(container_name: str, namespace: Optional[str] = None, native=None,
+                         port: Optional[int] = None) -> None:
+    """Load the classes of iris_src/src whose source changed since the last deploy into `namespace` of
+    `container_name`, over TCP through `native` (a Native API handle in that namespace; one is opened on
+    127.0.0.1:`port` when not given). Each source is sent as a stream and loaded with %SYSTEM.OBJ.LoadStream, one
+    class at a time ("ck-d", no background workers: Community Edition's 2-core limit made LoadDir's parallel
+    compile fail ERROR #7802), and its hash recorded in ^IVGDeployed(namespace, file) when it loaded."""
     namespace = namespace or _IVG_NAMESPACE
+    if native is None:
+        conn, native = _deploy_native(namespace, port)
+        try:
+            return _deploy_objectscript(container_name, namespace, native=native)
+        finally:
+            with contextlib.suppress(Exception):
+                conn.close()
     # The sources load as written, and they name Graph_KG. A namespace recorded under another IVG Schema would get
-    # Graph_KG's schema classes beside its own (4.6.0 R173), so it refuses before anything is copied or loaded.
+    # Graph_KG's schema classes beside its own (4.6.0 R173), so it refuses before anything is loaded.
     from iris_vector_graph.schema_name import DEFAULT_SCHEMA, IVGSchemaError, same_schema
 
-    recorded_schema = _recorded_schema(container_name, namespace)
+    recorded_schema = _recorded_schema(native)
     if recorded_schema is not None and not same_schema(recorded_schema, DEFAULT_SCHEMA):
         raise IVGSchemaError.mismatch(recorded_schema, DEFAULT_SCHEMA, namespace)
-    # A scratch namespace stages its own copy: /tmp/src is what `compile-all` loads
-    # into USER, so overwriting it from here would hand the next USER compile this
-    # checkout's classes.
-    stage = "/tmp/src" if namespace == "USER" else f"/tmp/src_{namespace}"
-    subprocess.run(
-        ["docker", "exec", container_name, "mkdir", "-p", stage],
-        capture_output=True,
-    )
-    subprocess.run(
-        ["docker", "cp", "iris_src/src/.", f"{container_name}:{stage}/"],
-        capture_output=True,
-    )
-    # Load each .cls file individually with "ck-d" (no background workers).
-    # Community Edition is limited to 2 CPU cores; LoadDir with parallel compilation
-    # fails with ERROR #7802 on machines with many cores because the IRIS work queue
-    # manager spawns more background jobs than the CE license allows.
-    # Loading files one at a time avoids the worker queue entirely.
     import glob as _glob
     cls_files = sorted(_glob.glob("iris_src/src/**/*.cls", recursive=True))
     sources = {
         os.path.relpath(f, "iris_src/src").replace(os.sep, "/"): _source_hash(f) for f in cls_files
     }
-    recorded = _recorded_deploy_hashes(container_name, sources, namespace)
+    recorded = _recorded_deploy_hashes(native, sources, namespace)
     failed = []
     for rel in classes_to_deploy(sources, recorded):
         # A class whose source is unchanged since the last deploy into this namespace is not
         # compiled again. Recompiling all 57 classes at the start of every test session made each
         # session slow, timed out under load (the "errors in 33 s" in the setup of whatever file
         # was unlucky), and, under the line monitor, stopped it counting the recompiled routines.
-        out = subprocess.run(
-            ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", namespace],
-            input=(
-                f'Set tSC=$system.OBJ.Load("{stage}/{rel}","ck-d")\n'
-                f'If $system.Status.IsOK(tSC) Set ^IVGDeployed("{namespace}","{rel}")="{sources[rel]}" '
-                'Write !,"IVGLOAD=OK",!\n'
-                'If $system.Status.IsError(tSC) Write !,"IVGLOAD=ERR ",$system.Status.GetErrorText(tSC),!\n'
-                "H\n"
-            ),
-            capture_output=True, text=True, timeout=300,
-        ).stdout or ""
+        with open(os.path.join("iris_src", "src", rel), encoding="utf-8") as fh:
+            text = fh.read()
+        stream = native.classMethodObject("%Stream.GlobalCharacter", "%New")
+        for i in range(0, len(text), 1_000_000):
+            stream.invoke("Write", text[i: i + 1_000_000])
+        stream.invoke("Rewind")
+        status = native.classMethodValue("%SYSTEM.OBJ", "LoadStream", stream, "ck-d")
         # every load's status is read (4.6.0 R235): a SqlProcs that failed #5083 left the session without it, silently
-        status = [line.strip() for line in out.splitlines() if line.strip().startswith("IVGLOAD=")]
-        if status != ["IVGLOAD=OK"]:
-            why = status[0][len("IVGLOAD="):] if status else f"no load status in {out[-300:]!r}"
-            failed.append(f"{rel}: {why}")
+        if status == 1 or str(status) == "1":
+            native.set(sources[rel], "^IVGDeployed", namespace, rel)
+        else:
+            failed.append(f"{rel}: {native.classMethodValue('%SYSTEM.Status', 'GetErrorText', status)}")
     if failed:
         raise RuntimeError(f"ObjectScript deploy into {namespace} failed for {len(failed)} class(es): " + "; ".join(failed))
 
@@ -283,23 +283,15 @@ def classes_to_deploy(sources: dict, recorded: dict) -> list:
     return sorted(changed, key=lambda rel: rel == SQL_PROCS)
 
 
-def _recorded_deploy_hashes(container_name: str, sources: dict, namespace: Optional[str] = None) -> dict:
+def _recorded_deploy_hashes(native, sources: dict, namespace: Optional[str] = None) -> dict:
+    """{file: hash} of what was last deployed into `namespace` (``^IVGDeployed(namespace, file)``), read over TCP."""
     namespace = namespace or _IVG_NAMESPACE
-    lines = "".join(
-        f'Write "{rel}=",$Get(^IVGDeployed("{namespace}","{rel}")),!\n' for rel in sources
-    )
-    try:
-        out = subprocess.run(
-            ["docker", "exec", "-i", container_name, "iris", "session", "IRIS", "-U", namespace],
-            input=lines + "H\n", capture_output=True, text=True, timeout=120,
-        ).stdout
-    except Exception:
-        return {}
     recorded = {}
-    for line in out.splitlines():
-        rel, sep, value = line.partition("=")
-        if sep and rel in sources and value.strip():
-            recorded[rel] = value.strip()
+    for rel in sources:
+        value = native.get("^IVGDeployed", namespace, rel)
+        value = "" if value is None else str(value).strip()
+        if value:
+            recorded[rel] = value
     return recorded
 
 

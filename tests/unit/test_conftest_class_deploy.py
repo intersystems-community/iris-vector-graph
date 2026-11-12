@@ -1,4 +1,7 @@
-"""tests/conftest.py recompiles only the ObjectScript classes whose source changed since the last deploy."""
+"""tests/conftest.py recompiles only the ObjectScript classes whose source changed since the last deploy, over TCP
+(4.7.0: no `iris session`, which Cortex XDR kills)."""
+
+import re
 
 import pytest
 
@@ -40,54 +43,94 @@ def test_the_sql_procedure_forwarder_loads_last():
     assert unchanged == sorted(set(sources) - {"Graph/KG/SqlProcs.cls"})
 
 
-class _Docker:
-    """subprocess.run as _deploy_objectscript calls it: docker exec/cp, an IRIS session answering per class."""
+# ------------------------------------------------------------------ 4.7.0: over TCP, no `iris session`
 
-    def __init__(self, fail=None, silent=None):
-        self.fail, self.silent, self.loaded = fail or {}, silent or set(), []
 
-    def __call__(self, argv, input=None, **kw):
-        import subprocess
+class _Stream:
+    def __init__(self):
+        self.text = ""
 
-        out = ""
-        if input and "IVGSCHEMA=" in input:
-            out = "IVGSCHEMA=\n"
-        elif input and "$system.OBJ.Load(" in input:
-            rel = input.split('$system.OBJ.Load("', 1)[1].split('"', 1)[0].split("/", 3)[3]
+    def invoke(self, method, *args):
+        if method == "Write":
+            self.text += args[0]
+
+
+class _Native:
+    """The Native API handle _deploy_objectscript uses: the source sent as a stream and loaded with LoadStream, the
+    schema record and the deploy hashes read and written as globals. Only names `iris.IRIS` has."""
+
+    def __init__(self, fail=None, schema=None):
+        self.fail, self.loaded, self.flags = fail or {}, [], set()
+        self.globals = {("^IVG.Deploy", "schema"): schema} if schema else {}
+
+    def classMethodObject(self, cls, method, *args):
+        assert (cls, method) == ("%Stream.GlobalCharacter", "%New")
+        return _Stream()
+
+    def classMethodValue(self, cls, method, *args):
+        if (cls, method) == ("%SYSTEM.OBJ", "LoadStream"):
+            stream, flags = args
+            name = re.search(r"^Class\s+([\w.%]+)", stream.text, re.M).group(1)
+            rel = name.replace(".", "/") + ".cls"
             self.loaded.append(rel)
-            if rel in self.silent:
-                out = "USER>\n"
-            elif rel in self.fail:
-                out = f"IVGLOAD=ERR {self.fail[rel]}\n"
-            else:
-                out = "IVGLOAD=OK\n"
-        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+            self.flags.add(flags)
+            return self.fail.get(rel, 1)
+        if (cls, method) == ("%SYSTEM.Status", "GetErrorText"):
+            return args[0]
+        raise AssertionError((cls, method))
+
+    def get(self, name, *subs):
+        return self.globals.get((name, *subs))
+
+    def set(self, value, name, *subs):
+        self.globals[(name, *subs)] = value
 
 
-def _deploy(docker):
+def _deploy(native):
     from unittest import mock
 
     import tests.conftest as cf
 
-    with mock.patch.object(cf.subprocess, "run", docker), \
-            mock.patch.object(cf, "_recorded_deploy_hashes", lambda *a, **k: {}):
-        cf._deploy_objectscript("ivg-iris-enterprise", "IVG460FXY")
+    def no_subprocess(*a, **k):
+        raise AssertionError(f"the deploy ran a process: {a}")
+
+    with mock.patch.object(cf.subprocess, "run", no_subprocess):
+        cf._deploy_objectscript("ivg-iris-enterprise", "IVG460FXY", native=native)
 
 
 def test_every_class_loads_with_sql_procs_last():
-    docker = _Docker()
-    _deploy(docker)
-    assert docker.loaded[-1] == "Graph/KG/SqlProcs.cls"
-    assert "Graph/KG/Traversal.cls" in docker.loaded
+    native = _Native()
+    _deploy(native)
+    assert native.loaded[-1] == "Graph/KG/SqlProcs.cls"
+    assert "Graph/KG/Traversal.cls" in native.loaded
+    assert native.flags == {"ck-d"}
+
+
+def test_a_loaded_class_records_its_hash_and_is_not_loaded_again():
+    from tests.conftest import _source_hash
+
+    native = _Native()
+    _deploy(native)
+    first = len(native.loaded)
+    assert native.get("^IVGDeployed", "IVG460FXY", "Graph/KG/Traversal.cls") == _source_hash(
+        "iris_src/src/Graph/KG/Traversal.cls")
+    _deploy(native)
+    assert len(native.loaded) == first
 
 
 def test_a_class_that_fails_to_load_fails_the_deploy_naming_it():
     err = ("ERROR #5083: Stored procedure name is not unique: DijkstraPath, projected from "
            "Graph.KG.SqlProcs.DijkstraPath (function) and Graph.KG.Traversal.DijkstraProc (function)")
+    native = _Native(fail={"Graph/KG/SqlProcs.cls": err})
     with pytest.raises(RuntimeError, match=r"Graph/KG/SqlProcs\.cls.*#5083"):
-        _deploy(_Docker(fail={"Graph/KG/SqlProcs.cls": err}))
+        _deploy(native)
+    assert native.get("^IVGDeployed", "IVG460FXY", "Graph/KG/SqlProcs.cls") is None
 
 
-def test_a_load_that_reports_nothing_fails_the_deploy():
-    with pytest.raises(RuntimeError, match=r"Graph/KG/Traversal\.cls"):
-        _deploy(_Docker(silent={"Graph/KG/Traversal.cls"}))
+def test_a_namespace_recorded_under_another_schema_is_refused_before_loading():
+    from iris_vector_graph.schema_name import IVGSchemaError
+
+    with pytest.raises(IVGSchemaError):
+        _deploy(_Native(schema="IVGALT"))
+
+
