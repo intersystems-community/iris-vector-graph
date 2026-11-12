@@ -89,3 +89,14 @@ Found during 4.7.0 and not in its cut (the list is frozen).
   engine built as `IRISGraphEngine(conn)` raises "embedding_dimension must be set" on a namespace whose embedding
   columns another writer declared (768) but that records no width, where it could read the declared one. The examples
   hit it in the quickstart once row 25 refused a mismatched width; the RDF demo now declares the README's 768.
+- **MERGE SET values the 4.7.0 fix does not reach** (4.6.5 and 4.7.0; loud, found by w470-merge): in a pattern MERGE,
+  `ON CREATE SET a.c2 = a.count + 1` on a node an earlier MATCH bound answers `<ARGUMENT ERROR> Unsupported argument
+  type`; `ON MATCH SET n.s = size(n.id)` still fails with SQLCODE -23 (an own-node value `MATCH ... SET` cannot compute);
+  `ON MATCH SET n.v = 1 / 0` on a node the MERGE creates raises -149 though ON MATCH does not fire. (`ON MATCH SET
+  n.count = n.count + 1`, the walkthrough's W2, is fixed in 4.7.0.)
+- **Expert walkthrough papercuts:** ADMIN_GUIDE §1 creates a namespace through `iris session` only (no route for a site
+  that cannot run a terminal); the v4.7.0 "Upgrading" note does not say from which versions; `reify_edge()`'s TypeError
+  for an unknown keyword does not show its arguments.
+- **Walkthrough papercuts (4.7.0 Python walker):** README and QUICKSTART show no node with an embedding
+  (`store_embeddings()` is a separate call, USER_GUIDE §7), and no transaction example (`START TRANSACTION` or
+  `autocommit = False`; the driver has no `begin()`).

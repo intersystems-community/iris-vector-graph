@@ -772,7 +772,7 @@ def execute_cypher(
 ) -> 'IVGResult'
 ```
 
-Run a Cypher query and return its rows as an `IVGResult`. A read the native executor supports runs over `^KG` (on by default; the engine's `native_cypher=False` or `IVG_NATIVE_CYPHER=0` turns it off); every other query is translated to IRIS SQL. Writes (CREATE, MERGE, SET, DELETE) change the graph unless `read_only=True`. A failed statement comes back with `IVGResult.error` set and no rows, unless `raise_on_error=True`.
+Run a Cypher query and return its rows as an `IVGResult`. A read the native executor supports runs over `^KG` (on by default; the engine's `native_cypher=False` or `IVG_NATIVE_CYPHER=0` turns it off); every other query is translated to IRIS SQL. Writes (CREATE, MERGE, SET, DELETE) change the graph unless `read_only=True`. A failed read comes back with `IVGResult.error` set and no rows, unless `raise_on_error=True`; a write that IRIS or IVG refuses raises `GraphWriteError` whatever `raise_on_error` says, after rolling the statement back (USER_GUIDE, Errors).
 
 #### `khop2_count_exact`
 
