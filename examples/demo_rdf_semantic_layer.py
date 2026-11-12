@@ -307,7 +307,7 @@ def main():
     print(f"\n  Connected to IRIS")
 
     from iris_vector_graph.engine import IRISGraphEngine
-    engine = IRISGraphEngine(conn, embedding_dimension=4)
+    engine = IRISGraphEngine(conn, embedding_dimension=768)  # the README's width: the examples share a namespace
     engine.initialize_schema()
 
     with tempfile.TemporaryDirectory() as outdir:

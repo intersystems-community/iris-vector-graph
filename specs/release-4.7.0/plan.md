@@ -85,3 +85,7 @@ Found during 4.7.0 and not in its cut (the list is frozen).
   tests/e2e/test_470_tck_unwind_shapes_e2e.py). The TCK's quantifier invariants compare the wrong value with itself.
 - **A subscript of a collected boolean expression answers 1 / 0** (4.7.0, as 4.6.5): `collect(a OR b)[0]` and
   `head(...)` answer `0` for false; the list itself answers booleans (e521a35a, docs/KNOWN_ISSUES.md).
+- **`initialize_schema()` without a width refuses a namespace whose columns are already declared** (4.7.0; loud): an
+  engine built as `IRISGraphEngine(conn)` raises "embedding_dimension must be set" on a namespace whose embedding
+  columns another writer declared (768) but that records no width, where it could read the declared one. The examples
+  hit it in the quickstart once row 25 refused a mismatched width; the RDF demo now declares the README's 768.
