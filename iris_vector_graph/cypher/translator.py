@@ -7385,8 +7385,10 @@ def _translate_to_sql(cypher_query, params, engine, procedures) -> SQLQuery:
     return sql_query
 
 
-#: A stage's head and select list (`StageN AS (\nSELECT ...\nFROM`), as build_stage_sql writes it
-_STAGE_SELECT = re.compile(r"(?<![\w.])(Stage\d+) AS \(\nSELECT (.*?)\nFROM ", re.S)
+#: A stage's head and select list (`StageN AS (\nSELECT ...\nFROM`), as build_stage_sql writes it; never past the `\n)`
+#: that closes a stage without a FROM (`SELECT ? AS __l0`), whose match ran on into the next stage's columns and tested
+#: them under its name (4.7.0 gate, tests/unit/test_470_unread_json_text_stage.py).
+_STAGE_SELECT = re.compile(r"(?<![\w.])(Stage\d+) AS \(\nSELECT ((?:(?!\n\)).)*?)\nFROM ", re.S)
 
 
 def _drop_unread_json_texts(sql: str) -> str:
