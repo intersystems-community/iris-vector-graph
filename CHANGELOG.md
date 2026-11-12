@@ -29,6 +29,9 @@ whatever setup ran: see the list that follows.
   `SET n.p = toFloat(n.p)`).
 - A cosine VecIndex's `score` is the cosine (it was cos − 1): add 1 to a threshold written for the old scale.
 - `toBoolean()` converts only `'true'` and `'false'` (any case); other strings answer null.
+- A relationship's `MERGE ... ON CREATE SET` / `ON MATCH SET` value read from another variable
+  (`ON MATCH SET r.w = a.count + 1`) raises `SyntaxError` and writes nothing; it stored the expression's repr. Set it
+  in a `SET` after the `MERGE`.
 - A clause after a `db.*`, `dbms.*` or `apoc.*` call is applied (a `WITH ... WHERE` of yielded names, a `RETURN` of a
   subset of them) or raises; it was dropped.
 - The ledger's `enable()` and `redact()` refuse an open transaction (`LedgerTransactionOpenError`) on every engine.
@@ -207,9 +210,20 @@ WHERE label = 'A' RETURN label` answered every label; it answers the filtered on
   `Stage2.e__j` not found" (a stage without FROM lent its name to the next when unread JSON text columns were dropped).
 - **A grouping read over an UNWIND of a long collected list answers on a many-core server.** Since 4.6.0 such a read
   (`MATCH (n:L) WITH n.k AS k, collect(n) AS ns UNWIND ns AS x RETURN k, count(x)`) on 2026.3 retries with the list
-  read by position when IRIS refuses it. On a 32-core host IRIS reported the refusal as `Encoded subscript 1 > 32767
-bytes`, which the retry did not recognise, and its parallel plan of the retry failed the same way: 2,000 nodes failed
-  with `-400 <SUBSCRIPT>`. The retry recognises that form and runs with `%NOPARALLEL`; the first attempt is unchanged.
+  read by position when IRIS refuses it. On a 32-core host IRIS reported the refusal as
+  `Encoded subscript 1 > 32767 bytes`, which the retry did not recognise, and its parallel plan of the retry failed
+  the same way: 2,000 nodes failed with `-400 <SUBSCRIPT>`. The retry recognises that form and runs with
+  `%NOPARALLEL`; the first attempt is unchanged.
+- **`MERGE ... ON CREATE SET` / `ON MATCH SET` of a computed value stores its type** (4.6.5 stored text). The value
+  was cast to VARCHAR: `MERGE (n:T {id: 'c'}) ON CREATE SET n.count = 1 + 1` stored `'2'`, so `n.count > 1` was null on
+  4.7.0; `1 < 2` stored `'1'`; `MATCH (m) MERGE (n ...) ON CREATE SET n.v = m.count + 1` stored `'5'`; on a
+  relationship, `ON CREATE SET r.w = 1 + 1` and `ON MATCH SET r.w = r.w + 1` stored the expression's repr
+  (`"FunctionCall(function_name='__arith_+', ...)"`). Each now stores the number, boolean or string `CREATE` and
+  `SET` store (`2`, `true`, `5`, `2`), a `$p` in it worked out on each call (`$p * 2` with 3, then 5: `6`, `10`).
+- **`MERGE ... ON MATCH SET n.count = n.count + 1` writes.** A value reading the merged node failed with SQLCODE -23
+  ("Label 'N0' is not listed among the applicable tables") and wrote nothing, on 4.6.5 as well; it is computed from
+  the node's stored row as `MATCH ... SET` computes it (`count` 1 becomes `2`). A function `SET` does not compute,
+  such as `size(n.id)`, still fails there (Known issues).
 - `examples/demo_rdf_semantic_layer.py` declares the README's embedding width (768). It asked for 4 though it stores no
   vector, and run after the other examples it stopped at `initialize_schema()` on 4.7.0's width refusal.
 - `status()` as a reading or writing role (ADMIN_GUIDE §3) reported the adjacency index probe as a privilege error

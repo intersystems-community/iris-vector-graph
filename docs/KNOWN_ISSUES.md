@@ -128,6 +128,38 @@ r = engine.execute_cypher(
 - **Check:** `SELECT qualifiers FROM Graph_KG.rdf_edges WHERE s = ? AND p = ? AND o_id = ?` shows `"p": "0.95"`
   (quoted) for a Cypher-written number and `"p": 0.95` for one `create_edge` wrote.
 
+### Some `MERGE ... ON CREATE SET` / `ON MATCH SET` values are refused
+
+- **Symptom:** a value `MATCH ... SET` cannot compute from the merged node, such as `ON MATCH SET n.s = size(n.id)`,
+  fails with SQLCODE -23 ("Label 'N0' is not listed among the applicable tables") and writes nothing. In a pattern
+  MERGE, `MATCH (a) MERGE (a)-[:R]->(b {id: 'e'}) ON CREATE SET a.c = a.count + 1` answers
+  `<ARGUMENT ERROR> Unsupported argument type`. A relationship's value read from another variable
+  (`ON MATCH SET r.w = a.count + 1`) raises `SyntaxError`. `ON MATCH SET n.v = 1 / 0` raises -149 on a node the MERGE
+  creates, though ON MATCH does not fire there.
+- **Versions:** 4.6.5 and 4.7.0 (4.7.0 fixed arithmetic of the merged node's own properties, literals and parameters,
+  and values read from another node; the rest is planned for 4.7.1).
+- **Workaround:** a `SET` after the `MERGE`, which computes the value on every path:
+  `MERGE (n:L {id: $id}) SET n.s = size(n.id)`; for the matched case only, a second `MATCH ... SET`.
+
+### `SET n.p = null` leaves `p` in `keys(n)`, and `properties(n)` answers `''` for it
+
+- **Symptom:** after `MATCH (n {id: 'q'}) SET n.z = null`, `keys(n)` still lists `z` and `properties(n)` answers
+  `{z: ''}`; `n.z` and `n.z IS NULL` read null, and a `WHERE n.z IS NOT NULL` filter leaves the node out. A
+  `MERGE ... ON CREATE SET n.p = <value that is null>` (`m.missing + 1`) leaves the key the same way. openCypher
+  removes the property.
+- **Versions:** 4.6.5 and 4.7.0 (found during 4.7.0; planned for 4.7.1).
+- **Workaround:** `REMOVE n.z`, or `SET n += {z: null}`, both of which remove the key.
+- **Check:** `MATCH (n {id: 'q'}) RETURN keys(n)`.
+
+### A whole-number result of `SET` arithmetic reads back as an integer
+
+- **Symptom:** `MATCH (n {id: 'h'}) SET n.w = n.w * 1.5` over `w: 2` stores the integer `3`, though `RETURN 2 * 1.5`
+  answers `3.0`; on a relationship, `SET r.w = r.w * 1.5` and `SET r.w = $v` with `v = 3.0` do the same. openCypher
+  answers the float `3.0`. A result with a fraction (`3 * 1.5` is `4.5`), a literal `3.0`, a Python-written `3.0` and
+  a node's `SET n.w = $v` keep the float.
+- **Versions:** 4.6.5 and 4.7.0 (found during 4.7.0; planned for 4.7.1).
+- **Workaround:** read the value with `toFloat(n.w)`, which answers `3.0`; comparisons (`n.w = 3`) are unaffected.
+
 ### A property cannot tell a number from a string that spells it
 
 - **Symptom:** a number filter also matches a string that spells the number, and a read can answer the wrong one of

@@ -100,3 +100,7 @@ Found during 4.7.0 and not in its cut (the list is frozen).
 - **Walkthrough papercuts (4.7.0 Python walker):** README and QUICKSTART show no node with an embedding
   (`store_embeddings()` is a separate call, USER_GUIDE §7), and no transaction example (`START TRANSACTION` or
   `autocommit = False`; the driver has no `begin()`).
+- **Frozen at 4.7.0 (Tom, 2026-11-12: "Freeze; to 4.7.1"), silent, all in 4.6.5:** `SET n.p = null` leaves `p` in
+  `keys(n)` and `properties(n)` answers `''` for it (also a MERGE value that evaluates to null); a whole-number result of
+  `SET` arithmetic (`n.w * 1.5` over 2) and a relationship's `SET r.w = $v` of `3.0` read back as the integer 3. Both in
+  docs/KNOWN_ISSUES.md with workarounds (`REMOVE n.p`; `toFloat()`).
