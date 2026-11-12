@@ -57,14 +57,12 @@ Write "RESULT ",$Select($System.Status.IsOK(sc):"OK",1:$System.Status.GetErrorTe
 
 
 def _sys(script):
-    p = subprocess.run(
-        ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "%SYS"],
-        input=script + "Halt\n",
-        capture_output=True,
-        text=True,
-        timeout=300,
-    )
-    return [ln for ln in p.stdout.splitlines() if ln.startswith("RESULT")]
+    """The RESULT lines of `script` run in %SYS (it makes and deletes the namespace and its database), over TCP
+    (tests/helpers/iris_lines.py; 4.7.0: no `iris session`)."""
+    from tests.helpers.iris_lines import session
+
+    out = session(script, "%SYS", allow_sys=True, timeout=300)
+    return [ln for ln in out.splitlines() if ln.startswith("RESULT")]
 
 
 @pytest.fixture(scope="module")

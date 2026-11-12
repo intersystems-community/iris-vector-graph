@@ -30,7 +30,6 @@ and port from IVG_TEST_CONTAINER / IVG_PORT (tests/e2e/ns262.py).
 from __future__ import annotations
 
 import os
-import subprocess
 
 import pytest
 
@@ -50,10 +49,11 @@ DEFAULT_LIB = "/usr/irissys/mgr/libarno_callout.so"
 
 
 def _sys(lines: list) -> str:
-    script = "\n".join(lines + ["halt"]) + "\n"
-    out = subprocess.run(["docker", "exec", "-i", ns262.CONTAINER, "iris", "session", "IRIS", "-U", "%SYS"],
-                         input=script, capture_output=True, text=True, timeout=120, check=True)
-    return out.stdout
+    """Run ObjectScript lines in %SYS, which only this file's role and user setup needs, over TCP
+    (tests/helpers/iris_lines.py; 4.7.0: no `iris session`)."""
+    from tests.helpers.iris_lines import session
+
+    return session(lines, "%SYS", allow_sys=True, timeout=120)
 
 
 def _drop_principals() -> None:

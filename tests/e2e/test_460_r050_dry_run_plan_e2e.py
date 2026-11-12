@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -49,8 +48,10 @@ def database_globals() -> list:
     script = ('set rs=##class(%ResultSet).%New("%SYS.GlobalQuery:DirectoryList") '
               f'do rs.Execute("/usr/irissys/mgr/{NS.lower()}/","","*",1) '
               'for  quit:\'rs.Next()  write "G:",rs.Get("Name"),!\nwrite "END",!\nhalt\n')
-    out = subprocess.run(["docker", "exec", "-i", ns262.CONTAINER, "iris", "session", "IRIS", "-U", "%SYS"],
-                         input=script, capture_output=True, text=True, timeout=120, check=True).stdout
+    from tests.helpers.iris_lines import session
+
+    # %SYS: the list is of the database directory, which only %SYS reads; over TCP (4.7.0: no `iris session`)
+    out = session(script, "%SYS", allow_sys=True, timeout=120)
     assert "END" in out, out[-400:]
     return sorted(line[2:].strip() for line in out.splitlines() if line.startswith("G:"))
 

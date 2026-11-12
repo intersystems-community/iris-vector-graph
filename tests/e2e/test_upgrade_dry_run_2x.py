@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 
 import pytest
 
@@ -55,16 +54,14 @@ def _ensure_namespace() -> None:
         f'Write "LEGACY_EXISTS=",##class(Config.Namespaces).Exists("{ns}"),!\n'
         "Halt\n"
     )
+    from tests.helpers.iris_lines import session
+
+    # %SYS: it makes the namespace and its database; over TCP (tests/helpers/iris_lines.py; 4.7.0: no
+    # `iris session`).
     try:
-        out = subprocess.run(
-            ["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "%SYS"],
-            input=script,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        ).stdout
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        pytest.skip(f"docker unavailable for {CONTAINER}: {exc}")
+        out = session(script, "%SYS", allow_sys=True, timeout=120)
+    except (OSError, TimeoutError) as exc:
+        pytest.skip(f"IRIS unavailable for {CONTAINER}: {exc}")
     if "LEGACY_EXISTS=1" not in out:
         pytest.skip(f"could not create {NAMESPACE} in {CONTAINER}: {out[-400:]}")
 

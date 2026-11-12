@@ -17,7 +17,6 @@ The graph, in the default graph: r280a -knows-> r280b -knows-> r280c; names "Ada
 from __future__ import annotations
 
 import os
-import subprocess
 
 import pytest
 
@@ -41,10 +40,11 @@ pytestmark = [pytest.mark.e2e, *alt.requires_namespace]
 
 
 def _sys(lines: list) -> str:
-    script = "\n".join(lines + ["halt"]) + "\n"
-    out = subprocess.run(["docker", "exec", "-i", alt.CONTAINER, "iris", "session", "IRIS", "-U", "%SYS"],
-                         input=script, capture_output=True, text=True, timeout=120, check=True)
-    return out.stdout
+    """Run ObjectScript lines in %SYS, which only this file's role and user setup needs, over TCP
+    (tests/helpers/iris_lines.py; 4.7.0: no `iris session`)."""
+    from tests.helpers.iris_lines import session
+
+    return session(lines, "%SYS", allow_sys=True, timeout=120)
 
 
 def _drop_principals() -> None:
