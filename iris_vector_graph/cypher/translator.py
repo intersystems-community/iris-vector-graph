@@ -11030,18 +11030,128 @@ _OWN_NODE_SKIPPED = (
 )
 
 
-def _merge_action_value_sql(v, context, pre):
-    """SQL for a non-literal ON CREATE / ON MATCH SET value, as a scalar subquery.
+def _reads_only_bound_nodes(v, var, context) -> bool:
+    """Does ON CREATE / ON MATCH value `v` of node `var` read properties of other node variables the MATCH bound, and
+    otherwise only literals and parameters (`m.count + 1`, `m.name + '-y'`, `m.count > 4`)?"""
+    if isinstance(v, ast.Literal):
+        return False
+    reads = False
+    for e in _walk_expr_nodes(v):
+        if isinstance(e, ast.PropertyReference):
+            if (
+                e.variable == var
+                or e.variable in context.rel_variables
+                or e.variable in context.scalar_variables
+                or _is_with_value(e.variable, context)
+            ):
+                return False
+            reads = True
+        elif isinstance(e, ast.Variable) and not (e.is_parameter and e.name in context.input_params):
+            return False
+        elif isinstance(e, _OWN_NODE_SKIPPED):
+            return False
+    return reads
+
+
+def _merge_action_typed_sql(v, context, var, from_len, join_len) -> Optional[tuple]:
+    """`v` (`_reads_only_bound_nodes`) as `MATCH (m), (n) SET n.v = <v>` computes it, in SQL over the MATCH's aliases:
+    each property read from its node's stored row (its type kept: CY_ARITH for arithmetic), a boolean as 'true' /
+    'false'. `(sql, joins, join params)`: the joins its RETURN-style parts add (a comparison's property join), which
+    the subquery over the MATCH takes after the MATCH's own. None when the translation needs anything else the
+    MATCH's FROM does not give it (a WHERE, a parameter marker, a pair capture), which leaves the value to the RETURN
+    translation.
+
+    The RETURN translation computed `m.count + 1` as a DOUBLE and the value was CAST to VARCHAR: the integer 5 was
+    stored as the text '5' (4.7.0)."""
+    if var is None or not _reads_only_bound_nodes(v, var, context):
+        return None
+    scope = " ".join(context.from_clauses[:from_len] + context.join_clauses[:join_len])
+    rows = {}
+    for e in _walk_expr_nodes(v):
+        if not isinstance(e, ast.PropertyReference) or e.variable in rows:
+            continue
+        alias = context.variable_aliases.get(e.variable)
+        id_sql = getattr(context, "node_id_expr", {}).get(alias, f"{alias}.node_id") if alias else ""
+        m = re.fullmatch(r"(\w+)\.node_id", id_sql)
+        if not m or not re.search(rf"\b{re.escape(m.group(1))}\b", scope):
+            return None
+        rows[e.variable] = (id_sql, f"{m.group(1)}.graph_id")
+    saved = (
+        getattr(context, "_set_target", None),
+        getattr(context, "_set_other_rows", None),
+        getattr(context, "_set_pair_key_used", None),
+    )
+    lens = (len(context.join_clauses), len(context.join_params), len(context.where_conditions),
+            len(context.where_params), len(context.select_params))
+    context._set_target, context._set_other_rows, context._set_pair_key_used = (var, None), rows, None
+    try:
+        sql, params, _ = _translate_set_value(v, context, "")
+    finally:
+        context._set_target, context._set_other_rows, context._set_pair_key_used = saved
+        joins, join_params = context.join_clauses[lens[0] :], context.join_params[lens[1] :]
+        added = len(context.where_conditions) > lens[2] or len(context.where_params) > lens[3]
+        del context.join_clauses[lens[0] :]
+        del context.join_params[lens[1] :]
+        del context.where_conditions[lens[2] :]
+        del context.where_params[lens[3] :]
+        del context.select_params[lens[4] :]
+    if added or params or "?" in sql or "__PAIR_" in sql or _SET_ROW in sql or _SET_GRAPH in sql:
+        return None
+    if any(_SET_ROW in j or "__PAIR_" in j for j in joins):
+        return None
+    return sql, joins, join_params
+
+
+def _merge_rel_value_sql(context, rel_var, k, v) -> tuple:
+    """`(qualifiers SQL, params)`: an ON CREATE / ON MATCH `SET r.k = v` of relationship `rel_var`, `v` no literal, as
+    `MATCH ()-[r]->() SET r.k = v` writes it (`_rel_value_copy_sql`, `_qualifier_write_sql`): `r.w + 1` from the
+    edge's own `w`, a parameter with its JSON type. A value read from another variable raises SyntaxError, as that
+    SET path does for what it cannot read; before, the expression's AST was bound and its repr stored (4.7.0)."""
+    if isinstance(v, ast.PropertyReference):
+        if v.variable != rel_var:
+            raise SyntaxError(
+                f"MERGE ... SET {rel_var}.{k} = {v.variable}.{v.property_name}: a relationship's ON CREATE / ON MATCH "
+                f"value read from another variable is not supported; SET it after the MERGE "
+                f"(`MERGE ... SET {rel_var}.{k} = {v.variable}.{v.property_name}`)"
+            )
+        sql, params, _ = _rel_value_copy_sql(context, rel_var, None, _QUALIFIERS_OR_EMPTY, k, v)
+        return sql, params
+    for e in _walk_expr_nodes(v):
+        if isinstance(e, ast.PropertyReference) and e.variable != rel_var:
+            raise SyntaxError(
+                f"MERGE ... SET {rel_var}.{k} = <value>: a relationship's ON CREATE / ON MATCH value read from another "
+                f"variable (`{e.variable}`) is not supported; SET it after the MERGE"
+            )
+    return _qualifier_write_sql(
+        "qualifiers", k, _translate_set_value(v, context, k), _QUALIFIERS_OR_EMPTY,
+        as_json=_set_value_is_json(v, context),
+    )
+
+
+def _merge_action_value_sql(v, context, pre, var=None):
+    """SQL for a non-literal ON CREATE / ON MATCH SET value of node `var`, as a scalar subquery.
 
     `MATCH (person) MERGE (city:City) ON CREATE SET city.name = person.bornIn`
     reads a value from the rows the preceding clauses bound. The value is taken
     from the first of those rows — ON CREATE fires once, for the row that created
     the node. Returns (sql, params), or None when the expression cannot be rendered
     self-contained (it would need a JOIN or a stage the DML cannot see).
+
+    A value `_merge_action_typed_sql` computes keeps its type (4.7.0); any other is the RETURN translation's, CAST to
+    VARCHAR, so it is stored as text.
     """
     if isinstance(v, ast.Literal) or context.stages:
         return None
     from_len, join_len, where_len, jp_len, wp_len = pre
+    typed = _merge_action_typed_sql(v, context, var, from_len, join_len) if from_len else None
+    if typed is not None:
+        typed_sql, typed_joins, typed_join_params = typed
+        sub = f"SELECT TOP 1 {typed_sql} FROM {', '.join(context.from_clauses[:from_len])}"
+        if context.join_clauses[:join_len] or typed_joins:
+            sub += " " + " ".join(context.join_clauses[:join_len] + typed_joins)
+        if context.where_conditions[:where_len]:
+            sub += " WHERE " + " AND ".join(context.where_conditions[:where_len])
+        return f"({sub})", context.join_params[:jp_len] + typed_join_params + context.where_params[:wp_len]
     snap = (
         len(context.join_clauses),
         len(context.join_params),
@@ -11981,7 +12091,7 @@ def translate_merge_clause(merge, context, metadata):
                     if isinstance(_kv, ast.Variable) and _kv.name in context.input_params:
                         _kvsql = ("?", [context.input_params[_kv.name]])
                     elif not isinstance(_kv, ast.Literal):
-                        _kvsql = _merge_action_value_sql(_kv, context, _pre_lens) or _kvsql
+                        _kvsql = _merge_action_value_sql(_kv, context, _pre_lens, var) or _kvsql
                     if isinstance(_kvsql[1][0] if _kvsql[1] else None, bool):
                         _kvsql = ("?", [prop_text(_kvsql[1][0])])
                     if _merge_keyed_action(context, _keyed_ids[0 if is_create else 1], item, _kvsql):
@@ -12038,6 +12148,7 @@ def translate_merge_clause(merge, context, metadata):
                                 _pre_join_params_len,
                                 _pre_where_params_len,
                             ),
+                            var_name,
                         )
                         if _rendered is not None:
                             _vsql, _vparams = _rendered
@@ -12053,6 +12164,19 @@ def translate_merge_clause(merge, context, metadata):
                         join_sql = (" " + " ".join(join_parts)) if join_parts else ""
                         where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
                         all_params = join_params_parts + where_params_parts
+                        if not isinstance(v, ast.Literal):
+                            # an expression (`ON MATCH SET r.w = r.w + 1`), or a parameter: written as `MATCH ...
+                            # SET r.w = <v>` writes it; its AST was bound, and its repr stored (4.7.0)
+                            if not is_create:
+                                _pre_edge_insert.append(len(context.dml_statements))
+                            _q_sql, _q_params = _merge_rel_value_sql(context, var_name, k, v)
+                            context.add_dml(
+                                f'UPDATE {_table("rdf_edges")} SET qualifiers = {_q_sql} '
+                                f"WHERE s IN (SELECT {src_a}.node_id FROM {from_sql}{join_sql}{where_sql}) "
+                                f"AND p = ? AND o_id IN (SELECT {tgt_a}.node_id FROM {from_sql}{join_sql}{where_sql})",
+                                _q_params + all_params + [rel_type] + all_params,
+                            )
+                            continue
                         if val is None:
                             json_val = None
                         elif isinstance(val, bool):
@@ -12557,12 +12681,19 @@ def _translate_set_value(expr, context, target_prop: str) -> tuple:
         written node's own property, and the INSERT for a node without `p` named a table it does not select)."""
         if _own(e):
             return _SET_ROW
+        other = (getattr(context, "_set_other_rows", None) or {}).get(e.variable)
+        if other is not None:
+            # a MERGE action's value read in a subquery over the MATCH, where the variable's alias is in scope
+            return other[0]
         return f"__PAIR_{_set_pair_key(context, context._set_target, e.variable)}__[{_SET_ROW}]"
 
     def _row_graph(e) -> str:
         """The graph test of `_row(e)`'s property row: the written node's graph, which is also the graph of the row's
         other node (a row's nodes are one graph's; under USE GRAPH, that graph). Read by its id alone, `SET a.p = c.q`
         took another graph's c.q."""
+        other = None if _own(e) else (getattr(context, "_set_other_rows", None) or {}).get(e.variable)
+        if other is not None:
+            return f" AND _upd.graph_id = {other[1]}"
         return f" AND _upd.graph_id = {_SET_GRAPH}"
 
     if isinstance(expr, ast.PropertyReference) and getattr(context, "_set_target", None) is not None:
