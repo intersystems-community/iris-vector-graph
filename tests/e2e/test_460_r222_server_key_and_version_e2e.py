@@ -4,7 +4,8 @@
 Walkthrough 2 (W11, W12): with the variable exported, `IVGClient(url).server_info()` got 401, and once past that
 `iris_version` read "unknown" while `$ZVERSION` in the same container named the build. The server here is
 `iris_vector_graph.cypher_api:app` under uvicorn on a free local port, pointed at IVG_TEST_CONTAINER/IVG_PORT and the
-IVG460FX* scratch namespace. The expected version is read with `iris session` (`write $ZVERSION`), not through IVG.
+IVG460FX* scratch namespace. The expected version is read with ObjectScript (`write $ZVERSION`, ns460alt.session over
+TCP), not through IVG.
 """
 
 from __future__ import annotations

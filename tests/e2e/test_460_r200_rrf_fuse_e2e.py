@@ -28,7 +28,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import subprocess
 
 import pytest
 
@@ -129,8 +128,9 @@ def test_hybrid_search_fuses_both_legs_from_the_route(setup):
         f'write "<<H:",##class(Graph.KG.PyOps).HybridSearch([1,0,0],"{TERM}",10,60,"{GRAPH}").%ToJSON(),":H>>",!\n'
         "halt\n"
     )
-    out = subprocess.run(["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", NS],
-                         input=script, capture_output=True, text=True, timeout=180).stdout
+    from tests.helpers.iris_lines import session
+
+    out = session(script, NS, timeout=180)  # over TCP (4.7.0: no `iris session`)
     assert "<<H:" in out, out
     rows = json.loads(out.split("<<H:", 1)[1].split(":H>>", 1)[0])
     names = {v: k for k, v in IDS.items()}

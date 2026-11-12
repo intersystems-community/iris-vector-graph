@@ -192,7 +192,8 @@ class TestEmbeddedConnectionUnit:
         assert isinstance(result, dict)
 
 
-# The ObjectScript engine (IVG.CypherEngine), run by `iris session` in the test container and this run's namespace.
+# The ObjectScript engine (IVG.CypherEngine), run by ObjectScript lines over TCP (tests/helpers/iris_lines.py; until
+# 4.7.0 an `iris session`) in the test container and this run's namespace.
 # It named a container no setup has, and USER, so it never ran (4.6.0 R171).
 _CONTAINER = os.environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise")
 
@@ -230,7 +231,7 @@ class TestObjectScriptCypherEngine:
     checkout = ""
 
     def _iris_exec(self, *statements: str) -> str:
-        import subprocess
+        from tests.helpers.iris_lines import session
 
         pin = (
             'Set sys=##class(%SYS.Python).Import("sys")',
@@ -238,12 +239,7 @@ class TestObjectScriptCypherEngine:
             'Set ivg=##class(%SYS.Python).Import("iris_vector_graph")',
             'Write "ivg_from=",ivg."__file__",!',
         )
-        script = "\n".join(pin + statements) + "\nHalt\n"
-        result = subprocess.run(
-            ["docker", "exec", "-i", _CONTAINER, "iris", "session", "IRIS", "-U", TEST_NAMESPACE],
-            input=script.encode(), capture_output=True, timeout=60,
-        )
-        return result.stdout.decode(errors='replace') + result.stderr.decode(errors='replace')
+        return session(list(pin + statements), TEST_NAMESPACE, timeout=60)
 
     def test_cypher_engine_class_compiled(self):
         out = self._iris_exec('Write "exists=",##class(%Dictionary.CompiledClass).%ExistsId("IVG.CypherEngine"),!')

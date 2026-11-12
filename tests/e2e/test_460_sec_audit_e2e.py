@@ -12,7 +12,6 @@ Schema Graph_KG, classes deployed from this checkout. Every row, role and grant 
 from __future__ import annotations
 
 import os
-import subprocess
 
 import pytest
 
@@ -28,11 +27,12 @@ pytestmark = [
 ]
 
 
-def _session(lines, namespace=None) -> str:
-    script = "\n".join(lines + ["halt"]) + "\n"
-    out = subprocess.run(["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", namespace or NS],
-                         input=script, capture_output=True, text=True, errors="replace", timeout=180)
-    return out.stdout + out.stderr
+def _session(lines, namespace=None, allow_sys=False) -> str:
+    """What `lines` write in `namespace` (NS by default), over TCP (tests/helpers/iris_lines.py; 4.7.0: no
+    `iris session`). %SYS only with `allow_sys`: the two roles one test makes and deletes."""
+    from tests.helpers.iris_lines import session
+
+    return session(lines, namespace or NS, allow_sys=allow_sys, timeout=180)
 
 
 def _marked(out: str, tag: str) -> str:
@@ -103,7 +103,7 @@ def _role_privileges(role) -> list:
 
 def test_grant_web_app_sql_grants_nothing_a_registry_row_writes(conn, route, planted):
     """The GRANT runs as whoever runs CreateWebApp; the row named a second grantee for one of its tables."""
-    _session([f'Do ##class(Security.Roles).Create("{r}")' for r in (ROLE, OTHER)], namespace="%SYS")
+    _session([f'Do ##class(Security.Roles).Create("{r}")' for r in (ROLE, OTHER)], namespace="%SYS", allow_sys=True)
     try:
         planted(f"rdf_props TO {OTHER} --", "secG")
         out = _session([f'Set sc=##class(Graph.KG.Service).GrantWebAppSql("{ROLE}",.m)',
@@ -112,7 +112,7 @@ def test_grant_web_app_sql_grants_nothing_a_registry_row_writes(conn, route, pla
         assert _role_privileges(OTHER) == []
         assert f"Graph_KG.{route}|SELECT" in _role_privileges(ROLE)  # a real route is still granted
     finally:
-        _session([f'Do ##class(Security.Roles).Delete("{r}")' for r in (ROLE, OTHER)], namespace="%SYS")
+        _session([f'Do ##class(Security.Roles).Delete("{r}")' for r in (ROLE, OTHER)], namespace="%SYS", allow_sys=True)
 
 
 def test_erase_graph_reaches_only_its_own_routes(conn, engine, route, planted):

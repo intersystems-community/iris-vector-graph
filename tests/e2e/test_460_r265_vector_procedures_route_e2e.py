@@ -31,7 +31,6 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-import subprocess
 import uuid
 
 import pytest
@@ -49,11 +48,12 @@ DOCS = {"a": f"{TERM} once", "c": f"{TERM} {TERM} {TERM}"}
 Q = [1.0, 0.0, 0.0]
 
 
-def _session(lines: list, namespace: str = "") -> str:
-    script = "\n".join(lines + ["halt"]) + "\n"
-    out = subprocess.run(["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", namespace or NS],
-                         input=script, capture_output=True, text=True, timeout=180)
-    return out.stdout + out.stderr
+def _session(lines: list, namespace: str = "", allow_sys: bool = False) -> str:
+    """What `lines` write in `namespace` (NS by default), over TCP (tests/helpers/iris_lines.py; 4.7.0: no
+    `iris session`). %SYS only with `allow_sys`: the application and user setup below."""
+    from tests.helpers.iris_lines import session
+
+    return session(lines, namespace or NS, allow_sys=allow_sys, timeout=180)
 
 
 def _marked(out: str, tag: str) -> str:
@@ -65,13 +65,13 @@ def _marked(out: str, tag: str) -> str:
 
 def _drop_app_and_user():
     _session([f'if ##class(Security.Applications).Exists("{APP}") do ##class(Security.Applications).Delete("{APP}")',
-              f'if ##class(Security.Users).Exists("{USER}") do ##class(Security.Users).Delete("{USER}")'], "%SYS")
+              f'if ##class(Security.Users).Exists("{USER}") do ##class(Security.Users).Delete("{USER}")'], "%SYS", allow_sys=True)
 
 
 def _make_user(roles: str):
     out = _session([f'if ##class(Security.Users).Exists("{USER}") do ##class(Security.Users).Delete("{USER}")',
                     f'set sc=##class(Security.Users).Create("{USER}","{roles}","{PASSWORD}","R265 test","{NS}")',
-                    'write "<<SC:",sc,":SC>>",!'], "%SYS")
+                    'write "<<SC:",sc,":SC>>",!'], "%SYS", allow_sys=True)
     assert _marked(out, "SC") == "1", out
 
 

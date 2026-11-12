@@ -48,14 +48,11 @@ def ns():
 
 
 def _create_web_app(path: str) -> str:
-    """r147's call, read leniently: a GRANT's error text can carry bytes that are not UTF-8 (the failure before R229)."""
-    import subprocess
-
+    """r147's call, read leniently: a GRANT's error text can carry bytes that are not UTF-8 (the failure before R229);
+    the runner decodes with errors="replace", as this read did."""
     script = (f'set sc=##class(Graph.KG.Service).CreateWebApp("{path}")\n'
               'write "<<CREATED:",$system.Status.IsOK(sc),"|",$system.Status.GetErrorText(sc),":CREATED>>",!\nhalt\n')
-    out = subprocess.run(["docker", "exec", "-i", alt.CONTAINER, "iris", "session", "IRIS", "-U", alt.NS],
-                         input=script, capture_output=True, text=True, errors="replace", timeout=180)
-    return alt.marked(out.stdout + out.stderr, "CREATED")
+    return alt.marked(alt.session(script.splitlines()), "CREATED")
 
 
 def _routine_exists(conn, name: str) -> bool:

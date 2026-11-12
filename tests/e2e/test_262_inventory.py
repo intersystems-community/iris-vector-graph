@@ -25,7 +25,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -49,10 +48,11 @@ _SYSTEM_SCHEMA = re.compile(r"^(%|INFORMATION_SCHEMA$)")
 
 
 def _session(lines: list) -> str:
-    script = "\n".join(lines + ["halt"]) + "\n"
-    out = subprocess.run(["docker", "exec", "-i", ns262.CONTAINER, "iris", "session", "IRIS", "-U", NS],
-                         input=script, capture_output=True, text=True, timeout=300, check=True)
-    return out.stdout
+    """What `lines` write, run in NS over TCP (tests/helpers/iris_lines.py; 4.7.0: no `iris session`). The runner
+    keeps its state in IRISTEMP (^IRIS.TempIVGRun), which the global list below never shows."""
+    from tests.helpers.iris_lines import session
+
+    return session(lines, NS, timeout=300)
 
 
 #: The system globals IVG brings into the namespace: IRIS's iFind dictionary, for IVG's two iFind indexes.
