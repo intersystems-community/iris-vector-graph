@@ -6,8 +6,9 @@ Conventions (``specs/release-4.6.0/plan.md``, "Doc-test conventions"):
   reason. A block the harness cannot classify, with no skip marker, is an error.
 * ``python`` blocks run in order in one interpreter per document (a worker process, :func:`_worker_main`).
   ``sql`` blocks run through a DB-API cursor in that same process. ``objectscript`` and terminal blocks (lines
-  starting ``USER>``) run through ``docker exec <container> iris session IRIS -U <NS>``, prompts stripped and the
-  output compared. ``bash`` blocks are syntax-checked (``bash -n``) unless marked ``<!-- doc-test: run -->``.
+  starting ``USER>``) run line by line in the scratch namespace as ``iris session`` ran them, over TCP
+  (:func:`run_iris_session`, tests/helpers/iris_lines.py; 4.7.0: no ``iris session``, which Cortex XDR kills), and
+  the output compared. ``bash`` blocks are syntax-checked (``bash -n``) unless marked ``<!-- doc-test: run -->``.
 * An expected answer is written by the doc's author: ``# → [['Bob']]`` on its own line after a top-level python
   expression, or a following block preceded by ``<!-- doc-test: output -->``. The harness compares; it never
   supplies the expected value.
@@ -616,12 +617,12 @@ def _link_repo(workdir: Path) -> None:
 
 
 def run_iris_session(commands: list, config: Config, timeout: int) -> str:
-    script = "\n".join(commands) + "\nhalt\n"
-    out = subprocess.run(
-        ["docker", "exec", "-i", config.container, "iris", "session", "IRIS", "-U", config.namespace],
-        input=script, capture_output=True, text=True, timeout=timeout,
-    )
-    return out.stdout + out.stderr
+    """What `commands` write, run in the scratch namespace as `iris session` with them on its input ran them: one line
+    at a time, each error written where it happened (`<UNDEFINED> *y`) and the next line run. Over TCP on
+    `config.port` (tests/helpers/iris_lines.py; 4.7.0). Raises TimeoutError past `timeout` seconds."""
+    from tests.helpers.iris_lines import session
+
+    return session(commands, config.namespace, timeout=timeout, port=config.port)
 
 
 def _check_bash(script: str) -> Optional[str]:
@@ -700,8 +701,8 @@ def run_document(
                     commands, expected = objectscript_commands(b.text), b.expected_output
                 try:
                     raw = run_iris_session(commands, config, timeout)
-                except subprocess.TimeoutExpired:
-                    done("failed", f"iris session timed out after {timeout}s")
+                except TimeoutError:
+                    done("failed", f"the ObjectScript block timed out after {timeout}s")
                     continue
                 err = session_error(raw, config.namespace)
                 actual = session_output(raw, config.namespace)

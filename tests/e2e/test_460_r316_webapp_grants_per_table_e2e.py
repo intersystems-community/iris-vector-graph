@@ -41,7 +41,7 @@ VEC_E = [0.0, 1.0] + [0.0] * (alt.DIM - 2)
 
 
 def _sys(lines: list) -> str:
-    return alt.session(lines, namespace="%SYS")
+    return alt.session(lines, namespace="%SYS", allow_sys=True)
 
 
 def _drop_app_and_user():

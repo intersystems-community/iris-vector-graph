@@ -72,12 +72,12 @@ def engine(conn, **kwargs):
     return IRISGraphEngine(conn, namespace=NS, schema_prefix=SCHEMA, **kwargs)
 
 
-def session(lines: list, namespace: str = "") -> str:
-    """Run ObjectScript lines in `namespace` (default `NS`) through `iris session`, and return what it printed."""
-    script = "\n".join(lines + ["halt"]) + "\n"
-    out = subprocess.run(["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", namespace or NS],
-                         input=script, capture_output=True, text=True, timeout=180)
-    return out.stdout + out.stderr
+def session(lines: list, namespace: str = "", allow_sys: bool = False) -> str:
+    """Run ObjectScript lines in `namespace` (default `NS`) as `iris session` did, and return what they printed; over
+    TCP (tests/helpers/iris_lines.py; 4.7.0: no `iris session`). %SYS only with `allow_sys`."""
+    from tests.helpers.iris_lines import session as run_lines
+
+    return run_lines(lines, namespace or NS, allow_sys=allow_sys, timeout=180)
 
 
 def marked(out: str, tag: str) -> str:

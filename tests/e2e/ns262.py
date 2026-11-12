@@ -58,11 +58,11 @@ def connect_as(ns: str, user: str, password: str):
 
 
 def _sys(lines: list) -> str:
-    """Run ObjectScript lines in %SYS (Security.* take arguments the Native API cannot pass)."""
-    script = "\n".join(lines + ["halt"]) + "\n"
-    out = subprocess.run(["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", "%SYS"],
-                         input=script, capture_output=True, text=True, timeout=120, check=True)
-    return out.stdout
+    """Run ObjectScript lines in %SYS (Security.* take arguments the Native API cannot pass), over TCP
+    (tests/helpers/iris_lines.py; 4.7.0: no `iris session`). %SYS by design: every caller manages users and roles."""
+    from tests.helpers.iris_lines import session
+
+    return session(lines, "%SYS", allow_sys=True, timeout=120)
 
 
 def _ours(name: str) -> str:

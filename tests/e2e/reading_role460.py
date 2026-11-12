@@ -54,10 +54,13 @@ requires_namespace = [
 
 
 def session(lines: list, namespace: str = "%SYS") -> str:
-    script = "\n".join(lines + ["halt"]) + "\n"
-    out = subprocess.run(["docker", "exec", "-i", CONTAINER, "iris", "session", "IRIS", "-U", namespace],
-                         input=script, capture_output=True, text=True, timeout=180)
-    return out.stdout + out.stderr
+    """Run ObjectScript lines in `namespace` as `iris session` did, over TCP (tests/helpers/iris_lines.py; 4.7.0).
+    %SYS by default and by design: its callers here make and drop roles and users and read the database
+    configuration (make_reader, drop_reader, database_resource); test_460_r050_select_only_role reads
+    Security.SQLPrivileges. Another namespace, as test_463_half_setup passes, runs there."""
+    from tests.helpers.iris_lines import session as run_lines
+
+    return run_lines(lines, namespace, allow_sys=namespace.upper() == "%SYS", timeout=180)
 
 
 def marked(out: str, tag: str) -> str:

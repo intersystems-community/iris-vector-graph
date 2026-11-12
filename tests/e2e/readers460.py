@@ -25,7 +25,7 @@ def names(tag: str) -> tuple:
 
 def _database_resource() -> str:
     out = alt.session([f'set db=##class(SYS.Database).%OpenId("/usr/irissys/mgr/{alt.NS.lower()}/")',
-                       'write "<<DBRES:",db.ResourceName,":DBRES>>",!'], namespace="%SYS")
+                       'write "<<DBRES:",db.ResourceName,":DBRES>>",!'], namespace="%SYS", allow_sys=True)
     return alt.marked(out, "DBRES")
 
 
@@ -37,7 +37,7 @@ def make(tag: str, omit: tuple = ()) -> str:
         f'set sc=##class(Security.Roles).Create("{role}","4.6.0 privilege test reader","{_database_resource()}:R")',
         'write "<<ROLE:",$system.Status.GetErrorText(sc),":ROLE>>",!',
         f'set sc=##class(Security.Users).Create("{user}","{role}","{PASSWORD}","4.6.0 privilege test","{alt.NS}")',
-        'write "<<USER:",$system.Status.GetErrorText(sc),":USER>>",!'], namespace="%SYS")
+        'write "<<USER:",$system.Status.GetErrorText(sc),":USER>>",!'], namespace="%SYS", allow_sys=True)
     assert alt.marked(out, "ROLE") == "" and alt.marked(out, "USER") == "", out
     grants = [f"GRANT EXECUTE ON {alt.SCHEMA}.{p} TO {role}" for p in PROCEDURES]
     grants += [f"GRANT SELECT ON {alt.SCHEMA}.{t} TO {role}" for t in TABLES if t not in omit]
@@ -57,7 +57,7 @@ def drop(tag: str) -> None:
         'for i=1:1:$get(q) { set x=##class(%SQL.Statement).%ExecDirect(,q(i)) }'])
     alt.session([f'if ##class(Security.Users).Exists("{user}") do ##class(Security.Users).Delete("{user}")',
                  f'if ##class(Security.Roles).Exists("{role}") do ##class(Security.Roles).Delete("{role}")'],
-                namespace="%SYS")
+                namespace="%SYS", allow_sys=True)
 
 
 def call(user: str, expression: str) -> str:

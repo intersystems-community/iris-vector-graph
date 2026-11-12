@@ -43,7 +43,7 @@ ROLE = "IVG_KG_" + alt.NS
 
 
 def _sys(lines: list) -> str:
-    return alt.session(lines, namespace="%SYS")
+    return alt.session(lines, namespace="%SYS", allow_sys=True)
 
 
 def _drop_app_and_user():

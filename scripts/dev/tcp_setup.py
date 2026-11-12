@@ -214,12 +214,15 @@ def run(lines: Union[str, Sequence[str]], namespace: str, *, timeout: float = 18
     one is opened on 127.0.0.1:`port` when not given."""
     if namespace.upper() == "%SYS" and not allow_sys:
         raise ValueError("run: %SYS refused; pass allow_sys=True (only a %SYS setup helper should)")
+    lines = _split(lines)
+    if not lines:  # a session given only `halt` printed nothing
+        return RunResult("", "ended", [])
     if native is None:
         with sys_native(port) as handle:
             return run(lines, namespace, timeout=timeout, native=handle, allow_sys=allow_sys, check=check)
     run_id = uuid.uuid4().hex
     try:
-        for number, line in enumerate(_split(lines), 1):
+        for number, line in enumerate(lines, 1):
             native.set(line, "^IRIS.TempIVGRun", run_id, "line", number)
         pid = str(native.classMethodValue(RUNNER, "Start", run_id, namespace, int(allow_sys)))
         if pid.startswith("FAIL"):

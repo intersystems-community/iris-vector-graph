@@ -583,6 +583,29 @@ def test_session_error_is_detected():
     assert harness.session_error("\nIVG460DOC>\n5\nIVG460DOC>\n") is None
 
 
+def test_objectscript_blocks_run_over_tcp_not_a_session(monkeypatch):
+    """4.7.0: Cortex XDR kills `iris session` with piped input. The block's lines go to tcp_setup.session in the
+    scratch namespace on the configured port, and no process is started."""
+    from tests.helpers import iris_lines
+
+    seen = []
+    monkeypatch.setattr(harness.subprocess, "run", lambda *a, **k: pytest.fail(f"started a process: {a}"))
+    monkeypatch.setattr(iris_lines, "session", lambda lines, ns, **kw: seen.append((list(lines), ns, kw)) or "6\n")
+    cfg = harness.Config(namespace="IVG460DOC", container="c", port=31972, host="h", username="u", password="p",
+                         block_timeout=1, docs=[], consistency={})
+    assert harness.run_iris_session(["write 2*3,!"], cfg, 7) == "6\n"
+    assert seen == [(["write 2*3,!"], "IVG460DOC", {"timeout": 7, "port": 31972})]
+
+
+def test_the_runners_output_and_errors_read_as_the_sessions_did():
+    """The TCP runner writes no banner or prompts, and errors as the terminal did; both parsers read it."""
+    raw = "2\n5\n"
+    assert harness.session_output(raw) == "2\n5\n" and harness.session_error(raw) is None
+    raw = "a\n<UNDEFINED> *y\nb\n"
+    assert harness.session_error(raw) == "<UNDEFINED> *y"
+    assert harness.session_output(raw) == raw
+
+
 def test_namespace_switch_is_refused():
     assert harness.switches_namespace('zn "USER"')
     assert harness.switches_namespace('set $namespace = "%SYS"')

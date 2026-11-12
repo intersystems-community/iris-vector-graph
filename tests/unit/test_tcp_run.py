@@ -124,6 +124,16 @@ def test_a_final_halt_is_the_end_of_input_not_a_halt(ts, last):
     assert result.state == "ended"
 
 
+@pytest.mark.parametrize("lines", [[], ["halt"], ""])
+def test_no_lines_is_an_empty_run(ts, lines):
+    """A caller that builds its lines from a query (REVOKE each privilege the role holds) may have none: an
+    `iris session` given only `halt` printed nothing. Nothing is started."""
+    native = FakeRun(echo)
+    result = ts.run(lines, "IVG470RUN", native=native)
+    assert (result.output, result.state, result.failures) == ("", "ended", [])
+    assert native.calls == []
+
+
 def test_a_halt_inside_the_lines_is_kept(ts):
     native = FakeRun(lambda lines: ("1\n", "halted", {}))
     result = ts.run(["write 1,!", "halt", "write 2,!"], "IVG470RUN", native=native)

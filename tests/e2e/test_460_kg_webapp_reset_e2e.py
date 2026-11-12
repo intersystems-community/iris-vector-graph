@@ -11,9 +11,10 @@ R131 gave the application one role, `IVG_KG_<namespace>`. Three gaps were left:
   dispatch class is `Graph.KG.Service`), and refuses any other application at that path, leaving it unchanged.
 
 Run with IVG_NAMESPACE=IVG460FX8 (or another IVG460*/IVG262* scratch namespace; IVG Schema RAG). The application,
-the role `IVG_KG_<NS>` and the role `<NS>_R147_EXTRA` this file makes are deleted at the end. `CreateWebApp` runs in
-an `iris session` (as its OS user, irisowner); the extra privileges are granted over DB-API as _SYSTEM, a different
-grantor, and one in the session, the same grantor.
+the role `IVG_KG_<NS>` and the role `<NS>_R147_EXTRA` this file makes are deleted at the end. `CreateWebApp` runs as
+_SYSTEM in lines run over TCP (tests/helpers/iris_lines.py; until 4.7.0 an `iris session`, as its OS user irisowner);
+the extra privileges are granted over DB-API as SuperUser, a different grantor, and one in those lines, the same
+grantor. The grantors are read back, so the case cannot quietly become one grantor.
 """
 
 from __future__ import annotations
@@ -73,7 +74,7 @@ assert set(LISTED) == ROUTES_NEED, (
 
 
 def _sys(lines: list) -> str:
-    return alt.session(lines, namespace="%SYS")
+    return alt.session(lines, namespace="%SYS", allow_sys=True)
 
 
 def _privileges() -> list:
@@ -84,6 +85,19 @@ def _privileges() -> list:
         'write "<<PRIV:" while rs.Next() { write rs.GetData(1),"|",rs.GetData(2),"|",rs.GetData(3),"|",'
         'rs.GetData(5),";" } write ":PRIV>>",!'])
     return sorted(tuple(p.split("|")) for p in alt.marked(out, "PRIV").split(";") if p)
+
+
+def _grantors() -> dict:
+    """{object name: the users who granted the role a privilege on it}."""
+    out = alt.session([
+        'set rs=##class(%ResultSet).%New("%Library.SQLCatalogPriv:SQLRolePrivileges")',
+        f'set sc=rs.Execute("{ROLE}")',
+        'write "<<GBY:" while rs.Next() { write rs.GetData(2),"|",rs.GetData(4),";" } write ":GBY>>",!'])
+    found: dict = {}
+    for entry in filter(None, alt.marked(out, "GBY").split(";")):
+        name, grantor = entry.split("|")
+        found.setdefault(name, set()).add(grantor)
+    return found
 
 
 def _create_web_app(path: str) -> str:
@@ -168,16 +182,22 @@ def test_a_rerun_revokes_every_privilege_beyond_the_list_whoever_granted_it(ns):
     _drop_app(APP)
     assert _create_web_app(APP).startswith("1|"), "the first CreateWebApp failed"
     assert _privileges() == LISTED
-    cur = ns.cursor()
-    # Granted by _SYSTEM over DB-API: not the session user CreateWebApp's REVOKE runs as.
+    import iris
+
+    other = iris.connect("localhost", alt.PORT, alt.NS, "SuperUser", "SYS")
+    cur = other.cursor()
+    # Granted by SuperUser over DB-API: not the user CreateWebApp's REVOKE runs as (_SYSTEM).
     for grant in (f"GRANT INSERT ON {S}.docs TO {ROLE}",
                   f"GRANT UPDATE(text) ON {S}.docs TO {ROLE}",
                   f"GRANT SELECT ON {S}.rdf_edges TO {ROLE} WITH GRANT OPTION",
                   f"GRANT SELECT ON {S}.kg_NodeEmbeddings TO {ROLE} WITH GRANT OPTION"):
         cur.execute(grant)
-    ns.commit()
-    # And one by the session user itself.
+    other.commit()
+    other.close()
+    # And one by the user CreateWebApp runs as.
     alt.session([f'set x=##class(%SQL.Statement).%ExecDirect(,"GRANT DELETE ON {S}.rdf_labels TO {ROLE}")'])
+    grantors = _grantors()
+    assert "SuperUser" in grantors[f"{S}.docs"] and "_SYSTEM" in grantors[f"{S}.rdf_labels"], grantors
     held = _privileges()
     for extra in (("TABLE", f"{S}.docs", "INSERT", "No"), ("TABLE", f"{S}.docs.text", "UPDATE", "No"),
                   ("TABLE", f"{S}.rdf_edges", "SELECT", "Yes"), ("TABLE", f"{S}.kg_NodeEmbeddings", "SELECT", "Yes"),
