@@ -1,7 +1,7 @@
 """4.6.0 R197: `scripts/test-container.sh` `compile` and `compile-all` refuse a namespace recorded under another IVG
 Schema before they load anything, as `scripts/enterprise-container.sh` does (R185).
 
-Both loaded the raw `iris_src/src` (which names `Graph_KG`) into USER through `iris session`, without reading
+Both loaded the raw `iris_src/src` (which names `Graph_KG`) into USER (then through `iris session`), without reading
 `^IVG.Deploy("schema")`. They now take the namespace from IVG_NAMESPACE (USER by default) and stage in
 tests/conftest.py's directory (`/tmp/src`, `/tmp/src_<NS>`), as R185 made the enterprise script do, and run the same
 check first: switch to the namespace, read the record, exit 3 naming it unless it is `Graph_KG`; the command then
@@ -33,11 +33,14 @@ def test_the_refusal_is_the_enterprise_script_s():
     assert _refusal(SCRIPT) == _refusal(ENTERPRISE)
 
 
-@pytest.mark.parametrize("name, load", [("compile-all", "LoadDir("), ("compile", "OBJ.Load(")])
+@pytest.mark.parametrize("name, load", [("compile-all", "%SYSTEM.OBJ').LoadDir("), ("compile", "%SYSTEM.OBJ').Load(")])
 def test_a_loading_branch_refuses_before_it_loads(name, load):
     body = _branch(name)
     assert body.find("refuse_other_schema") != -1 and body.find("refuse_other_schema") < body.find(load), body
-    assert 'iris session iris -U \\"$NS' in body, body
+    # 4.7.0: the load runs in irispython, switched to NS, not through `iris session` (which Cortex XDR kills)
+    assert 'docker exec -e IVG_NS="$NS" "$CONTAINER" /usr/irissys/bin/irispython' in body, body
+    assert "SetNamespace(os.environ['IVG_NS'])" in body, body
+    assert body.find("SetNamespace") < body.find(load), body
 
 
 def test_the_check_runs_in_the_namespace_and_fails_the_command():

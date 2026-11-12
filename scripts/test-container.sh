@@ -134,14 +134,17 @@ print('✓ schema initialized')
       exit 1
     fi
     refuse_other_schema compile
-    docker exec "$CONTAINER" bash -c "echo 'Do \$system.OBJ.Load(\"$STAGE/${cls//.//}.cls\",\"ck\")
-H' | iris session iris -U \"$NS\""
+    # irispython in NS, not `iris session` (Cortex XDR kills a process that pipes ObjectScript into it)
+    docker exec -e IVG_NS="$NS" "$CONTAINER" /usr/irissys/bin/irispython -c "import iris, os
+iris.system.Process.SetNamespace(os.environ['IVG_NS'])
+print(iris.cls('%SYSTEM.OBJ').Load('$STAGE/${cls//.//}.cls', 'ck'))"
     ;;
 
   compile-all)
     refuse_other_schema compile-all
-    docker exec "$CONTAINER" bash -c "echo 'Do \$system.OBJ.LoadDir(\"$STAGE\",\"ck\",.err,1)
-H' | iris session iris -U \"$NS\""
+    docker exec -e IVG_NS="$NS" "$CONTAINER" /usr/irissys/bin/irispython -c "import iris, os
+iris.system.Process.SetNamespace(os.environ['IVG_NS'])
+print('LoadDir:', iris.cls('%SYSTEM.OBJ').LoadDir('$STAGE', 'ck', None, 1))"
     ;;
 
   *)

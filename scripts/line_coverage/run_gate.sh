@@ -65,7 +65,12 @@ wait_healthy() {
     echo "container $CONTAINER did not become healthy" >&2; return 1
 }
 
-session() { docker exec -i "$CONTAINER" iris session IRIS -U "$1"; }
+# Run ObjectScript lines in namespace $1 over TCP on 127.0.0.1:$IVG_PORT (scripts/dev/tcp_setup.py), not through
+# `iris session`, which Cortex XDR kills: each further argument is one line. Prints what the lines wrote.
+session() {
+    .venv/bin/python -c 'import sys; sys.path.insert(0, "scripts/dev"); import tcp_setup
+print(tcp_setup.session(sys.argv[2:], sys.argv[1], timeout=86400), end="")' "$@"
+}
 
 docker cp scripts/line_coverage/Cov.cls "$CONTAINER:/tmp/Cov.cls"
 printf '%s\n' "$PLAN" | while IFS=$'\t' read -r group index files; do
@@ -76,10 +81,10 @@ printf '%s\n' "$PLAN" | while IFS=$'\t' read -r group index files; do
     echo "=== $group chunk $index: $(wc -w <<<"$files") files"
     docker restart -t 90 "$CONTAINER" >/dev/null </dev/null; wait_healthy
     ns="${group/USERMIX/USER}"
-    printf 'write $system.OBJ.Load("/tmp/Cov.cls","ck"),!\nhalt\n' | session "$ns" >/dev/null
+    session "$ns" 'write $system.OBJ.Load("/tmp/Cov.cls","ck"),!' >/dev/null
     dump="/tmp/linecov_${group}_${index}.out"
     docker exec "$CONTAINER" rm -f /tmp/cov.stop "$dump"
-    (printf 'do ##class(IVG236Tmp.Cov).Run("%s","/tmp/cov.stop","%s")\nhalt\n' "$ROUTINES" "$dump" | session "$ns" >/dev/null 2>&1 &)
+    (session "$ns" "do ##class(IVG236Tmp.Cov).Run(\"$ROUTINES\",\"/tmp/cov.stop\",\"$dump\")" >/dev/null 2>&1 &)
     sleep 10
     scripts/enterprise-container.sh tcp-load-arno >/dev/null 2>&1 </dev/null || true
     for f in $files; do

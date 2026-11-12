@@ -41,7 +41,8 @@ cd "$R"
 python3.11 -m venv .venv && .venv/bin/pip -q install -U pip && .venv/bin/pip -q install -e ".[dev]" networkx igraph requests
 python3.11 -m venv "$C/comp-venv" && "$C/comp-venv/bin/pip" -q install -U pip && "$C/comp-venv/bin/pip" -q install -r scripts/bench/competitors/requirements.txt
 bash scripts/bench/competitors/competitors.sh gds >/dev/null
-for _ in $(seq 1 40); do docker exec ivg-iris-enterprise /usr/irissys/bin/iris session iris -U%SYS "Write 1" 2>/dev/null | grep -q 1 && break; sleep 5; done
+# IRIS is up once it takes a TCP login (not an `iris session` probe, which Cortex XDR kills where it runs)
+for _ in $(seq 1 40); do .venv/bin/python -c 'import iris; iris.connect("127.0.0.1", 31972, "%SYS", "_SYSTEM", "SYS").close()' 2>/dev/null && break; sleep 5; done
 .venv/bin/python scripts/bench/alt/setup_sides.py export --alt-ref "$REF" | tail -2
 for d in $DATASETS; do aws s3 sync "s3://$BUCKET/data/$d" "/snb/$d" --only-show-errors; done
 for pair in snb01:sf0.1 snb1:sf1 snb10:sf10; do

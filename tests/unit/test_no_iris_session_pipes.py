@@ -33,22 +33,12 @@ DATA = {
     "tests/unit/test_doctest_harness.py": "command lines the harness's refusal check is fed",
     "tests/unit/test_no_hardcoded_user_namespace.py": "a sample source the USER-namespace checker is fed",
     "tests/unit/test_docs_consistency_checker.py": "sample docs text for the docs checker",
-    "tests/unit/test_460_r197_test_container_refusal.py": "asserts test-container.sh's text",
 }
 
 #: Files that ran ObjectScript through `iris session` when this test was written (4.7.0). Shrink only: each is ported
 #: to TCP and removed from here (4.7.0 phase 2: a TCP runner for "these lines in namespace X").
 STILL_PIPING = {
-    "scripts/bench/alt/setup_sides.py": "bench sides setup",
-    "scripts/bench/alt/snb_bulk.py": "SNB bulk loader progress lines",
-    "scripts/bench/aws/bootstrap.sh": "AWS bootstrap health probe (on the cloud host)",
-    "scripts/bench/nkg_swap/run_scale.py": "NKG swap bench",
-    "scripts/deploy_objectscript.py": "legacy class loader",
-    "scripts/deploy_production.py": "legacy production setup",
-    "scripts/fixtures/build_release_namespace.py": "LoadDir of an old release's classes",
     "scripts/install-embedded-deps.sh": "embedded deps check in USER",
-    "scripts/line_coverage/run_gate.sh": "line-coverage gate (Cov.cls load and dumps)",
-    "scripts/test-container.sh": "Community container class load",
 }
 
 
