@@ -292,7 +292,7 @@ Not run at `724dbd0b`: the speed of load, ppr and PageRank (the commits after `b
 translator's MERGE SET and a docstring), and the walkthroughs (wheel at `b9d779bc`). Docs since then: `3653ce88`,
 KNOWN_ISSUES entries for `kg_RRF_FUSE` and `RETURN r.p`, and the final count.
 
-§9: waiting for Tom's "push it". The CHANGELOG heading reads `v4.7.0 (2026-11-11)`; set the date when it publishes.
+§9: Tom: "push it" (2026-11-12). CHANGELOG dated 2026-11-12 (`fabf4fae`). GitHub CI and Quickstart green on `fabf4fae`; main fast-forwarded to `fabf4fae`; tag `v4.7.0`; built at the tag (69 classes in the wheel, the new one `Graph.KG.PropWrite`), `twine check` passed; PyPI (<https://pypi.org/project/iris-vector-graph/4.7.0/>); GitHub release with the CHANGELOG section; clean venv (Python 3.12) installs 4.7.0 and imports with `-I -W error`.
 
 ### 4.6.5 — the round 8 to 10 walkthrough fixes: Cypher write literals, procedure arguments, the HTTP API's lock (2026-11-09)
 
