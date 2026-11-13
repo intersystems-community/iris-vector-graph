@@ -246,6 +246,54 @@ gh release create v<version> \
 
 ## Sign-off
 
+### 4.7.0 — 29 of the 55 open defects closed: reported first, then silent wrong answers, regressions and loud errors (2026-11-12)
+
+Minor release on branch `release-4.7.0`, 162 commits after 4.6.5 (`dd7528fa`); `origin/main` (`bc851871`) is an
+ancestor, so main fast-forwards. Ranked list of the 55 defects open on 4.6.5 (Tom, 2026-11-10: reported, silent wrong,
+regressions, loud); cut rows 1-29 and 33-35. Each fix is in the CHANGELOG with its upgrade note:
+`initialize_schema()` once per namespace, outside a transaction; a namespace set up at another width needs
+`rewidth=True`.
+
+Opened against closed (CHANGELOG, "Opened against closed"; specs/release-4.7.0/tasks.md):
+
+- Closed: 29 of 55 (rows 1-6, 8-22, 24-26, 28, 29, 33-35). Open from the cut: row 7 (waits on the reporter's rerun),
+  rows 23 and 27 (typed storage and parallel relationships, 4.8.0, Tom 2026-11-11).
+- Found during 4.7.0 and fixed: 39, also in earlier releases; the gate caught five faults in 4.7.0's own changes.
+- Queued for 4.7.1: 23 defects and five documentation papercuts. The list froze on 2026-11-12 (Tom: "Freeze; to
+  4.7.1"). The silent wrong answers among them, each in KNOWN_ISSUES with a workaround: `kg_RRF_FUSE` answers `[]`
+  when an index search fails; a map's boolean in `CASE WHEN` reads false; a subscript of a collected boolean answers
+  `1` / `0`; `RETURN r.p` past 64 bits answers an integer; `SET n.p = null` leaves `p` in `keys(n)`; a whole-number
+  `SET` result reads back as an integer.
+
+Walkthroughs (Sonnet, the round-10 rule sheet, on the wheel built at `b9d779bc`):
+
+- Python developer: reported 0 blocker, 2 wrong, 3 papercut. W2 (`MERGE ... ON MATCH SET n.count = n.count + 1`
+  failed, -23) is fixed (`7588e75e`, with the computed-value type fix it led to); W1 rejected (USER_GUIDE.md:176
+  documents `YIELD node`'s columns); W5 rejected (parallel relationships, USER_GUIDE.md:470, 4.8.0); W3, W4 (no
+  embedding or transaction example in README / QUICKSTART) on the 4.7.1 list.
+- Expert, rounds a to c: round a 1 blocker, 2 papercut (ADMIN_GUIDE §1 creates a namespace only through
+  `iris session`, which this host's endpoint protection kills; the upgrade note's from-versions; `reify_edge`'s
+  TypeError), all on the 4.7.1 list; round b 0 / 0 / 0 (tasks 2, 4 and 5 partly done); round c 1 wrong, W10:
+  API_REFERENCE said a refused write comes back in `IVGResult.error`, and it raises `GraphWriteError`, as the code
+  intends; the docstring is fixed (`ebb3205f`).
+
+| Gate                                                                                                                              | Commit     | Result                                                                                                                                                                                                                                                                              |
+| --------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/ci-parity.sh` (Mac Studio)                                                                                               | `724dbd0b` | exit 0; unit suite 24,564 passed, 0 failed on each of Python 3.12 with driver 5.4.0, 3.12 with 5.4.1 and 3.13 fresh; docs layers, inventory, driver matrix, wheel                                                                                                                   |
+| Full E2E, `IVG_GATE=1` (Mac Studio, ivg-iris-enterprise, driver 5.4.0)                                                            | `724dbd0b` | 15,871 passed, 60 skipped (reviewed, tests/e2e/gate_skips.txt), 5 xfailed; 2 failed, `test_470_ppr_old_namespace_e2e`: its last test upgrades the old namespace, so a second run finds it new. 4 / 4 on IVG470OLD rebuilt from 4.6.5. FHA 6 / 6, the reader gate 10 / 10            |
+| `tests/integration` (Mac Studio)                                                                                                  | `724dbd0b` | the driver crashed (SIGSEGV in `iris/dbapi` `close()`, a fixture's teardown in `test_nodepk_constraints.py`) after 156 files with no failure; that file 3 / 3 alone; the 63 files from it on: 1,189 passed, 76 skipped, 0 failed                                                    |
+| TCK, enterprise 2026.3 and Community 2026.1, drivers 5.4.0 and 5.4.1                                                              | `724dbd0b` | 3896 / 3896 eligible on each of the four, 0 skipped by the harness                                                                                                                                                                                                                  |
+| Quickstart (`quickstart_e2e.py --isolated`, Community pinned to 8 cores)                                                          | `724dbd0b` | 5 / 5                                                                                                                                                                                                                                                                               |
+| Arno reader gate (`--check`)                                                                                                      | `4e441022` | ok, 1 proof; `test_236_reader_gate.py` 10 / 10 again in the full E2E at `724dbd0b`                                                                                                                                                                                                  |
+| Speed, paired and interleaved with 4.6.5 (4.4.1 for the load) after `TUNE TABLE`, cache off (laptop, Enterprise key, load 6 to 9) | `b9d779bc` | load best 5.78 s (4.6.5 5.86 s, 4.4.1 6.32 s); `create_node`, `CREATE`, `MATCH ... SET`, PageRank within 4%; `MERGE ... SET` -48%; `UNWIND CREATE` -62%; `ivg.ppr` 15x per call, explained: row 9's answer holds the zero-score nodes up to its 1,000 cap (IRIS returning the rows) |
+| Speed, Cypher writes again after the MERGE SET fix (laptop)                                                                       | `724dbd0b` | `MERGE ... SET` 1.21 s against 4.6.5's 2.57 s; `CREATE` 0.61 / 0.63 s; `MATCH ... SET` +6% on the minimum and +10% on the median over 7 rounds (+2% in the first run), the same SQL as at `b9d779bc`: row 35's typed write (`Prop_Set`)                                             |
+
+Not run at `724dbd0b`: the speed of load, ppr and PageRank (the commits after `b9d779bc` change only the Cypher
+translator's MERGE SET and a docstring), and the walkthroughs (wheel at `b9d779bc`). Docs since then: `3653ce88`,
+KNOWN_ISSUES entries for `kg_RRF_FUSE` and `RETURN r.p`, and the final count.
+
+§9: waiting for Tom's "push it". The CHANGELOG heading reads `v4.7.0 (2026-11-11)`; set the date when it publishes.
+
 ### 4.6.5 — the round 8 to 10 walkthrough fixes: Cypher write literals, procedure arguments, the HTTP API's lock (2026-11-09)
 
 Patch release from the round 8 walkthroughs of the 4.6.4 wheel and the rounds after. Branch `release-4.6.5` from main
