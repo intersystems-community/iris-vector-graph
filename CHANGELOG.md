@@ -2,7 +2,7 @@
 
 # Changelog
 
-### v4.7.0 (2026-11-11)
+### v4.7.0 (2026-11-12)
 
 **Upgrading: run `initialize_schema()` once per namespace, outside a transaction** (it now refuses one that holds a
 write: `CallerTransactionOpenError`). It deploys the changed `Graph.KG` classes (among them the new
