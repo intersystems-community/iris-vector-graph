@@ -143,6 +143,13 @@ Of the 55 open defects on 4.6.5 (`~/.cache/ivg-bench/rel-470/ranked.md`), **29 a
 properties; relationship properties go with row 23), 25, 26, 28, 29, 33, 34, 35. Row 5 was not IVG's (python-devx's
 check filtered `Graph.KG.*`), pinned by a test. Open from the cut: row 7 (waits on Mindwalk's rerun), row 23 (typed storage: 4.8.0, Tom 2026-11-11), row 27 (moves to 4.8.0 with the parallel-relationship default).
 
+**Final count (2026-11-12, at the release commit):** 29 of 55 closed (unchanged). Found during 4.7.0 and fixed: 39,
+the 33 below and six the release gate found (orphaned property rows `create_node` and `bulk_create_nodes` now replace;
+the R310 fallback on a many-core server; MERGE ON CREATE / ON MATCH SET of a computed value stores its type;
+`ON MATCH SET n.count = n.count + 1`; the RDF demo's width; `status()` as a reading or writing role). The gate also
+caught five faults in 4.7.0's own changes (CHANGELOG, "Fixed: loud errors"). Queued for 4.7.1: 23, the 11 listed
+below and plan.md's 12 ("Deferred to 4.7.1"), with five documentation papercuts from the walkthroughs.
+
 **Found during 4.7.0 and fixed: 33.** Silent wrong answers or data loss unless marked:
 
 - 3b: about 20 more `conn.commit()` calls ended a caller's transaction (embed_edges, FHIR, RDF, snapshot, bulk loader,

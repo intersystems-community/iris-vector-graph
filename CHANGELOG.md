@@ -270,8 +270,8 @@ MERGE` batches of 1,000 rows a statement (statements 2 and 3, tuned) took 25.2 t
 - `tzdata` (2025.2 or later) is a dependency.
 
 **Opened against closed.** Of the 55 defects open on 4.6.5, 29 are closed in 4.7.0. Of the release's cut, three stay open (the other 23 were outside it):
-a variable-length read from Mindwalk waits on their rerun, and typed storage and parallel relationships by default are planned for 4.8.0. 33 more were found during 4.7.0 and fixed. Of those found and not fixed, 11 are queued for 4.7.1
-(among them the first large `UNWIND ... MERGE` statement of a run). Planned for 4.8.0: typed storage (relationship property types, ledger typed changesets, the boolean legacy match), and parallel relationships by default.
+a variable-length read from Mindwalk waits on their rerun, and typed storage and parallel relationships by default are planned for 4.8.0. 39 more, also in earlier releases, were found during 4.7.0 and fixed, and the release gate caught five faults in 4.7.0's own changes (above). Of those found and not fixed, 23 are queued for 4.7.1
+(among them the first large `UNWIND ... MERGE` statement of a run, `kg_RRF_FUSE`'s empty answer when an index search fails, and the MERGE SET values above), with five documentation gaps the walkthroughs found. Planned for 4.8.0: typed storage (relationship property types, ledger typed changesets, the boolean legacy match), and parallel relationships by default.
 [Known issues](docs/KNOWN_ISSUES.md) has the open ones with a workaround.
 
 ### v4.6.5 (2026-11-09)
