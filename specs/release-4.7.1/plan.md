@@ -17,8 +17,8 @@ Tom, 2026-11-14: "yes on 4.7.1", for the four findings of the 4.7.0 code review 
 ## Gates (on the release commit)
 
 - Unit: `scripts/ci-parity.sh` exit 0 (Studio).
-- E2E: the files the fixes touch plus the 4.7.0 E2E files for MERGE, PPR, migrations and caller transactions (Studio).
-- TCK enterprise 2026.3, drivers 5.4.0 and 5.4.1: 3896 / 3896 (translator changed).
+- E2E: the full suite on the Studio, as at 4.7.0's final commit (H3 touches every migration), with IVG470OLD rebuilt from 4.6.5 first.
+- TCK enterprise 2026.3 and Community 2026.1, drivers 5.4.0 and 5.4.1: 3896 / 3896 each (translator changed).
 - Quickstart 5 / 5.
 - Each H case run live at the release commit: the known answer.
 - Sign-off in PRE_RELEASE_CHECKLIST.md; publish only on Tom's "push it".
