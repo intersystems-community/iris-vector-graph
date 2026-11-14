@@ -231,9 +231,14 @@ git tag v<version> && git push origin v<version>
 python -m build
 twine upload dist/*
 # The section ends at the next `### v` heading; only some sections end in `---`.
-gh release create v<version> \
-  --title "v<version>" \
-  --notes "$(awk '/^### v/ { if (on) exit; if ($0 ~ /^### v<version> /) on = 1 } on && !/^---$/' CHANGELOG.md)"
+# A relative link resolves under /releases/tag/ on the release page and 404s, so
+# perl points each one at the file at the tag (links to http(s), mailto and # stay).
+V=<version>
+awk -v v="$V" '/^### v/ { if (on) exit; if (index($0, "### v" v " ") == 1) on = 1 } on && !/^---$/' CHANGELOG.md |
+  perl -pe "s#\]\((?!https?:|mailto:|\\#)(?:\./)?([^)\s]+)\)#](https://github.com/intersystems-community/iris-vector-graph/blob/v$V/\$1)#g" \
+  > ~/ivg-notes-$V.md
+grep -oE '\]\([^)]+\)' ~/ivg-notes-$V.md | grep -vE '\]\((https?:|mailto:|#)'   # prints nothing
+gh release create v$V --title "v$V" --notes-file ~/ivg-notes-$V.md
 ```
 
 - [ ] Explicit publish instruction received from Tom
@@ -241,6 +246,7 @@ gh release create v<version> \
 - [ ] Test install from PyPI in a clean venv: `pip install iris-vector-graph==<version>`
 - [ ] main fast-forwarded and pushed (§1), tag `v<version>` pushed to origin
 - [ ] GitHub release created with CHANGELOG section as notes
+- [ ] Every link in the release notes opens from the release page (no relative links; each target exists at the tag)
 
 ---
 
@@ -292,7 +298,7 @@ Not run at `724dbd0b`: the speed of load, ppr and PageRank (the commits after `b
 translator's MERGE SET and a docstring), and the walkthroughs (wheel at `b9d779bc`). Docs since then: `3653ce88`,
 KNOWN_ISSUES entries for `kg_RRF_FUSE` and `RETURN r.p`, and the final count.
 
-§9: Tom: "push it" (2026-11-12). CHANGELOG dated 2026-11-12 (`fabf4fae`). GitHub CI and Quickstart green on `fabf4fae`; main fast-forwarded to `fabf4fae`; tag `v4.7.0`; built at the tag (69 classes in the wheel, the new one `Graph.KG.PropWrite`), `twine check` passed; PyPI (<https://pypi.org/project/iris-vector-graph/4.7.0/>); GitHub release with the CHANGELOG section; clean venv (Python 3.12) installs 4.7.0 and imports with `-I -W error`.
+§9: Tom: "push it" (2026-11-12). CHANGELOG dated 2026-11-12 (`fabf4fae`). GitHub CI and Quickstart green on `fabf4fae`; main fast-forwarded to `fabf4fae`; tag `v4.7.0`; built at the tag (69 classes in the wheel, the new one `Graph.KG.PropWrite`), `twine check` passed; PyPI (<https://pypi.org/project/iris-vector-graph/4.7.0/>); GitHub release with the CHANGELOG section; clean venv (Python 3.12) installs 4.7.0 and imports with `-I -W error`. On 2026-11-13 (Tom: "we should have good release notes links from the release page") the two relative links in the v4.7.0 notes, and 16 in v4.6.4, v4.6.3, v4.6.0, v3.2.0, v3.1.0 and v2.4.8, were pointed at the file at each release's tag; every target and anchor exists there, and §9's command now writes them that way.
 
 ### 4.6.5 — the round 8 to 10 walkthrough fixes: Cypher write literals, procedure arguments, the HTTP API's lock (2026-11-09)
 
