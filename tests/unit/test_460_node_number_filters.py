@@ -97,9 +97,14 @@ def test_a_relationship_property_gets_no_double_comparison():
 @pytest.mark.parametrize("query", ["MERGE (n:L {score: $v}) RETURN n.id", "MERGE (n:L {score: 0.95}) RETURN n.id"])
 def test_merge_finds_the_existing_node_by_every_form_of_the_number(query):
     """MERGE's existence probe compared the text with `str(v)` ('0.95'): it missed a node a Cypher CREATE wrote (a
-    $DOUBLE), so MERGE made a second one."""
+    $DOUBLE), so MERGE made a second one. 4.7.1 H1: the probe (`_mp0`) compares by row 24's rule, as the binding join
+    (`pN`) does; it kept the spellings, so with the string '0.95' stored it found that node, created nothing, and the
+    binding join answered no row (tests/e2e/test_471_merge_number_e2e.py)."""
     tr = _tr(query, {"v": 0.95})
     statements = tr.sql if isinstance(tr.sql, list) else [tr.sql]
-    assert re.search(r"\((_?\w+)\.val IN \('\.95', '0\.95'\) OR \1\.val = CAST\('0\.95' AS DOUBLE\)\)",
-                     "\n".join(statements)), statements
+    joined = "\n".join(statements)
+    typed = r"\(ASCII\(\$LISTBUILD\(%EXACT\((ALIAS)\.val\)\)\) > 0 AND ASCII\(SUBSTRING\(\$LISTBUILD\(%EXACT\(\1\.val\)\), 2, 1\)\) BETWEEN 4 AND 9\) AND CAST\(\1\.val AS DOUBLE\) = CAST\('0\.95' AS DOUBLE\)"
+    assert re.search(typed.replace("ALIAS", r"_mp0"), joined), statements
+    assert re.search(typed.replace("ALIAS", r"p\d+"), joined), statements
+    assert SPELLED not in joined, statements
     assert [s.count("?") for s in statements] == [len(p) for p in tr.parameters], (statements, tr.parameters)

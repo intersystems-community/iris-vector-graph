@@ -219,7 +219,9 @@ r = engine.execute_cypher(
   and `initialize_schema()` leaves an earlier release's text as it is.
 - **Versions:** all 4.x for the reads, and for the relationship filters. The filters matched every form of the number
   from 4.6.0 to 4.6.5; before, an inline or literal number missed the API's `0.95` (and a node filter missed the
-  Cypher-written double). From 4.7.0 a node filter matches a stored number only. From 4.6.0 a node
+  Cypher-written double). From 4.7.0 a node filter matches a stored number only, and from 4.7.1 so does a node
+  `MERGE`: 4.7.0's `MERGE (n:L {p: 6})` found a node holding the string `'6'`, so it created nothing and answered no
+  row. From 4.6.0 a node
   value reads with the type it is stored with whatever the driver version; before, which type a Cypher-written number
   read as depended on the query's path and on the driver (5.4.0 read the number, 5.4.1 the text). The Python writers
   store a node number as a number from 4.6.4. Relationship property types come with typed storage, planned for 4.8.0.

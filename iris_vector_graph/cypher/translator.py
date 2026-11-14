@@ -10852,7 +10852,8 @@ def _merge_id_keyed_guards(context, start, node_id, exist_sql, exist_params) -> 
 
 
 def _merge_val_match(p_alias: str, val, context=None) -> str:
-    """Existing-node probe for one MERGE property: a boolean or a number matches any spelling (4.6.0 R168); a string
+    """Existing-node probe for one MERGE property: a boolean matches any spelling (4.6.0 R168), a number a stored
+    number of that value only, as the binding join and a MATCH compare it (4.7.0 row 24, 4.7.1 H1); a string
     also compares `val_key`, its indexed first 128 characters (`_value_key_predicate`), which `_hint_value_key_lookups`
     then lets drive the lookup."""
     if isinstance(val, bool):
@@ -16212,7 +16213,10 @@ def _static_number(expr, context, infinite_ok: bool = False):
     return v
 
 
-_NODE_VAL_RE = re.compile(r"(p\d+)\.val")
+# A node property row's `val`: `pN` (a MATCH's or a MERGE binding's property join) or `_mpN` (a MERGE's existence
+# check). One definition, so the check and the binding compare a number by the same rule (4.7.1: with `_mpN` left
+# out, the check kept 4.6.5's spellings, found the string '6' for `MERGE (n:M {v: 6})`, and created nothing).
+_NODE_VAL_RE = re.compile(r"(_?m?p\d+)\.val")
 
 
 def _marker_free_side(sql: str, expr, context) -> Optional[str]:
@@ -17903,7 +17907,7 @@ def _value_key_predicate(col_sql, value_expr, context) -> str:
     """
     if not _has_value_key(context):
         return ""
-    m = re.fullmatch(r"(_?m?p\d+)\.val", col_sql.strip())
+    m = _NODE_VAL_RE.fullmatch(col_sql.strip())
     if not m:
         return ""
     if isinstance(value_expr, ast.Literal):

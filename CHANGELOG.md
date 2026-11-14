@@ -8,7 +8,16 @@ Fixes for the wrong answers a code review of 4.7.0 found, each checked against t
 
 **Fixed: Cypher**
 
-- H1 (w471-merge)
+- **A number `MERGE` on a node makes the node when only a string spells the number.** With `{id: 's6', v: '6'}`
+  stored, `MERGE (n:M {v: 6}) RETURN n.v` answered no rows and wrote nothing in 4.7.0. Its check for an existing
+  node still matched any spelling of the number (4.6.0 R168), so it found the string `'6'`. The rows it returned
+  came from a join that matched stored numbers only (4.7.0's rule for a number filter on a node property), and that
+  join found nothing. The check now uses the same rule. The MERGE creates a node holding the number 6 and answers
+  one row, 6. Two `:M` nodes now exist, and the `'6'` node is unchanged. Running the same MERGE again answers that
+  node and writes nothing. When the number 6 is already stored, MERGE still matches it (one node). A string MERGE
+  `{v: '6'}` still matches the stored `'6'`. The same holds for `{v: $v}`, `ON CREATE SET` / `ON MATCH SET` and
+  `UNWIND [6] AS x MERGE (n:M {v: x})`, on the native and SQL routes. `UNWIND` over the numbers 1 to 250, with
+  `'6'` stored, made 249 nodes (250 `:M` in all); it now makes 250 (251 in all).
 
 **Fixed: algorithms**
 
