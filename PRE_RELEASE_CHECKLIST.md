@@ -252,6 +252,34 @@ gh release create v$V --title "v$V" --notes-file ~/ivg-notes-$V.md
 
 ## Sign-off
 
+### 4.7.1 — hotfix: four findings of the 4.7.0 code review (2026-11-14)
+
+Patch release on branch `release-4.7.1`, 6 commits after 4.7.0's tag (`fabf4fae`), from `81a02bd9`; `origin/main`
+(`3eaa79cf`) is an ancestor, so main fast-forwards. Tom, 2026-11-14: "yes on 4.7.1". Scope is the four findings in
+specs/release-4.7.1/plan.md, each test first on 4.7.0; the rest of the review goes to the 4.7.1 queue in
+specs/release-4.7.0. No `.cls` changed.
+
+- H1 (`057095a8`): a number `MERGE (n:M {v: 6})` with the string `'6'` stored answered no rows and wrote nothing; its
+  existence check now compares by row 24's rule, as its binding join does. Live at 4.7.1: a new node, two `:M` in all.
+- H2 (`76c548b2`): PPR with `return_top_k` above 1000 padded every node past the route's 1000-row cap with 0.0; a
+  star of 2000 rows now gives the 1999 leaves their score, none at 0.0 (live). The clinical pipeline leaves out
+  unreached nodes.
+- H3 (`b77aba9c`): with the driver's autocommit off, each migration refused its own writes; `commit_step` now only
+  commits, and the docs migration's public steps refuse a caller's transaction at entry
+  (`test_471_migration_autocommit_off_e2e`, 8 / 8 in the full E2E).
+- H4 (`de34371c`): the 4.7.0 CHANGELOG line on a SET of null now says computed nulls; a literal `SET n.p = null`
+  leaves `p` in `keys(n)` (live), as KNOWN_ISSUES says.
+
+| Gate                                                                                                 | Commit     | Result                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scripts/ci-parity.sh` (Mac Studio)                                                                  | `2e04388f` | exit 0; unit suite 24,598 passed, 0 failed on each of Python 3.12 with driver 5.4.0, 3.12 with 5.4.1 and 3.13 fresh; docs layers, inventory, driver matrix, wheel                                                                                                                                                                     |
+| Full E2E, `IVG_GATE=1` (Mac Studio, ivg-iris-enterprise, driver 5.4.0, IVG470OLD rebuilt from 4.6.5) | `2e04388f` | 15,916 passed, 59 skipped (reviewed, tests/e2e/gate_skips.txt), 5 xfailed, 0 failed; 8 errors, both the environment: IVG470FHA had been dropped after 4.7.0 (rebuilt with CONTRIBUTING.md's recipe: `test_262_alt_schema_fhir` 6 / 6) and ivg-iris was stopped (`test_embedded_wgproto_e2e` 16 passed, 17 skipped, 0 errors on rerun) |
+| TCK, enterprise 2026.3 and Community 2026.1, drivers 5.4.0 and 5.4.1                                 | `2e04388f` | 3896 / 3896 eligible on each of the four, 0 skipped by the harness. The first Community pair ran with ivg-iris stopped and reported 0 / 3896 with exit 0 (rerun after a connect check; `run_all.sh`'s exit status queued)                                                                                                             |
+| Quickstart (`quickstart_e2e.py --isolated`)                                                          | `2e04388f` | 5 / 5, the upgrade stage from 4.7.0 on PyPI                                                                                                                                                                                                                                                                                           |
+
+Not run for 4.7.1: `tests/integration`, speed and the walkthroughs (no `.cls` changed; the Python changes are the
+MERGE existence check, the PPR route choice above 1000 rows, the pipeline's filter and the migrations' commit).
+
 ### 4.7.0 — 29 of the 55 open defects closed: reported first, then silent wrong answers, regressions and loud errors (2026-11-12)
 
 Minor release on branch `release-4.7.0`, 162 commits after 4.6.5 (`dd7528fa`); `origin/main` (`bc851871`) is an
