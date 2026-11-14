@@ -2,7 +2,7 @@
 
 # Changelog
 
-### v4.7.1 (unreleased)
+### v4.7.1 (2026-11-14)
 
 Fixes for the wrong answers a code review of 4.7.0 found, each checked against the 4.7.0 release.
 
