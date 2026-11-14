@@ -2,6 +2,28 @@
 
 # Changelog
 
+### v4.7.1 (unreleased)
+
+Fixes for the wrong answers a code review of 4.7.0 found, each checked against the 4.7.0 release.
+
+**Fixed: Cypher**
+
+- H1 (w471-merge)
+
+**Fixed: algorithms**
+
+- H2 (w471-ppr)
+
+**Fixed: setup and upgrades**
+
+- H3 (w471-mig)
+
+**Corrected: the 4.7.0 notes**
+
+- **A SET whose value is null.** 4.7.0's notes said such a SET removes the property. That holds for a computed null
+  (`SET n.q = n.missing + 1`); a literal `SET n.p = null` still leaves `p` in `keys(n)`, as
+  [Known issues](docs/KNOWN_ISSUES.md) says. The 4.7.0 section now says so.
+
 ### v4.7.0 (2026-11-12)
 
 **Upgrading: run `initialize_schema()` once per namespace, outside a transaction** (it now refuses one that holds a
@@ -113,8 +135,9 @@ whatever setup ran: see the list that follows.
   stored `'30'`, `SET n.p = 30`, `= $v`, `+= {p: 30}` and `MERGE ... ON MATCH SET` left the string (IRIS writes no value
   whose text equals the stored one). Every Cypher UPDATE of a node property now goes through `Graph_KG.Prop_Set`
   (`Graph.KG.PropWrite`), one write in the caller's transaction under the row's lock; `SET n.p = 1` on 2,000 nodes took
-  0.945 s before and 0.866 s after. A SET whose value is null removes the property (`n.missing + 1` left an empty
-  value), and a SET value IVG cannot translate raises where it stored null.
+  0.945 s before and 0.866 s after. A SET whose computed value is null removes the property (`n.missing + 1` left an
+  empty value; a literal `SET n.p = null` still leaves `p` in `keys(n)`, [Known issues](docs/KNOWN_ISSUES.md)), and a
+  SET value IVG cannot translate raises where it stored null.
 - **`toBoolean()` follows openCypher.** `'yes'`, `'y'` and `'1'` answered true and `'no'`, `'n'`, `'0'` false; only
   `'true'` and `'false'` convert, in any case, and `RETURN toBoolean($s)` (which failed "Incorrect number of
   parameters") answers.
