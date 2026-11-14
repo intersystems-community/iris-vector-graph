@@ -3,7 +3,12 @@
 Each migration module had its own `_commit` that ran `conn.commit()` and logged a failure at DEBUG ("Commit not
 needed", meant for an autocommit connection, where there is nothing to fail): a commit IRIS refused mid-upgrade went on
 to the next step as if the last one were written. Now a failed commit rolls the step back and raises, naming the
-migration; a caller's open transaction is refused first, as every migration's entry refuses it.
+migration.
+
+A caller's open transaction is refused once, at the migration's entry (`refuse_caller_transaction`), and never at a
+step's commit (4.7.1): with the driver's autocommit off, `$TLEVEL` is 0 at the entry and the migration's own first
+write raises it to 1, so 4.7.0's second check at each commit took the migration's own open writes for the caller's
+and refused them ("Nothing was done") instead of committing them.
 """
 
 from __future__ import annotations
@@ -23,8 +28,10 @@ def refuse_caller_transaction(conn, migration: str) -> None:
 
 
 def commit_step(conn, migration: str) -> None:
-    """Commit ``migration``'s step on ``conn``; a failure rolls it back and raises ``RuntimeError`` naming it."""
-    refuse_caller_transaction(conn, migration)
+    """Commit ``migration``'s step on ``conn``; a failure rolls it back and raises ``RuntimeError`` naming it.
+
+    The open transaction here is the migration's own: the caller's was refused at the migration's entry.
+    """
     try:
         conn.commit()
     except Exception as e:

@@ -35,7 +35,19 @@ Fixes for the wrong answers a code review of 4.7.0 found, each checked against t
 
 **Fixed: setup and upgrades**
 
-- H3 (w471-mig)
+- **Migrations commit their own steps when the driver's autocommit is off.** With `setAutoCommit(False)` and nothing
+  written by the caller, `migrate_to_graph_scoped_embeddings` and `upgrade_to_4_0_0` on a 3.2.0 install, and
+  `migrate_docs_and_edge_vectors` on 3.2.0-shaped `docs`, stopped at their first step in 4.7.0 with
+  `CallerTransactionOpenError` (`$TLEVEL 1`, "Nothing was done") while the step's writes were still open: each step's
+  commit checked again for a caller's transaction and took the migration's own first write for one. Each now completes,
+  and a second connection reads its writes after the caller rolls back (the 3.2.0 vectors placed in their graph, the
+  documents placed and quarantined as 4.7.0 places them with autocommit on). `rekey_kg_node_stores` writes only globals
+  and was not affected. A caller's own open transaction (a write made with autocommit off, or `START TRANSACTION`) is
+  refused where a migration starts, before it writes anything, as in 4.7.0. **Behaviour you can see:** the six public
+  steps of the docs and edge-vector migration (`prepare_docs`, `finish_docs`, `prepare_edge_vectors`,
+  `finish_edge_vectors`, `place_documents`, `place_edge_vectors`) each refuse a caller's open transaction before they
+  send a statement; 4.7.0 ran the step's DDL or row moves first and refused at the commit. A `place_*` dry run is not
+  refused.
 
 **Corrected: the 4.7.0 notes**
 

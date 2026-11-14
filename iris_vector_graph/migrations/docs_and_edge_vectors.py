@@ -213,11 +213,13 @@ def edge_vectors_finish_sql(schema: str = DEFAULT_SCHEMA) -> List[str]:
 
 def prepare_docs(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
     """Run the ``DOCS_PREPARE`` statements, tolerating a previous pass having run them."""
+    refuse_caller_transaction(conn, "prepare_docs")
     _run_tolerantly(conn, bind_all(DOCS_PREPARE, schema=schema))
 
 
 def finish_docs(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
     """Run the ``DOCS_FINISH`` statements, tolerating a previous pass having run them."""
+    refuse_caller_transaction(conn, "finish_docs")
     _run_tolerantly(conn, bind_all(DOCS_FINISH, schema=schema))
 
 
@@ -229,6 +231,7 @@ def prepare_edge_vectors(
     A staging or quarantine table a failed pass left at a different width is rebuilt first: a re-run that
     reused it refused every row again (-104), and the operator had to find and drop both by hand.
     """
+    refuse_caller_transaction(conn, "prepare_edge_vectors")
     _reset_wrong_width_tables(conn, dimension, schema)
     _run_tolerantly(conn, bind_all(EDGE_VECTORS_PREPARE, schema=schema, dimension=dimension, dtype=dtype))
 
@@ -257,6 +260,7 @@ def _reset_wrong_width_tables(conn, dimension: int, schema: str) -> None:
 
 def finish_edge_vectors(conn, *, schema: str = DEFAULT_SCHEMA) -> None:
     """Run the ``EDGE_VECTORS_FINISH`` statements, tolerating a re-run."""
+    refuse_caller_transaction(conn, "finish_edge_vectors")
     _run_tolerantly(conn, bind_all(EDGE_VECTORS_FINISH, schema=schema))
 
 
@@ -290,6 +294,8 @@ def place_documents(
             column exists cannot work, and pretending it did would report a clean
             migration over an untouched table.
     """
+    if not dry_run:
+        refuse_caller_transaction(conn, "place_documents")
     cursor = conn.cursor()
     try:
         if not _declares(cursor, schema, "docs", "id"):
@@ -412,6 +418,8 @@ def place_edge_vectors(
     Returns:
         A :class:`PlacementReport` for this pass.
     """
+    if not dry_run:
+        refuse_caller_transaction(conn, "place_edge_vectors")
     source = f"{schema}.kg_EdgeEmbeddings"
     staging = f"{schema}.kg_EdgeEmbeddings{STAGING_SUFFIX}"
     quarantine = f"{schema}.edge_vector_quarantine"

@@ -162,6 +162,9 @@ GROUPS: Dict[str, Group] = {
     # 4.7.0: test_470_tcp_run_e2e pins what scripts/dev/tcp_setup.run (the TCP stand-in for `iris session`) does with
     # lines in a namespace; it writes only process-private and IRISTEMP data, so nothing needs installing.
     "tcprun": Group("IVG_TCPRUN_NS", "470TR", "empty"),
+    # 4.7.1 (H3): test_471_migration_autocommit_off_e2e rebuilds Graph_KG in 3.2.0's shape (test_227's frozen DDL)
+    # and migrates it, so it has a namespace of its own.
+    "r471mig": Group("IVG_R471_MIG_NS", "471M", "graph_kg"),
 }
 #: Namespace variables an E2E module cannot be given per run, and why (tests/unit/test_460_gate_namespace_vars.py).
 SESSION_NAMESPACES: Dict[str, str] = {
