@@ -280,6 +280,12 @@ specs/release-4.7.0. No `.cls` changed.
 Not run for 4.7.1: `tests/integration`, speed and the walkthroughs (no `.cls` changed; the Python changes are the
 MERGE existence check, the PPR route choice above 1000 rows, the pipeline's filter and the migrations' commit).
 
+§9: Tom: "push it" (2026-11-14). CHANGELOG dated 2026-11-14 (`0c451a4d`). GitHub CI and Quickstart green on
+`0c451a4d`; main fast-forwarded to `0c451a4d`; tag `v4.7.1`; built at the tag (69 classes in the wheel), `twine check`
+passed; PyPI (<https://pypi.org/project/iris-vector-graph/4.7.1/>); GitHub release with the CHANGELOG section, its one
+link (docs/KNOWN_ISSUES.md) pointed at the file at the tag; clean venv (Python 3.12) installs 4.7.1 and imports with
+`-I -W error`.
+
 ### 4.7.0 — 29 of the 55 open defects closed: reported first, then silent wrong answers, regressions and loud errors (2026-11-12)
 
 Minor release on branch `release-4.7.0`, 162 commits after 4.6.5 (`dd7528fa`); `origin/main` (`bc851871`) is an
