@@ -21,7 +21,17 @@ Fixes for the wrong answers a code review of 4.7.0 found, each checked against t
 
 **Fixed: algorithms**
 
-- H2 (w471-ppr)
+- **Personalized PageRank above 1000 rows scores every node the walk reaches.** On a star `a -> n0..n2999` plus five
+  nodes with no edge, seed `a`, `kg_PERSONALIZED_PAGERANK(['a'], return_top_k=2000)` answered `a`, 999 leaves at
+  0.000153349 and 1000 leaves at 0.0 in 4.7.0, though the walk reaches every leaf: the route answered its 1000 rows and
+  4.7.0's every-node answer gave the rest 0.0. The route is now asked for `return_top_k` rows, so the answer is `a` at
+  0.539954 and 1999 leaves at 0.000153349, none at 0.0 (networkx: 0.540541 and 0.000153153; the gap is the documented
+  stopping rule); with `return_top_k=5000`, 3006 rows, only the five nodes with no edge at 0.0. `ppr()` and
+  `fhir_concept_ppr` call it and get the same fix. `fhir_bridge.unified_clinical_pipeline` leaves the nodes the walk
+  never reaches out of `ppr_results` and its `result_count`, as `fhir_concept_ppr` and `kg_PPR_GUIDED_SUBGRAPH` do (4.7.0
+  listed every other node of the graph at 0.0). `CALL ivg.ppr` still reads at most 1000 rows, all scored. On a
+  namespace whose classes predate 4.6.0, `return_top_k` above 1000 raises and says to run `initialize_schema()`, as an
+  exclusion or a custom tolerance already did.
 
 **Fixed: setup and upgrades**
 

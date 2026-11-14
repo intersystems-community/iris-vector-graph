@@ -133,13 +133,16 @@ DEFAULT_PPR_TOLERANCE = 1e-6
 
 def _runjson_tail(exclude: Optional[List[str]], limit: int, tolerance: float) -> tuple:
     """RunJson's arguments after ``pGraph``: none for the default request, so the call is the pre-235 call that
-    classes from before 4.6.0 accept; else ``pExclude`` and ``pLimit`` (spec 235; RunJson's own defaults, nothing
-    excluded and 1000 rows, when only a tolerance was asked for), then ``pTol`` when it is not RunJson's 1e-6
-    (4.6.0 R270)."""
+    classes from before 4.6.0 accept; else ``pExclude`` and ``pLimit`` (spec 235; nothing excluded and RunJson's own
+    1000 rows when only a tolerance was asked for, or ``limit`` rows when it is more than 1000: 4.7.1 H2), then
+    ``pTol`` when it is not RunJson's 1e-6 (4.6.0 R270)."""
     custom_tol = float(tolerance) != DEFAULT_PPR_TOLERANCE
-    if exclude is None and not custom_tol:
-        return ()
-    tail = ("", 1000) if exclude is None else (json.dumps(exclude), limit)
+    if exclude is None:
+        if not custom_tol and limit <= RUNJSON_DEFAULT_LIMIT:
+            return ()
+        tail = ("", max(limit, RUNJSON_DEFAULT_LIMIT))
+    else:
+        tail = (json.dumps(exclude), limit)
     if custom_tol:
         tail += (tolerance,)
     return tail
@@ -161,8 +164,9 @@ def _runjson_failure(exc: BaseException) -> str:
     message = f"kg_PERSONALIZED_PAGERANK: Graph.KG.PageRank.RunJson failed: {exc}"
     if re.match(r"<PARAMETER>RunJson\^", str(exc)):
         message += (
-            ". The RunJson compiled in this namespace does not take the arguments this IVG sends (an exclusion or a "
-            "tolerance other than 1e-6): its classes predate this IVG. Run initialize_schema() to deploy them"
+            ". The RunJson compiled in this namespace does not take the arguments this IVG sends (an exclusion, a "
+            "tolerance other than 1e-6, or more than 1000 rows): its classes predate this IVG. Run "
+            "initialize_schema() to deploy them"
         )
     return message
 
@@ -264,7 +268,8 @@ class AlgorithmsMixin:
             Dict mapping entity_id to PageRank score, highest first (ties by id in IRIS collation): every node of
             the graph, 0.0 for one the walk never reaches (a node with no edge too), as networkx answers; before
             4.7.0 such a node had no entry. Cut to ``return_top_k``, or without it (and without
-            ``exclude_predicates``) to the 1000 rows of the ObjectScript route.
+            ``exclude_predicates``) to the 1000 rows of the ObjectScript route. A ``return_top_k`` above 1000 is
+            that many scored nodes (4.7.1: 4.7.0 answered 1000 and gave the rest, nodes the walk reached, 0.0).
 
         Raises:
             ValueError: If damping_factor is not in the open interval (0, 1), or max_iterations is below 1 (before
@@ -288,14 +293,19 @@ class AlgorithmsMixin:
 
         graph_name = validate_graph_name(graph)
         exclude = _check_exclusions(exclude_predicates)
-        # the rows RunJson answers without a limit, which it is sent only with an exclusion
-        runjson_cap = RUNJSON_DEFAULT_LIMIT if exclude is None else None
+        # More rows than RunJson's 1000 are sent to the route as its limit, so it answers that many scored nodes
+        # (4.7.1 H2: it answered 1000 and _ppr_every_node gave the rest of return_top_k, nodes it reached too, 0.0).
+        over_cap = exclude is None and (return_top_k or 0) > RUNJSON_DEFAULT_LIMIT
+        # the rows RunJson answers without a limit, which it is sent only with an exclusion or above that cap
+        runjson_cap = RUNJSON_DEFAULT_LIMIT if exclude is None and not over_cap else None
         # Sent only for a named graph, so a store predating `graph` keeps serving the
         # default graph; for a named graph its `TypeError` drops to the paths below.
         graph_kw = {"graph": graph_name} if graph_name else {}
         # Likewise the exclusion: None sends nothing, so the call is the pre-235 call.
         if exclude is not None:
             graph_kw.update(exclude=exclude, limit=return_top_k or 0)
+        elif over_cap:
+            graph_kw["limit"] = return_top_k
         # And the tolerance, only when not the default every store shares (4.6.0 R270).
         if float(tolerance) != DEFAULT_PPR_TOLERANCE:
             graph_kw["tolerance"] = tolerance

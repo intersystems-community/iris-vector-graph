@@ -284,6 +284,9 @@ def unified_clinical_pipeline(
             seed_entities=anchors,
             return_top_k=ppr_top_k,
         )
+        if isinstance(ppr_results, dict):
+            # the nodes the walk reached, as before 4.7.0, which answers every node, the others at 0.0 (4.7.1 H2)
+            ppr_results = {k: v for k, v in ppr_results.items() if v > 0}
         result["ppr_results"] = ppr_results
         result["provenance"]["steps"].append({"step": "ppr", "result_count": len(ppr_results)})
 
