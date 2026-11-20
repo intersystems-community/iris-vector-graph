@@ -77,6 +77,24 @@ def test_bm25_search_report_answers_the_ids_exactly(engine):
     assert set(got) == {"other", LION} and got["other"] == got[LION] > 0
 
 
+def test_bm25_normalizes_scores_and_preserves_number_like_ids(engine):
+    graph = "bm25_number_like_ids"
+    index = "bm25_decimal_ids"
+    ids = {"part:.5", 'quote":.7', "slash\\,.8", "bracket[.9", "plain"}
+    try:
+        for node_id in ids:
+            engine.create_node(node_id, properties={"text": "magpie"}, graph=graph)
+        engine.bm25_build(index, ["text"], graph=graph)
+        assert set(dict(engine.bm25_search(index, "magpie", 10))) == ids
+        report = engine.bm25_search(index, "magpie", 10, report=True)
+        assert set(dict(report["results"])) == ids
+        q = f"CALL ivg.bm25.search('{index}', 'magpie', 10) YIELD node RETURN node"
+        assert {row[0] for row in engine.execute_cypher(q, raise_on_error=True).rows} == ids
+    finally:
+        ns262.native(engine.conn).classMethodVoid("Graph.KG.BM25Index", "Drop", index)
+        engine.drop_graph(graph)
+
+
 def test_plaid_search_answers_the_ids_and_maxsim(engine):
     docs = [
         {"id": Q, "tokens": [[1.0, 0.0], [0.0, 1.0]]},

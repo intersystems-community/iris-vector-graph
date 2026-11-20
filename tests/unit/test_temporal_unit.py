@@ -211,10 +211,10 @@ class TestGetTemporalAggregate:
         result = eng.get_temporal_aggregate("n1", "TREATS", "count", 0, 9999)
         assert result == 0
 
-    def test_no_rows_float_returns_none(self):
+    def test_no_rows_float_returns_zero(self):
         eng, conn, cursor = _make_eng()
         store = MagicMock()
         store.get_temporal_aggregate.return_value = IVGResult(columns=["val"], rows=[])
         eng._store = store
         result = eng.get_temporal_aggregate("n1", "TREATS", "avg", 0, 9999)
-        assert result is None
+        assert result == 0.0 and isinstance(result, float)

@@ -1812,11 +1812,10 @@ class VectorMixin:
             or not 0.0 <= float(max_df_fraction) <= 1.0
         ):
             raise ValueError(f"max_df_fraction must be a number from 0 to 1, got {max_df_fraction!r}")
-        import re as _re
+        from iris_vector_graph.stores.iris_sql_store import _fix_iris_json
 
         def _parse(raw):
-            raw = _re.sub(r'(?<=[:\[,])(\.\d)', r'0\1', str(raw))
-            return json.loads(raw)
+            return json.loads(_fix_iris_json(str(raw)))
 
         iris_obj = self._iris_obj()
         if report:

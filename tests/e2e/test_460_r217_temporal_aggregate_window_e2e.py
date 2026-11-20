@@ -62,10 +62,13 @@ def test_the_aggregate_is_the_window(g, lo, hi, expected):
         assert got[m] == pytest.approx(expected[m], abs=1e-6), (m, got)
 
 
-def test_a_window_with_no_event_counts_zero(g):
+def test_an_empty_window_returns_zero_for_each_metric(g):
     e, ann = g
-    assert e.get_temporal_aggregate(ann, "CALLED", "count", T + 301, T + 649) == 0
-    assert e.get_temporal_aggregate(ann, "CALLED", "sum", T + 301, T + 649) == 0.0
+    count = e.get_temporal_aggregate(ann, "CALLED", "count", T + 301, T + 649)
+    assert count == 0 and type(count) is int
+    for metric in ("min", "max", "sum", "avg"):
+        value = e.get_temporal_aggregate(ann, "CALLED", metric, T + 301, T + 649)
+        assert value == 0.0 and type(value) is float
 
 
 def test_it_agrees_with_the_window_read(g):

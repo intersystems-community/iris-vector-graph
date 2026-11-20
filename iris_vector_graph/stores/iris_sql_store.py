@@ -87,7 +87,37 @@ def _log_cache_store_failure(exc: BaseException) -> None:
 
 
 def _fix_iris_json(raw3: str) -> str:
-    return _re_global.sub(r"(?<=[:\[,])(\.\d)", r"0\1", raw3)
+    """Add the leading zero to ObjectScript fractional numbers while preserving quoted JSON strings."""
+    out = []
+    in_string = escaped = False
+    prev = ""  # the last character outside a string that is not white space
+    i, n = 0, len(raw3)
+    while i < n:
+        ch = raw3[i]
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+        elif prev in (":", "[", ",", "") and i + 1 < n:
+            if ch == "." and raw3[i + 1].isdigit():
+                out.append("0")
+            elif ch == "-" and raw3[i + 1] == "." and i + 2 < n and raw3[i + 2].isdigit():
+                out.append("-0")
+                i += 1
+                ch = "."
+        out.append(ch)
+        if not ch.isspace():
+            prev = ch
+        i += 1
+    return "".join(out)
 
 
 #: Sources the server's Brandes takes when the caller names no sample size
@@ -2973,8 +3003,9 @@ class IRISGraphStore:
         graph: Optional[str] = None,
     ) -> IVGResult:
         # A failed call raises (4.6.0; it answered 0.0, logged at WARNING). GetAggregate answers "" for an empty
-        # window's min, max or avg and for an unknown metric: that is 0.0, as get_temporal_aggregate documents.
-        val = str(self._call_classmethod(
+        # window's min, max or avg and for an unknown metric: that is 0.0, as get_temporal_aggregate documents. The
+        # driver hands that "" over as None, so None is tested before the text is made (str(None) is "None").
+        raw = self._call_classmethod(
             "Graph.KG.TemporalIndex",
             "GetAggregate",
             validate_graph_name(graph),
@@ -2983,7 +3014,8 @@ class IRISGraphStore:
             metric,
             str(ts_start),
             str(ts_end),
-        ))
+        )
+        val = "" if raw is None else str(raw)
         return IVGResult(columns=["value"], rows=[[float(val) if val else 0.0]])
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────

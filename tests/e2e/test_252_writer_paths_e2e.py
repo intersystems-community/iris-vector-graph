@@ -229,6 +229,61 @@ def test_ledger_commit_create_and_delete_rel(ledgered, iris_connection, ids):
     assert differences(iris_connection, ids[:2]) == []
 
 
+@pytest.mark.parametrize("named", [False, True], ids=["default_graph", "named_graph"])
+def test_ledger_delete_of_one_parallel_edge_keeps_the_other(ledgered, iris_connection, ids, named):
+    """Deleting a parallel edge keeps both directions of the surviving edge."""
+    from iris_vector_graph.ledger import Changeset
+    from iris_vector_graph.ledger.errors import ChangesetOperationError
+
+    a, b = ids[:2]
+    g = f"wp_{a}" if named else None
+    use = f"USE GRAPH '{g}' " if g else ""
+    ledgered.set_multigraph(g, True)
+    try:
+        ledgered.create_node(a, graph=g)
+        ledgered.create_node(b, graph=g)
+        make = f"{use}MATCH (x {{id: '{a}'}}), (y {{id: '{b}'}}) CREATE (x)-[:R {{weight: $w}}]->(y)"
+        for weight in (2, 7):
+            ledgered.execute_cypher(make, {"w": weight}, raise_on_error=True)
+        edge = (a, "R", b, g) if g else (a, "R", b)
+        missing = (a, "Missing", b, g) if g else (a, "Missing", b)
+        failed = Changeset(actor="t252", actor_type="system")
+        failed.delete_relationship(edge)
+        failed.delete_relationship(missing)
+        with pytest.raises(ChangesetOperationError):
+            ledgered.ledger.commit(failed)
+        native = ledgered._iris_obj()
+        key = g or 0
+        assert int(native.get("^KG", "out", key, a, "R", b, "#")) == 2
+        assert float(native.get("^KG", "out", key, a, "R", b)) == 2.0
+        assert float(native.get("^KG", "in", key, b, "R", a)) == 2.0
+
+        cs = Changeset(actor="t252", actor_type="system")
+        cs.delete_relationship(edge)
+        ledgered.ledger.commit(cs)
+        assert differences(iris_connection, ids[:2], graphs=(key,)) == []
+        cur = iris_connection.cursor()
+        try:
+            cur.execute(
+                "SELECT ekey FROM Graph_KG.rdf_edges WHERE s = ? AND p = 'R' AND o_id = ? "
+                "AND graph_id = COALESCE(?, '')", [a, b, g or ""],
+            )
+            (survivor,) = cur.fetchall()
+        finally:
+            cur.close()
+        weight = (2, 7)[int(survivor[0])]
+        assert float(native.get("^KG", "out", key, a, "R", b)) == weight
+        assert float(native.get("^KG", "in", key, b, "R", a)) == weight
+        rows = ledgered.execute_cypher(f"{use}MATCH (x {{id: '{a}'}})-[:R]->(y) RETURN y.id", {},
+                                       raise_on_error=True).rows
+        assert [r[0] for r in rows] == [b]
+    finally:
+        ledgered.execute_cypher(
+            f"{use}MATCH (x {{id: '{a}'}})-[r:R]->(y {{id: '{b}'}}) DELETE r", raise_on_error=True,
+        )
+        ledgered.set_multigraph(g, False)
+
+
 def test_a_failed_ledger_commit_leaves_no_adjacency(ledgered, iris_connection, ids):
     from iris_vector_graph.ledger import Changeset
 

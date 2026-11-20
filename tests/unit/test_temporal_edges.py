@@ -258,12 +258,12 @@ class TestTemporalPreAggUnit:
         assert isinstance(result, float)
         assert result == 42.7
 
-    def test_get_temporal_aggregate_empty_avg_returns_none(self):
-        """Empty result on avg should return None."""
+    def test_get_temporal_aggregate_empty_avg_returns_zero(self):
+        """An empty average has the public API's float result type."""
         engine, mock = self._make_engine()
         engine._store.get_temporal_aggregate.return_value.rows = []
         result = engine.get_temporal_aggregate("svc:auth", "CALLS_AT", "avg", 0, 9999)
-        assert result is None
+        assert result == 0.0 and isinstance(result, float)
 
     def test_get_temporal_aggregate_empty_count_returns_zero(self):
         """Empty result on count should return 0."""

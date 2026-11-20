@@ -956,7 +956,7 @@ class TemporalMixin:
         if result.rows:
             val = result.rows[0][0]
             return int(val) if metric == "count" else float(val)
-        return 0 if metric == "count" else None
+        return 0 if metric == "count" else 0.0
 
     def get_bucket_groups(
         self,
