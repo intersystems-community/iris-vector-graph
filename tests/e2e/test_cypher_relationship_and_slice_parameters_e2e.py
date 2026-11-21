@@ -22,6 +22,35 @@ def test_slice_with_bound_limits(iris_connection, prefix, list_expression):
     assert engine.execute_cypher(query, {**params, "start": None}, raise_on_error=True).rows == [[None]]
 
 
+@pytest.mark.parametrize(("start", "end"), [(-3, 5), (1, -1), (-20, 20), (-1, -3), (1, None)])
+def test_slice_of_a_stage_list_uses_relative_bounds(iris_connection, start, end):
+    engine = IRISGraphEngine(iris_connection)
+    items = [0, "2", True, 3.5, [1], {"k": "v"}]
+    result = engine.execute_cypher(
+        "WITH $items AS items RETURN items[$start..$end] AS page",
+        {"items": items, "start": start, "end": end}, raise_on_error=True,
+    )
+    assert result.rows == [[None if end is None else items[start:end]]]
+
+
+def test_slice_reads_each_rows_end_bound(iris_connection):
+    items = [0, "2", True, 3.5, [1], {"k": "v"}]
+    result = IRISGraphEngine(iris_connection).execute_cypher(
+        "UNWIND [-1, -2, 0, 2] AS e WITH e, $items AS items RETURN e, items[0..e] ORDER BY e",
+        {"items": items}, raise_on_error=True,
+    )
+    assert result.rows == [[end, items[:end]] for end in (-2, -1, 0, 2)]
+
+
+@pytest.mark.parametrize("bounds", ["0..2", "$s..2", "2..1", ".."])
+def test_slice_of_a_null_stage_list_returns_null(iris_connection, bounds):
+    result = IRISGraphEngine(iris_connection).execute_cypher(
+        f"WITH $items AS items RETURN items[{bounds}] AS page",
+        {"items": None, "s": 0}, raise_on_error=True,
+    )
+    assert result.rows == [[None]]
+
+
 def test_a_known_slice_of_mixed_values_keeps_each_type(iris_connection):
     engine = IRISGraphEngine(iris_connection)
     values = ["ignored", "2", True, 3.5, ["nested"], {"k": "v"}]

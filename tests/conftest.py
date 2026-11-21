@@ -1487,6 +1487,15 @@ def ivg_236_scratch():
         lib = scratch.native(namespace="USER").get("ArnoAccel", "lib_path")
         if lib:
             scratch.native().set(lib, "ArnoAccel", "lib_path")
+        scratch.close()  # Deployment handles are no longer needed by the tests.
         yield scratch
     finally:
         scratch.close()
+
+
+@pytest.fixture
+def ivg_236_scratch_for_test(ivg_236_scratch):
+    """Share the deployed namespace while closing this test's connections after teardown."""
+    shared = ivg_236_scratch
+    with contextlib.closing(Scratch236(shared._host, shared._port, shared.namespace)) as scratch:
+        yield scratch

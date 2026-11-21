@@ -31,12 +31,12 @@ def test_a_null_bound_does_not_bind_the_list():
     assert bound == []
 
 
-def test_runtime_slice_orders_guard_parameters_before_the_bounds():
+def test_runtime_slice_binds_each_input_once():
     sql, bound = _translate(
         "WITH $l AS l RETURN l[$s..$e] AS r", {"l": [1, 2, 3, 4], "s": 1, "e": 3}
     )
-    assert sql.index("IS NULL") < sql.index("JSON_TABLE")
-    assert bound == ["[1,2,3,4]", 1, 3, 1, 3]
+    assert sql.count("?") == len(bound)
+    assert bound == ["[1,2,3,4]", 1, 3]
 
 
 def _edge_insert(cypher, params):
