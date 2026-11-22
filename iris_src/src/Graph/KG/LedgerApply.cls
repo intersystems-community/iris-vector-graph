@@ -675,18 +675,24 @@ ClassMethod DeleteRelInternal(pSchema As %String, pSeq As %Integer, pStmt As %St
     Do tPriorObj.%Set("p", pP)
     Do tPriorObj.%Set("quals", {}.%FromJSON(..QualsJson(pQuals)))
     Do tPriorObj.%Set("s", pS)
+    Set tTableClass = $Translate(pSchema, "_", ".") _ ".rdfedges"
+    Set tIndexed = (##class(Graph.KG.Adjacency).IndexKind(tTableClass) = "functional"), tEkey = ""
+    If 'tIndexed {
+        Set tRK = ..Run("SELECT ekey FROM " _ pSchema _ ".rdf_edges WHERE %ID = ?", pEdgeId)
+        If tRK.%SQLCODE < 0 Return "read relationship edge key failed: " _ tRK.%Message
+        If 'tRK.%Next() Return "relationship row " _ pEdgeId _ " is missing"
+        Set tEkey = tRK.%GetData(1)
+    }
     Set tRS = ..Run("DELETE FROM " _ pSchema _ ".rdf_edges WHERE %ID = ?", pEdgeId)
     If tRS.%SQLCODE < 0 Return "delete relationship failed: " _ tRS.%Message
     Kill ^IVG.Ledger("tuple", pS, pP, pO, ##class(Graph.KG.Ledger).GKey(pG))
     Set tRow = $Get(^IVG.Ledger("stmt", pStmt), "")
     If tRow '= "" Set ^IVG.Ledger("stmt", pStmt) = $ListBuild($ListGet(tRow, 1), $ListGet(tRow, 2), $ListGet(tRow, 3), $ListGet(tRow, 4), $ListGet(tRow, 5), pSeq)
-    // Adjacency: the functional index (when compiled) already removed the entries.
-    //
-    // The graph the relationship was in, not the default one. Hardcoding 0 left a
-    // named graph still answering traversals for a deleted relationship, and
-    // deleted the default graph's entry for the same triple along with its counters.
-    Set tGKey = ##class(Graph.KG.GraphKey).ForIndex(pG)
-    If $Data(^KG("out", tGKey, pS, pP, pO)) Do ##class(Graph.KG.Adjacency).Remove(tGKey, pS, pP, pO)
+    // The functional index removes the row's adjacency entry during DELETE. Without it, remove the same entry here.
+    If 'tIndexed {
+        Set tSC = ##class(Graph.KG.Adjacency).RowRemove(pG, pS, pP, pO, tEkey)
+        If $$$ISERR(tSC) Return "delete relationship adjacency failed: " _ $System.Status.GetErrorText(tSC)
+    }
     Do ..Rec(.pRecords, "delete_rel", "rel", pStmt, "", ..Enc(tPriorObj.%ToJSON()), ..EncNull(), pG, pFlags)
     Set pCtx("deletedStmt", pStmt) = 1
     Return ""

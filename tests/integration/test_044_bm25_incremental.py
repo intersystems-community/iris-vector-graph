@@ -23,8 +23,8 @@ VOCAB = 2000
 
 
 @pytest.fixture
-def ix(ivg_236_scratch):
-    scratch = ivg_236_scratch
+def ix(ivg_236_scratch_for_test):
+    scratch = ivg_236_scratch_for_test
     native = scratch.native()
     scratch.require_scratch(native)
     names: list = []

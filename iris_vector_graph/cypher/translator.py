@@ -458,26 +458,30 @@ def _multigraph(context) -> bool:
 
 
 def _qualifier_literal(v):
-    """A relationship pattern's literal property value as Python: a list literal's elements are parse-tree nodes."""
-    return _literal_to_python(v) if isinstance(v.value, list) else v.value
+    """Convert parsed and row-bound relationship literals to Python values."""
+    if isinstance(v, ast.Literal) and isinstance(v.value, list):
+        v = _row_literal(v.value)
+    return _literal_to_python(v) if _is_fully_literal(v) else _NOT_CONSTANT
 
 
 def _qualifier_leaf(v):
     """The `qualifiers` JSON leaf a Cypher write stores for a literal value: a list as a JSON list, as create_edge
     stores it (4.6.0 R304: `str()` of one stored its parse tree's text, "[Literal(value=1), Literal(value=2)]");
     anything else as its text, as before (a number keeps the stored text "7")."""
-    return v if isinstance(v, (list, dict)) else str(v)
+    return v if isinstance(v, (list, dict)) else prop_text(v)
 
 
-def _rel_literal_props(rel, context) -> Optional[dict]:
+def _rel_literal_props(rel, context, stage_keys=()) -> Optional[dict]:
     """A relationship pattern's inline properties as the strings `qualifiers` stores,
     or None when one of them is not a scalar known at translation time."""
     out = {}
     for k, v in (rel.properties or {}).items():
-        if isinstance(v, (ast.Literal, ast.MapLiteral)) and _is_fully_literal(v):
-            # 4.6.0 R305: a list or a map literal as Python; it returned None here, and the writer then stored none
-            # of the relationship's properties (`{l: [1, 2], w: 7}` between matched endpoints lost w too)
-            v = _literal_to_python(v)
+        if k in stage_keys:
+            continue
+        if isinstance(v, (ast.Literal, ast.MapLiteral)):
+            v = _qualifier_literal(v)
+            if v is _NOT_CONSTANT:
+                return None
         elif isinstance(v, ast.Variable):
             fl = getattr(context, "foreach_literals", {})
             if v.name in fl:
@@ -10180,6 +10184,34 @@ def _merge_literal_node_id(node, context):
     return _create_clause_resolve_node_id(id_expr, node, context)
 
 
+def _create_rel_prop_value(key, value, context):
+    """Resolve a relationship property between known endpoints or refuse the write."""
+    literal = _qualifier_literal(value)
+    if literal is not _NOT_CONSTANT:
+        return literal
+    if isinstance(value, ast.Variable):
+        if value.is_parameter:
+            params = getattr(context, "input_params", None) or {}
+            if value.name in params:
+                return params[value.name]
+        elif value.name in (getattr(context, "foreach_literals", None) or {}):
+            return context.foreach_literals.get(value.name)
+    folded = _fold_constant(value, context)
+    if folded is not _NOT_CONSTANT:
+        return folded
+    from iris_vector_graph.errors import GraphWriteError
+
+    raise GraphWriteError(
+        "execute_cypher",
+        RuntimeError(
+            f"A CREATE cannot store the relationship property `{key}`: its value is not a literal, a parameter or an "
+            "expression of those, and IVG cannot compute it yet; nothing written (docs/KNOWN_ISSUES.md). Pass the "
+            "value as a parameter, or through a WITH."
+        ),
+        plain=True,
+    )
+
+
 def _create_clause_relationship_entry(rel, i, pat, context):
     left_node, right_node = pat.nodes[i], pat.nodes[i + 1]
     # For INCOMING direction ((:A)<-[:R]-(:B)), the right node is the edge source.
@@ -10212,18 +10244,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
     _dyn_stage_props = _rel_dynamic_stage_props(rel, context) if rel.properties else []
     if s_id and t_id and not _dyn_stage_props:
         for rt in rel.types:
-            rel_props_raw = {
-                k: (
-                    _qualifier_literal(v)
-                    if isinstance(v, ast.Literal)
-                    else (
-                        context.foreach_literals.get(v.name)
-                        if isinstance(v, ast.Variable) and hasattr(context, "foreach_literals")
-                        else None
-                    )
-                )
-                for k, v in rel.properties.items()
-            }
+            rel_props_raw = {k: _create_rel_prop_value(k, v, context) for k, v in rel.properties.items()}
             # Exclude null values (null props are not stored per openCypher semantics)
             rel_props = {k: v for k, v in rel_props_raw.items() if v is not None}
             if not getattr(context, "_merge_rel_create", False) and _multigraph(context):
@@ -10234,9 +10255,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
 
                 # Store all values as strings — JSON_VALUE returns VARCHAR; ints stored
                 # as JSON numbers are returned as NULL by IRIS JSON_VALUE.
-                qualifiers_json = _json.dumps(
-                    {k: prop_text(v) if isinstance(v, bool) else _qualifier_leaf(v) for k, v in rel_props.items()}
-                )
+                qualifiers_json = _json.dumps({k: _qualifier_leaf(v) for k, v in rel_props.items()})
                 context.add_dml(
                     f"INSERT INTO {_table('rdf_edges')} (s, p, o_id, qualifiers, graph_id) VALUES (?, ?, ?, ?, ?)",
                     [s_id, rt, t_id, qualifiers_json, _graph_of(context)],
@@ -10316,7 +10335,7 @@ def _create_clause_relationship_entry(rel, i, pat, context):
             # spliced in with ``||`` since it is only known as a column at execution time.
             import json as _json_cre
 
-            _props_literal = _rel_literal_props(rel, context)
+            _props_literal = _rel_literal_props(rel, context, _dyn_keys)
             _q_col, _q_val, _q_params = "", "", []
             _adopt_q, _adopt_p = "NULL", []
             if _dyn_stage_props:
@@ -10408,7 +10427,7 @@ def _create_matched_edge_keyed(context, rel, cte2, sql2, p2, select_params, dyn_
 
     g = _graph_of(context)
     merging = getattr(context, "_merge_rel_create", False)
-    props = _rel_literal_props(rel, context)
+    props = _rel_literal_props(rel, context, dyn_keys or ())
     dyn_cols = "".join(f", _gd.__dyn{i}" for i in range(len(dyn_keys or ()))) if merging else ""
     q_col, q_val, q_params = "", "", []
     if dyn_keys:
@@ -21758,8 +21777,7 @@ _UNKNOWN = (False, None)
 
 
 def _param_access_value(e, context):
-    """(True, value) for a parameter, or an element, slice or key of one with literal indexes (`$p[1]`, `$p[0..2]`,
-    `$m.k`, `$m['k']`, chained), which the query knows before it runs; else (False, None)."""
+    """(True, value) for a parameter or access whose value is known before the query runs."""
     if isinstance(e, ast.Variable):
         if _is_value_parameter(e, context) and e.name in getattr(context, "input_params", {}):
             return True, context.input_params[e.name]
@@ -21780,16 +21798,23 @@ def _param_access_value(e, context):
             return True, base.get(i)
         return _UNKNOWN
     if isinstance(e, ast.SliceExpression):
-        bounds = [b for b in (e.start, e.end) if b is not None]
-        if not all(
-            isinstance(b, ast.Literal) and isinstance(b.value, int) and not isinstance(b.value, bool) for b in bounds
-        ):
-            return _UNKNOWN
         ok, base = _param_access_value(e.expression, context)
-        if ok and isinstance(base, list):
-            start = e.start.value if e.start is not None else None
-            end = e.end.value if e.end is not None else None
-            return True, base[start:end]
+        if not ok or (base is not None and not isinstance(base, list)):
+            return _UNKNOWN
+        bounds = []
+        for bound in (e.start, e.end):
+            if bound is None:
+                bounds.append(None)
+                continue
+            known, value = (True, bound.value) if isinstance(bound, ast.Literal) else _param_access_value(bound, context)
+            if not known:
+                return _UNKNOWN
+            if value is None:
+                return True, None
+            if type(value) is not int:
+                return _UNKNOWN
+            bounds.append(value)
+        return True, None if base is None else base[bounds[0]:bounds[1]]
     return _UNKNOWN
 
 
@@ -23665,16 +23690,12 @@ def _slice_sql(base_sql, jt_alias, where) -> str:
 
     4.6.0 R311: each element is its own JSON (CY_LIST_ELEM's), so a nested list or map stays one and true stays true;
     JSON_ARRAYAGG of JSON_TABLE's VARCHAR column listed `['a', [1], {k: 1}, true][0..4]` as ['a', '[1]', '{"k":1}',
-    '1']. A list whose SQL holds a parameter keeps that reading: the list is read twice here, and a second `?` would
-    bind the next parameter."""
-    if "?" in base_sql:
-        agg, inner_cols = "JSON_ARRAYAGG(elem)", "elem, "
-    else:
-        elem = f"COALESCE(NULLIF(REPLACE({_fn('CY_LIST_ELEM')}({base_sql}, rn - 1), CHAR(1) || 'J', ''), ''), 'null')"
-        agg, inner_cols = _json_text_list_agg(elem), ""
+    '1']. The enclosing projection makes the list available as a column to both readers."""
+    elem = f"COALESCE(NULLIF(REPLACE({_fn('CY_LIST_ELEM')}({base_sql}, rn - 1), CHAR(1) || 'J', ''), ''), 'null')"
+    agg = _json_text_list_agg(elem)
     return (
         f"(SELECT {agg} FROM "
-        f"(SELECT {inner_cols}ROW_NUMBER() OVER() AS rn "
+        f"(SELECT ROW_NUMBER() OVER() AS rn "
         f"FROM JSON_TABLE({base_sql}, '$[*]' COLUMNS(elem VARCHAR(1000) PATH '$')) {jt_alias}) __sliced "
         f"WHERE {where})"
     )
@@ -23694,9 +23715,8 @@ def _expr_slice(expr, context, segment):
     bound = _bound_param_value_sql(expr, context, segment)
     if bound is not None:
         return bound
-    base_sql = translate_expression(expr.expression, context, segment=segment)
-
     if base_is_string_literal:
+        base_sql = translate_expression(expr.expression, context, segment=segment)
         # String slice: 'hello'[1..4] → SUBSTRING('hello', 2, 3) (1-based, length)
         start_val = (
             int(expr.start.value)
@@ -23716,83 +23736,35 @@ def _expr_slice(expr, context, segment):
         return f"SUBSTRING({base_sql}, {sql_start})"
 
     jt_alias = context.next_alias("slc")
-    arr_len_sql = f"{_fn('JSON_ARRAYLENGTH')}({base_sql})"
 
-    # Determine if start/end are statically known literals (including null literal)
-    start_is_literal = isinstance(expr.start, ast.Literal)
-    end_is_literal = isinstance(expr.end, ast.Literal)
-    start_val = (
-        expr.start.value if start_is_literal else None
-    )  # None = not a literal OR null literal
-    end_val = expr.end.value if end_is_literal else None
+    for bound_expr in (expr.start, expr.end):
+        if isinstance(bound_expr, ast.Literal) and bound_expr.value is None:
+            return "NULL"
 
-    # Null propagation: if either bound is an explicit null literal, return NULL
-    if (start_is_literal and start_val is None) or (end_is_literal and end_val is None):
-        return "NULL"
-
-    # Fast path: both bounds are static non-null integers
-    if start_is_literal and start_val is not None and end_is_literal and end_val is not None:
-        s = int(start_val)
-        e = int(end_val)
-        if s < 0 or e < 0:
-            # Negative indices require knowing array length — fall through to dynamic path
-            pass
-        else:
-            if e <= s:
-                return _EMPTY_JSON_ARRAY
-            return _slice_sql(base_sql, jt_alias, f"rn > {s} AND rn <= {e}")
-
-    def _bound_sql_once(bound_expr, is_end_bound):
-        """Translate a slice bound to SQL, emitting parameters at most once.
-
-        Returns (raw_sql, is_dynamic) where raw_sql references the bound without
-        repeating parameter bindings.  For dynamic (non-literal) expressions we
-        translate once; the caller must not embed the result more than once.
-        """
-        if bound_expr is None:
-            return ("0" if not is_end_bound else arr_len_sql), False
-        if isinstance(bound_expr, ast.Literal):
-            v = bound_expr.value
-            if v is None:
-                return "NULL", False
-            n = int(v)
-            if n < 0:
-                return f"GREATEST(0, {arr_len_sql} + {n})", False
-            return str(n), False
-        # Dynamic: translate once
-        raw = translate_expression(bound_expr, context, segment=segment)
-        return raw, True
-
-    raw_start, start_dynamic = _bound_sql_once(expr.start, is_end_bound=False)
-    raw_end, end_dynamic = _bound_sql_once(expr.end, is_end_bound=True)
-
-    # For dynamic bounds, we must not repeat the SQL (which contains ?) since each
-    # occurrence would add another parameter binding. Wrap into a scalar subquery-CTE
-    # alias or just use the raw_sql directly (IRIS will evaluate ? only once per row
-    # in a WHERE clause if referenced once).
-    start_sql = raw_start
-    end_sql = raw_end
-
-    # If either dynamic bound could produce NULL at runtime, the whole slice → NULL.
-    # We detect null by checking start/end SQL contains a ?, meaning they came from
-    # a parameter.  Use NULLIF approach: wrap the entire expression.
-    needs_null_check = start_dynamic or end_dynamic
-
-    inner = _slice_sql(base_sql, jt_alias, f"rn > ({start_sql}) AND rn <= ({end_sql})")
-    if needs_null_check:
-        # Add sentinel null-check params: re-add the param values as additional ?
-        # bindings for the CASE guard.  For each dynamic bound, add a separate IS NULL
-        # check that evaluates a fresh ? binding.
-        null_checks = []
-        if start_dynamic:
-            raw_start2, _ = _bound_sql_once(expr.start, is_end_bound=False)
-            null_checks.append(f"({raw_start2}) IS NULL")
-        if end_dynamic:
-            raw_end2, _ = _bound_sql_once(expr.end, is_end_bound=True)
-            null_checks.append(f"({raw_end2}) IS NULL")
-        null_guard = " OR ".join(null_checks)
-        return f"CASE WHEN {null_guard} THEN NULL ELSE {inner} END"
-    return inner
+    # Name each input once so a bound can be checked for null and normalized without rebinding it.
+    source = context.next_alias("bounds")
+    items = f"{source}.items"
+    base_sql = translate_expression(expr.expression, context, segment=segment)
+    columns = [f"{base_sql} AS items"]
+    nulls = [f"{items} IS NULL"]
+    conditions = []
+    for expression, name, operator in ((expr.start, "lo", ">"), (expr.end, "hi", "<=")):
+        if expression is None:
+            continue
+        if isinstance(expression, ast.Literal) and type(expression.value) is int and expression.value >= 0:
+            conditions.append(f"rn {operator} {expression.value}")
+            continue
+        sql = translate_expression(expression, context, segment=segment)
+        columns.append(f"{sql} AS {name}")
+        value = f"{source}.{name}"
+        nulls.append(f"{value} IS NULL")
+        offset = f"CASE WHEN {value} < 0 THEN {_fn('JSON_ARRAYLENGTH')}({items}) ELSE 0 END"
+        conditions.append(f"rn {operator} ({offset} + {value})")
+    sliced = _slice_sql(items, jt_alias, " AND ".join(conditions) or "1 = 1")
+    return (
+        f"(SELECT CASE WHEN {' OR '.join(nulls)} THEN NULL ELSE {sliced} END "
+        f"FROM (SELECT {', '.join(columns)}) {source})"
+    )
 
 
 def _expr_property_access(expr, context, segment):

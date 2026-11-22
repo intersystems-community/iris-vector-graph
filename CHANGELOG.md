@@ -2,6 +2,14 @@
 
 # Changelog
 
+### Unreleased
+
+- Deleting a parallel relationship through the ledger keeps both directions of the surviving relationships in traversal.
+- Cypher `CREATE` stores bound and computed relationship properties between new nodes. A relationship property read from a `WITH` stage keeps its list values and the other properties on the relationship.
+- Cypher slices of a list parameter preserve element types, including after a `WITH` stage. Negative bounds count from the end. A null list or an explicit null bound returns null.
+- Empty temporal aggregate windows return numeric zero for every metric.
+- BM25 search returns node IDs exactly as stored, including punctuation followed by a leading-dot decimal.
+
 ### v4.7.1 (2026-11-14)
 
 Fixes for the wrong answers a code review of 4.7.0 found, each checked against the 4.7.0 release.

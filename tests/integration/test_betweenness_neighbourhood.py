@@ -17,13 +17,13 @@ CEN = "Graph.KG.NKGAccelCentrality"
 
 
 @pytest.fixture
-def world(ivg_236_scratch):
-    w = World(ivg_236_scratch)
+def world(ivg_236_scratch_for_test):
+    w = World(ivg_236_scratch_for_test)
     w.native().classMethodValue("Graph.KG.Eraser", "EraseAll")
     w.renew()
     yield w
-    native = ivg_236_scratch.native()
-    if ivg_236_scratch.sentinel_ok(native):
+    native = ivg_236_scratch_for_test.native()
+    if ivg_236_scratch_for_test.sentinel_ok(native):
         native.classMethodValue("Graph.KG.Eraser", "EraseAll")
 
 
