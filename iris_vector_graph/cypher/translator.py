@@ -13061,13 +13061,24 @@ _SET_CONVERSIONS = {
 }
 
 
+_warned_prop_set_missing = False
+
+
 def _prop_set(value_sql: str) -> str:
     """The SET of an UPDATE of rdf_props.val to `value_sql`, through Prop_Set (Graph.KG.PropWrite): IRIS's filer writes
     no value whose text equals the stored one, so `SET n.p = 30` or `SET n.p = toInteger(n.p)` over the string '30'
     left the string (4.7.0 row 35). Prop_Set writes that value into the row itself, once, and answers it. On a
     namespace whose classes predate 4.7.0 (no Prop_Set) the value is set as before, and such a write leaves the
-    string until initialize_schema() deploys it."""
+    string until initialize_schema() deploys it (4.7.2: said once per process, as the older kg_PPR is)."""
+    global _warned_prop_set_missing
     if not _translation_prop_set.get():
+        if not _warned_prop_set_missing:
+            _warned_prop_set_missing = True
+            logger.warning(
+                "This namespace's classes predate 4.7.0 (no Prop_Set): a SET whose value has the same text as the stored "
+                "one (SET n.p = toInteger(n.p) over the string '30') leaves the stored string, and the write reports success. "
+                "initialize_schema() deploys the classes and writes the schema's functions, which sets it right."
+            )
         return value_sql
     return f"{_fn('Prop_Set')}(%ID, val, {value_sql})"
 
