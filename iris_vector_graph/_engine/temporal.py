@@ -7,14 +7,15 @@ from iris_vector_graph._engine import temporal_window as _window
 from iris_vector_graph.errors import GraphWriteError
 from iris_vector_graph.exceptions import TemporalWindowError
 from iris_vector_graph._engine.ledger import ledger_strict as _ledger_strict
+from iris_vector_graph._write_txn import write_txn
 
 
 def _temporal_left(error: str) -> str:
-    """What a failed temporal write leaves, for GraphWriteError. InsertEdge runs no transaction, so an error part way
-    through keeps the stores it wrote before it; a <PROTECT> (the user may not write the database) refuses the first."""
-    if "<PROTECT>" in (error or ""):
-        return ""
-    return "the temporal stores written before the error stay (the temporal write runs no transaction)"
+    """What a failed temporal write leaves, for GraphWriteError: nothing, since 4.7.2. The write runs in a transaction of
+    IVG's own (``write_txn``), so an error part way through takes back the stores it had written, and the counters
+    among them: ``Graph.KG.TemporalIndex`` writes them with a Set inside a transaction, which a rollback undoes (a
+    ``$Increment`` it does not)."""
+    return ""
 
 
 class PurgeResult(NamedTuple):
@@ -289,6 +290,16 @@ class TemporalMixin:
         if timestamp is not None:
             TemporalEdgeInput(source=source, predicate=predicate, target=target,
                               timestamp=int(timestamp), weight=weight)
+        # 4.7.2: one transaction of IVG's (nested in the caller's when it has one) around the index, the structural row
+        # and the SQL mirror. The index is written by a class method over the Native API, which a driver connection
+        # with autocommit off has not yet put in a transaction (it starts at the first SQL write), so a caller's
+        # rollback left the edge in ^KG("tout"/"tin"/"bucket"/"tagg"); and an error part way took back nothing.
+        with write_txn(self.conn, self._ivg_schema):
+            return self._create_edge_temporal_rows(
+                source, predicate, target, timestamp, weight, attrs, upsert, suppress_reverse_index, graph, mode)
+
+    def _create_edge_temporal_rows(self, source, predicate, target, timestamp, weight, attrs, upsert,
+                                   suppress_reverse_index, graph, mode) -> bool:
         result = self._store.write_temporal_edge(  # type: ignore[call-arg]
             source, predicate, target,
             timestamp=int(timestamp) if timestamp is not None else 0,
@@ -371,6 +382,11 @@ class TemporalMixin:
             source=source, predicate=predicate, target=target,
             timestamp=int(timestamp),
         )
+        # 4.7.2: IVG's own transaction around the delete, as around the write (see create_edge_temporal)
+        with write_txn(self.conn, self._ivg_schema):
+            return self._delete_edge_temporal_rows(source, predicate, target, timestamp, graph)
+
+    def _delete_edge_temporal_rows(self, source, predicate, target, timestamp, graph) -> bool:
         if not _temporal_rows_on(self):
             return self._store.delete_temporal_edge(
                 source, predicate, target, int(timestamp), graph=graph
@@ -421,10 +437,16 @@ class TemporalMixin:
         overwritten weight — the FR-004 caveat, and it applies to this path
         identically.
 
-        An edge IRIS refuses raises ``GraphWriteError``, saying how many of the batch were
-        written; before 4.6.0 the count alone answered, so a refused batch read as 0 new edges.
+        An edge IRIS refuses raises ``GraphWriteError`` and none of the batch is written (4.7.2: it is one
+        transaction of IVG's, rolled back; 4.6.0 to 4.7.1 left the edges written before the refusal and said how many);
+        before 4.6.0 the count alone answered, so a refused batch read as 0 new edges.
         """
         _check_temporal_edges(edges)
+        # 4.7.2: one transaction of IVG's around the batch and its mirror (see create_edge_temporal)
+        with write_txn(self.conn, self._ivg_schema):
+            return self._bulk_create_edges_temporal_rows(edges, upsert, suppress_reverse_index, graph, mode)
+
+    def _bulk_create_edges_temporal_rows(self, edges, upsert, suppress_reverse_index, graph, mode) -> "TemporalWriteCount":
         normalized = [
             {
                 "source": e.get("s") or e.get("source_id") or e.get("source", ""),
@@ -449,7 +471,7 @@ class TemporalMixin:
             # R203: a refused batch used to answer a count of 0, which reads as "nothing new to write"
             raise GraphWriteError(
                 "bulk_create_edges_temporal", RuntimeError(result.error),
-                left=(f"{count} of {len(normalized)} edges written" if count else _temporal_left(result.error)))
+                left=_temporal_left(result.error))
         # With the adjacency index, BulkInsert asserted every marked row itself (ADR-0009); the
         # mirror below is for installs without it, and was three SQL statements per edge.
         if count > 0 and graph is not None and not getattr(self, "_adjacency_indexed", False):

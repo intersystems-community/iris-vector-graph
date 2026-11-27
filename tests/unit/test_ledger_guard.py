@@ -136,6 +136,8 @@ class TestTemporalMirror:
         from iris_vector_graph._engine.temporal import TemporalMixin
 
         class E(TemporalMixin):
+            _ivg_schema = "Graph_KG"
+
             def _t(self, name):
                 return f"Graph_KG.{name}"
 

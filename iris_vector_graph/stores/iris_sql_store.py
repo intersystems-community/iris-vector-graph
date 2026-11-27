@@ -2742,6 +2742,11 @@ class IRISGraphStore:
         if not batch:
             return IVGResult(columns=columns, rows=[[0, 0, 0]])
 
+        # 4.7.2: the batch is a level of its own, so a batch the server refuses part way is taken back before the
+        # per-edge retry below. Left in place, the edges it had written read as collisions to the retry (InsertEdge
+        # answers 1 for a collision), which counted them "accepted": a refused batch answered a count and kept a
+        # temporal row whose structural row was never written.
+        txn = write_txn(self.conn, self._ivg_schema)
         try:
             # "written:collisions:skipped" (spec 254); a bare integer from a class older than it.
             raw = str(
@@ -2755,8 +2760,10 @@ class IRISGraphStore:
                 )
             )
             counts = [int(x) for x in raw.split(":")] + [0, 0]
+            txn.commit()
             return IVGResult(columns=columns, rows=[counts[:3]])
         except Exception as e:
+            txn.rollback()
             logger.warning("BulkInsert failed, falling back to per-edge: %s", e)
             inserted = 0
             first_error = None
@@ -2764,6 +2771,7 @@ class IRISGraphStore:
                 # Keyword form from here on: the positional call dropped `graph`
                 # and `mode`, so the fallback wrote to the default graph in
                 # insert-only mode and still reported every edge as written.
+                edge_txn = write_txn(self.conn, self._ivg_schema)
                 r = self.write_temporal_edge(
                     edge.get("source", ""),
                     edge.get("predicate", ""),
@@ -2776,10 +2784,14 @@ class IRISGraphStore:
                     mode=mode,
                     graph=graph,
                 )
-                if not r.error:
+                # an edge refused part way takes its own stores back (4.7.2)
+                if r.error:
+                    edge_txn.rollback()
+                    if first_error is None:
+                        first_error = r.error
+                else:
+                    edge_txn.commit()
                     inserted += 1
-                elif first_error is None:
-                    first_error = r.error
             # InsertEdge returns 1 for a write, a skip and a collision alike, so this path counts
             # edges accepted without an error and cannot report collisions. An edge refused carries its error up
             # (R203): a count alone read as "written fewer", not "refused".

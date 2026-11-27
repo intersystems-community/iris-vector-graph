@@ -106,6 +106,7 @@ class TestInsertEdgeModeParam:
         store.write_temporal_edge.return_value = MagicMock(error=None)
         eng._store = store
         eng.conn = MagicMock()
+        eng._ivg_schema = "Graph_KG"
         eng._t = lambda name: _table(name)
         return eng, store
 

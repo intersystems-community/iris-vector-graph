@@ -30,6 +30,7 @@ _STORE_EDGES = [{"source": "a", "predicate": "P", "target": "b", "timestamp": 10
 def _store(classmethod_return):
     s = IRISGraphStore.__new__(IRISGraphStore)
     s._call_classmethod = MagicMock(return_value=classmethod_return)
+    s.conn = MagicMock()  # the batch is a transaction of IVG's (4.7.2): it opens on the connection
     return s
 
 
@@ -103,12 +104,15 @@ class TestThePythonMirror:
     def test_skipped_when_the_index_asserted_the_row(self):
         engine, _ = _engine([[1, 0, 0]], indexed=True)
         engine.bulk_create_edges_temporal(_EDGES, graph="g")
-        engine.conn.cursor.return_value.execute.assert_not_called()
+        # the write's own transaction statements go through the cursor; the mirror is the INSERT into rdf_edges
+        sent = [str(c.args[0]) for c in engine.conn.cursor.return_value.execute.call_args_list]
+        assert not [sql for sql in sent if "rdf_edges" in sql], sent
 
     def test_kept_without_the_index(self):
         engine, _ = _engine([[1, 0, 0]], indexed=False)
         engine.bulk_create_edges_temporal(_EDGES, graph="g")
-        assert engine.conn.cursor.return_value.execute.called
+        sent = [str(c.args[0]) for c in engine.conn.cursor.return_value.execute.call_args_list]
+        assert [sql for sql in sent if "rdf_edges" in sql], sent
 
 
 def _method(name):

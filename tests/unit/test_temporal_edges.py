@@ -110,7 +110,11 @@ class TestTemporalEdgeUnit:
     def test_create_edge_temporal_with_graph_cursor_exception(self):
         engine, mock = self._make_engine()
         cursor = MagicMock()
-        cursor.execute.side_effect = Exception("db error")
+        def refuse_the_mirror(sql, *args):
+            if "rdf_edges" in str(sql):
+                raise Exception("db error")
+
+        cursor.execute.side_effect = refuse_the_mirror  # the write's transaction statements go through
         engine.conn.cursor.return_value = cursor
         result = engine.create_edge_temporal("A", "REL", "B", 1712000000, graph="g1")
         assert result is True  # errors are silently swallowed

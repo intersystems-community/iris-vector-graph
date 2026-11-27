@@ -305,8 +305,9 @@ must first create one of its SQL functions (DDL and a class compile), `remove_le
 migrations (`upgrade_to_4_0_0` and the steps it runs), and `retract_inference` on a namespace without the adjacency
 index. Each raises `CallerTransactionOpenError`;
 the ledger's `enable()` and `redact()` raise `LedgerTransactionOpenError`. Upgrades are not part of your transaction. A
-write that IVG sends over a Native API connection of its own (an engine made with `from_connect`: the temporal edge
-stores, `^KG` on a namespace without the adjacency index) runs in another IRIS process, outside your transaction.
+write that IVG sends over a Native API connection of its own (`^KG` on a namespace without the adjacency index) runs
+in another IRIS process, outside your transaction. The temporal edge writes join it (4.7.2, §8), on `iris.connect` and
+`iris.dbapi.connect` connections alike.
 
 ### Errors
 
@@ -1053,6 +1054,20 @@ the two nodes are connected; the purge removes that edge once none of its timest
 write (`create_edge`, Cypher `CREATE`) asserted it too. `delete_edge_temporal(s, p, o, timestamp=...)` deletes one
 event. Purging large volumes, and predicates that should not create plain edges at all, are covered in the
 [Admin Guide](ADMIN_GUIDE.md).
+
+**Inside your transaction** (4.7.2). `create_edge_temporal`, `bulk_create_edges_temporal` and `delete_edge_temporal` are a
+transaction of IVG's own, nested in yours when you have one open (§3, "Writes inside your transaction"): your rollback
+removes the edge from the temporal index (`^KG("tout")`, `"tin"`, `"edgeprop"`), its counts in the bucket and
+aggregate stores that `get_temporal_aggregate`, `get_bucket_groups`, `get_edge_velocity` and `find_burst_nodes` read,
+its plain edge, and its entry in the window readers; your commit keeps them. In 4.7.1 and before, with the driver's autocommit off
+(`setAutoCommit(False)`) and no earlier write of yours, a rollback left the edge in `^KG("tout")` and `"tin"`, and after
+any rollback the counts still counted it.
+A write the server refuses part way (`GraphWriteError`) writes none of the batch, where 4.6.0 to 4.7.1 kept the edges
+before the refused one. Two writers of the same source in the same 5-minute bucket take turns while either is in an
+open transaction, since each changes that bucket's counts; the wait ends at the first writer's commit or rollback
+(10 seconds at most, then the write raises). One call costs two more round trips to the server than before: a single
+`create_edge_temporal` took 0.70 ms where it took 0.38 ms (IRIS 2026.3, same machine); a batch of 5,000 edges costs the
+same per edge as before (0.13 ms), so load in batches.
 
 ---
 

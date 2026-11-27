@@ -46,6 +46,8 @@ class _Engine(TemporalMixin):
         self._store.write_temporal_edge.return_value = MagicMock(error=None)
         self._store.bulk_write_temporal_edges.return_value = MagicMock(rows=[[1]], error=None)
 
+    _ivg_schema = "Graph_KG"
+
     def _t(self, table: str) -> str:
         return f"Graph_KG.{table}"
 

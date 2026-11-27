@@ -104,6 +104,55 @@
   `score` as the text `"0.9"` and compared it with `> 0.5`, which openCypher never holds (it also swallowed a failing
   `initialize_schema()`, which hid the width conflict).
 
+**Fixed: Bolt**
+
+- **Bolt `BEGIN`, `COMMIT` and `ROLLBACK` are a transaction.** In 4.7.1 each answered `SUCCESS` and did nothing, so
+  a `CREATE` run after `BEGIN` was committed as it ran: a `ROLLBACK`, or a Neo4j driver's `execute_write` whose function
+  raised, kept the node. `BEGIN` now opens a transaction on the session's own IRIS connection (SQL `START TRANSACTION`,
+  which every IVG write joins, as in the User Guide's "Writes inside your transaction"). `ROLLBACK` removes what the
+  transaction wrote, `COMMIT` keeps it, and `RUN` outside a transaction commits as before. A statement that fails fails
+  the transaction (the messages after it are `IGNORED` until `RESET`, which rolls it back); a `GOODBYE`, or a dropped
+  connection, rolls back a transaction left open. `COMMIT` or `ROLLBACK` with none open, and `BEGIN` inside one,
+  answer `FAILURE` (`Neo.ClientError.Request.Invalid`); they answered `SUCCESS` before. Why a transaction and not a
+  refusal of `BEGIN`: the drivers' managed transactions (`execute_write`, `execute_read`) and `begin_transaction` all
+  start with `BEGIN`, so refusing it would stop standard drivers working, and each session has a connection of its own
+  (`_make_engine` makes one per session) for the transaction to live on. Not changed: the `mode` of `BEGIN` is not
+  enforced, and a server whose engine factory returns one engine for every session (a test's `lambda: engine`) shares
+  its transaction among them. Checked on IRIS 2026.3 with the Neo4j Python driver 6.4.1: a rolled-back `CREATE` leaves no
+  node row and no property row, a commit keeps both, a raising `execute_write` leaves nothing, a failed statement
+  takes the transaction's earlier `CREATE` with it, and a driver closed with a transaction open leaves nothing.
+
+**Fixed: temporal edges**
+
+- **A rolled-back temporal write leaves nothing in the temporal index.** `create_edge_temporal`,
+  `bulk_create_edges_temporal` and `delete_edge_temporal` are now a transaction of IVG's own (nested in yours when
+  you have one open). Two things were wrong in 4.7.1, both measured on IRIS 2026.3 on `iris.connect` and
+  `iris.dbapi.connect` connections: with the driver's autocommit off (`setAutoCommit(False)`) and no earlier write
+  of yours, the write's first stores ran before your transaction had begun (it begins at the first SQL statement,
+  which the write reaches after them), so your `rollback()` left the edge in `^KG("tout")` and `"tin"`, and
+  `get_edges_in_window` read it. And after any rollback (autocommit off, or SQL `START TRANSACTION`) `^KG("bucket")` and `^KG("tagg")` still counted the edge,
+  because IRIS does not take back a `$Increment`: `get_temporal_aggregate` read a count and a sum for an edge that was
+  not there, and a rolled-back `delete_edge_temporal` left the bucket's count lowered. `Graph.KG.TemporalIndex` now
+  changes those counters with a read and a `Set` inside a transaction, under a lock on the source's counters in that
+  bucket that the transaction keeps until it ends, and with `$Increment` as before outside one. Two writers of one
+  source in one 5-minute bucket take turns while either is in an open transaction (the lock waits 10 seconds, then
+  the write raises). A batch the server refuses part way is taken back whole: 4.6.0 to 4.7.1 kept the edges before the
+  refused one, and retried the batch edge by edge on top of them, where the edge that had been refused part way read as
+  a collision and the retry counted it written, so `bulk_create_edges_temporal` answered a count for a batch whose
+  structural row was refused and left that edge's `tout` entry behind. `GraphWriteError` for a temporal write now says
+  nothing was written. Cost: one `create_edge_temporal` takes 0.70 ms where it took 0.38 ms (two more round trips to
+  the server); a batch of 5,000 edges costs 0.13 ms per edge, as before. Redeploy the classes
+  (`initialize_schema()`) for the counters; the Python side alone fixes the driver case.
+
+**Checked: bulk writes**
+
+- **`bulk_create_edges` when the foreign key refuses every row.** No defect: it does not answer a count. With the
+  endpoint step left out so `rdf_edges`' composite foreign keys refuse the rows (SQLCODE -121), a batch of one edge, or
+  of any size in a named graph, re-raises the driver's own error, and a batch of several in the default graph, which
+  the driver's `executemany` skips without an error, raises `GraphWriteError` from the read-back that 4.7.0 added;
+  in both none of the batch is in `rdf_edges` or `^KG("out")`, and a batch where only some rows are refused writes
+  none of them. A regression test pins it (`tests/e2e/test_472_bulk_edges_fk_e2e.py`).
+
 ### v4.7.1 (2026-11-14)
 
 Fixes for the wrong answers a code review of 4.7.0 found, each checked against the 4.7.0 release.

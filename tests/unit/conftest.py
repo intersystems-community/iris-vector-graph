@@ -18,8 +18,9 @@ def _write_txn_without_a_server(request, monkeypatch):
     connections here cannot answer (most answer every fetchone None). With no server, a write runs as no caller
     transaction is open: the helper's own plain mode, 4.6.3's START TRANSACTION / COMMIT / ROLLBACK on the writing
     cursor, which these tests' fakes see and pin. tests/unit/test_464_write_txn.py tests the helper itself against a
-    fake server's $TLEVEL, and tests/e2e/test_464_caller_txn_e2e.py against IRIS."""
-    if request.module.__name__.endswith("test_464_write_txn"):
+    fake server's $TLEVEL, and tests/e2e/test_464_caller_txn_e2e.py against IRIS. test_472_temporal_txn_unit.py reads the
+    levels a temporal write opens from a fake that answers Txn_Begin, Txn_End and Txn_Undo."""
+    if request.module.__name__.endswith(("test_464_write_txn", "test_472_temporal_txn_unit")):
         return
     from iris_vector_graph._write_txn import WriteTxn
 

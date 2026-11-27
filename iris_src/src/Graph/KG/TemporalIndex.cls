@@ -94,42 +94,79 @@ ClassMethod WriteStores(pGKey, pTs As %Integer, pS As %String, pP As %String, pO
 	// Canonical number: InsertEdge receives "2.0" from Python, BulkInsert 2 from JSON, and the
 	// stores (tout, tin, tagg min/max) kept whichever spelling arrived (spec 254, FR-004).
 	Set pW = +pW
-	Set ^KG("tout", pGKey, pTs, pS, pP, pO) = pW
-	Do ..NoteLatest(pGKey, pTs, pS, pP)
-	If 'pSuppR { Set ^KG("tin", pGKey, pTs, pO, pP, pS) = pW }
 	Set tBucketDiv = $Select(..#TSUNIT="ms": ..#BUCKETMS, 1: ..#BUCKET)
 	Set tBucket = pTs \ tBucketDiv
-	Set tmp = $Increment(^KG("bucket", pGKey, tBucket, pS))
-	// Structural adjacency shadow, in this graph, so BFS and traversal see the
-	// edge. Owned by Graph.KG.Adjacency: several timestamps are one structural edge,
-	// and PutShadow moves the degree cache's generation only for a new one.
-	// ADR-0009 with the adjacency functional index (spec 252): the temporal edge asserts its marked
-	// structural row, and the row's index writes ^KG; a shadow with no row would not survive a rebuild.
-	// ADR-0015: a predicate registered temporal-only in this graph gets the temporal stores and nothing structural.
-	If ##class(Graph.KG.TemporalPolicy).IsStructuralKey(pGKey, pP) {
-		If ##class(Graph.KG.Adjacency).Indexed() {
-			$$$ThrowOnError(##class(Graph.KG.Adjacency).AssertTemporalRow(pGKey, pS, pP, pO, pW, 1, .pNodes))
-		} Else {
-			Do ##class(Graph.KG.Adjacency).PutShadow(pGKey, pS, pP, pO, pW)
+	// The bucket's counters are read-modify-written under this lock (see CountEdge). It is released at the end, or at
+	// the end of the caller's transaction when there is one.
+	Do ..LockBucket(pGKey, tBucket, pS)
+	Try {
+		Set ^KG("tout", pGKey, pTs, pS, pP, pO) = pW
+		Do ..NoteLatest(pGKey, pTs, pS, pP)
+		If 'pSuppR { Set ^KG("tin", pGKey, pTs, pO, pP, pS) = pW }
+		// Structural adjacency shadow, in this graph, so BFS and traversal see the
+		// edge. Owned by Graph.KG.Adjacency: several timestamps are one structural edge,
+		// and PutShadow moves the degree cache's generation only for a new one.
+		// ADR-0009 with the adjacency functional index (spec 252): the temporal edge asserts its marked
+		// structural row, and the row's index writes ^KG; a shadow with no row would not survive a rebuild.
+		// ADR-0015: a predicate registered temporal-only in this graph gets the temporal stores and nothing structural.
+		If ##class(Graph.KG.TemporalPolicy).IsStructuralKey(pGKey, pP) {
+			If ##class(Graph.KG.Adjacency).Indexed() {
+				$$$ThrowOnError(##class(Graph.KG.Adjacency).AssertTemporalRow(pGKey, pS, pP, pO, pW, 1, .pNodes))
+			} Else {
+				Do ##class(Graph.KG.Adjacency).PutShadow(pGKey, pS, pP, pO, pW)
+			}
 		}
-	}
-	// count and sum are atomic via $Increment
-	Set tmp = $Increment(^KG("tagg", pGKey, tBucket, pS, pP, "count"))
-	Set tmp = $Increment(^KG("tagg", pGKey, tBucket, pS, pP, "sum"), pW)
-	If '$Data(^KG("tagg", pGKey, tBucket, pS, pP, "min")) || (pW < ^KG("tagg", pGKey, tBucket, pS, pP, "min")) {
-		Set ^KG("tagg", pGKey, tBucket, pS, pP, "min") = pW
-	}
-	If '$Data(^KG("tagg", pGKey, tBucket, pS, pP, "max")) || (pW > ^KG("tagg", pGKey, tBucket, pS, pP, "max")) {
-		Set ^KG("tagg", pGKey, tBucket, pS, pP, "max") = pW
-	}
-	Do ..UpdateHLL(pGKey, tBucket, pS, pP, pO)
-	If $IsObject(pAttrs) {
-		Set iter = pAttrs.%GetIterator()
-		While iter.%GetNext(.key, .val) {
-			Set ^KG("edgeprop", pGKey, pTs, pS, pP, pO, key) = val
+		Do ..CountEdge(pGKey, tBucket, pS, pP, pW)
+		If '$Data(^KG("tagg", pGKey, tBucket, pS, pP, "min")) || (pW < ^KG("tagg", pGKey, tBucket, pS, pP, "min")) {
+			Set ^KG("tagg", pGKey, tBucket, pS, pP, "min") = pW
 		}
+		If '$Data(^KG("tagg", pGKey, tBucket, pS, pP, "max")) || (pW > ^KG("tagg", pGKey, tBucket, pS, pP, "max")) {
+			Set ^KG("tagg", pGKey, tBucket, pS, pP, "max") = pW
+		}
+		Do ..UpdateHLL(pGKey, tBucket, pS, pP, pO)
+		If $IsObject(pAttrs) {
+			Set iter = pAttrs.%GetIterator()
+			While iter.%GetNext(.key, .val) {
+				Set ^KG("edgeprop", pGKey, pTs, pS, pP, pO, key) = val
+			}
+		}
+	} Catch tEx {
+		Lock -^KG("tagg", pGKey, tBucket, pS)
+		Throw tEx
 	}
+	Lock -^KG("tagg", pGKey, tBucket, pS)
 	Return 1
+}
+
+/// The lock a bucket's counters are changed under: one source's edges in one bucket of one graph, exclusive, so
+/// writers of other sources or other buckets never wait for each other. Taken here and released by the writer (Lock -);
+/// inside a transaction IRIS keeps it until the transaction ends, which is what stops a second writer reading a count
+/// the first has not committed and that its rollback would then put back over the second's.
+ClassMethod LockBucket(pGKey, pBucket As %Integer, pS As %String) [ Private ]
+{
+	Lock +^KG("tagg", pGKey, pBucket, pS):10
+	If '$Test {
+		$$$ThrowStatus($$$ERROR($$$GeneralError, "Graph.KG.TemporalIndex: the lock on the temporal counters of "_pS_" in bucket "_pBucket_" was not granted in 10 seconds"))
+	}
+}
+
+/// Count one edge of weight pW into ^KG("bucket") and ^KG("tagg") count and sum, under LockBucket's lock.
+///
+/// Outside a transaction that is $Increment, as it always was. Inside one it is a read and a Set: IRIS does not take a
+/// $Increment back when the transaction rolls back (a counter it created stays, and a counter it raised stays raised),
+/// so a rolled-back temporal write used to leave its edge counted in bucket and tagg, where GetAggregate,
+/// GetBucketGroups, GetVelocity and FindBursts read an edge no committed write made. A Set is undone by the rollback.
+ClassMethod CountEdge(pGKey, pBucket As %Integer, pS As %String, pP As %String, pW As %Double) [ Private ]
+{
+	If $TLevel {
+		Set ^KG("bucket", pGKey, pBucket, pS) = $Get(^KG("bucket", pGKey, pBucket, pS)) + 1
+		Set ^KG("tagg", pGKey, pBucket, pS, pP, "count") = $Get(^KG("tagg", pGKey, pBucket, pS, pP, "count")) + 1
+		Set ^KG("tagg", pGKey, pBucket, pS, pP, "sum") = $Get(^KG("tagg", pGKey, pBucket, pS, pP, "sum")) + pW
+	} Else {
+		Set tmp = $Increment(^KG("bucket", pGKey, pBucket, pS))
+		Set tmp = $Increment(^KG("tagg", pGKey, pBucket, pS, pP, "count"))
+		Set tmp = $Increment(^KG("tagg", pGKey, pBucket, pS, pP, "sum"), pW)
+	}
 }
 
 /// Write a batch of temporal edges. <var>mode</var> means what it means on
@@ -354,9 +391,22 @@ ClassMethod RemoveTemporalRow(pGKey, pTs As %Integer, pSource As %String, pPredi
 	Set tBucket = pTs \ tBucketDiv
 	// A zero counter is not neutral: it still claims the source was active in this
 	// bucket, which is what FindBursts and GetVelocity read.
-	Set tCount = $Increment(^KG("bucket", pGKey, tBucket, pSource), -1)
-	If tCount <= 0 { Kill ^KG("bucket", pGKey, tBucket, pSource) }
-	Do ..RebuildBucketAggregate(pGKey, tBucket, pSource, pPredicate)
+	// Under the writers' lock, and a Set inside a transaction (see CountEdge): a $Increment is not taken back by a rollback
+	Do ..LockBucket(pGKey, tBucket, pSource)
+	Try {
+		If $TLevel {
+			Set tCount = $Get(^KG("bucket", pGKey, tBucket, pSource)) - 1
+			Set ^KG("bucket", pGKey, tBucket, pSource) = tCount
+		} Else {
+			Set tCount = $Increment(^KG("bucket", pGKey, tBucket, pSource), -1)
+		}
+		If tCount <= 0 { Kill ^KG("bucket", pGKey, tBucket, pSource) }
+		Do ..RebuildBucketAggregate(pGKey, tBucket, pSource, pPredicate)
+	} Catch tEx {
+		Lock -^KG("tagg", pGKey, tBucket, pSource)
+		Throw tEx
+	}
+	Lock -^KG("tagg", pGKey, tBucket, pSource)
 }
 
 /// Erase one graph's temporal index: every edge, bucket, aggregate and edge property.

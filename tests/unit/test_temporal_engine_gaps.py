@@ -137,6 +137,7 @@ class TestBulkInsertSRI:
 
         store = IRISGraphStore.__new__(IRISGraphStore)
         store._call_classmethod = MagicMock(return_value=2)
+        store.conn = MagicMock()
         edges = [
             {"source": "a", "predicate": "P", "target": "b",
              "timestamp": 1, "weight": 1.0, "attrs": {}},
@@ -153,6 +154,7 @@ class TestBulkInsertSRI:
 
         store = IRISGraphStore.__new__(IRISGraphStore)
         store._call_classmethod = MagicMock(return_value=1)
+        store.conn = MagicMock()
         edges = [
             {"source": "a", "predicate": "P", "target": "b",
              "timestamp": 1, "weight": 1.0, "attrs": {}},

@@ -26,6 +26,17 @@ IRIS_HOST=localhost IRIS_PORT=1972 IRIS_NAMESPACE=USER IRIS_USERNAME=_SYSTEM IRI
 - At start-up it also opens a Bolt listener on port 7687 for Neo4j drivers (`BOLT_TCP_PORT`; `BOLT_ENABLED=0` turns it
   off). It listens on the address `--host` names, or on `BOLT_TCP_HOST` when that is set; before 4.6.0 it listened on
   every interface whatever `--host` said.
+- Bolt `BEGIN`, `COMMIT` and `ROLLBACK` are a transaction (4.7.2; until then each answered `SUCCESS` and did nothing,
+  so a `CREATE` after `BEGIN` was committed as it ran and a `ROLLBACK` kept it). Each Bolt session has an IRIS
+  connection of its own, and `BEGIN` opens a transaction on it that every write before the `COMMIT` joins (the User
+  Guide's "Writes inside your transaction"): `ROLLBACK` removes them, `COMMIT` keeps them, and the Neo4j drivers'
+  `begin_transaction`, `execute_write` and `execute_read` work as they do against Neo4j. A statement that fails fails
+  the transaction: the messages after it are `IGNORED` until `RESET`, which rolls it back. A `GOODBYE`, or a
+  connection that drops, rolls back a transaction left open. `COMMIT` or `ROLLBACK` with no transaction open, and
+  `BEGIN` inside one, answer `FAILURE` (`Neo.ClientError.Request.Invalid`). `RUN` outside a transaction commits as it
+  did. The `mode` of `BEGIN` is not enforced (a read transaction can write), and results are read in full by `RUN`, so
+  a long transaction holds the locks and uncommitted rows of its writes, which another connection reads (IRIS reads
+  uncommitted) until it ends: keep one short.
 
 ## Authentication
 

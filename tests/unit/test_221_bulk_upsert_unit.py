@@ -40,6 +40,7 @@ def _engine():
 def _store(classmethod_return="1"):
     s = IRISGraphStore.__new__(IRISGraphStore)
     s._call_classmethod = MagicMock(return_value=classmethod_return)
+    s.conn = MagicMock()  # the batch is a transaction of IVG's (4.7.2): it opens on the connection
     return s
 
 

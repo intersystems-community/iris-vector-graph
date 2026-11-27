@@ -419,6 +419,7 @@ class BoltSession:
         except Exception as e:
             log.debug("BoltSession fatal: %s", e)
         finally:
+            self._abandon_transaction("end of session")
             try:
                 await self.ws.close()
             except Exception:
@@ -498,16 +499,11 @@ class BoltSession:
             extra, _ = PackStream.unpack(msg, 2)
             await self._handle_pull(extra)
         elif tag == TAG_BEGIN:
-            await self._send_message(TAG_SUCCESS, {"db": "neo4j"})
+            await self._handle_begin()
         elif tag == TAG_COMMIT:
-            await self._send_message(TAG_SUCCESS, {})
-            self.state = BoltState.READY
+            await self._handle_end_transaction("COMMIT")
         elif tag == TAG_ROLLBACK:
-            self._pending_result = None
-            self._pending_columns = None
-            self._pending_col_types = None
-            await self._send_message(TAG_SUCCESS, {})
-            self.state = BoltState.READY
+            await self._handle_end_transaction("ROLLBACK")
         elif tag == TAG_DISCARD:
             self._pending_result = None
             self._pending_columns = None
@@ -663,8 +659,84 @@ class BoltSession:
         self._pending_result = None
         self._pending_columns = None
         self._pending_col_types = None
+        self._abandon_transaction("RESET")
         self.state = BoltState.READY
         await self._send_message(TAG_SUCCESS, {})
+
+    # ── Explicit transactions (BEGIN / COMMIT / ROLLBACK) ─────────────────────
+    #
+    # A session has a connection of its own (the server's engine factory makes one per session), so a transaction
+    # can span messages: BEGIN is SQL START TRANSACTION on it, COMMIT and ROLLBACK end it, and every write between
+    # joins it (docs/USER_GUIDE.md, "Writes inside your transaction"). Until 4.7.2 all three answered SUCCESS and did
+    # nothing, so a CREATE after BEGIN was committed as it ran. A failed statement fails the transaction (Bolt's
+    # TX_FAILED): everything after it is IGNORED until RESET, which rolls it back, as does a GOODBYE or a connection
+    # that drops. A factory that hands the same engine to several sessions (a test's `lambda: engine`) shares the
+    # transaction among them.
+
+    _tx_open = False
+
+    def _tx_execute(self, sql: str) -> None:
+        cur = self._get_engine().conn.cursor()
+        try:
+            cur.execute(sql)
+        finally:
+            try:
+                cur.close()
+            except Exception:  # noqa: BLE001 - a cursor that will not close does not change what the statement did
+                pass
+
+    async def _fail(self, code: str, message: str) -> None:
+        self._pending_result = None
+        self.state = BoltState.FAILED
+        await self._send_message(TAG_FAILURE, {"code": code, "message": message})
+
+    async def _handle_begin(self) -> None:
+        if self._tx_open:
+            await self._fail("Neo.ClientError.Request.Invalid",
+                             "BEGIN: a transaction is already open on this session; COMMIT or ROLLBACK it first")
+            return
+        try:
+            self._tx_execute("START TRANSACTION")
+        except Exception as e:
+            await self._fail("Neo.DatabaseError.Transaction.TransactionStartFailed", f"BEGIN failed: {e}")
+            return
+        self._tx_open = True
+        await self._send_message(TAG_SUCCESS, {"db": "neo4j"})
+
+    async def _handle_end_transaction(self, how: str) -> None:
+        """COMMIT or ROLLBACK the session's open transaction (``how``); outside one it is a protocol error."""
+        if not self._tx_open:
+            await self._fail("Neo.ClientError.Request.Invalid", f"{how}: no transaction is open on this session")
+            return
+        self._pending_result = None
+        self._pending_columns = None
+        self._pending_col_types = None
+        try:
+            self._tx_execute(how)
+        except Exception as e:
+            if how == "COMMIT":
+                # IRIS may have refused the commit with the transaction still open: the session's RESET takes it back
+                await self._fail("Neo.DatabaseError.Transaction.TransactionCommitFailed", f"COMMIT failed: {e}")
+            else:
+                self._tx_open = False
+                await self._fail("Neo.DatabaseError.Transaction.TransactionRollbackFailed", f"ROLLBACK failed: {e}")
+            return
+        self._tx_open = False
+        extra = {"bookmark": f"ivg:{uuid.uuid4().hex[:8]}"} if how == "COMMIT" else {}
+        await self._send_message(TAG_SUCCESS, extra)
+        self.state = BoltState.READY
+
+    def _abandon_transaction(self, why: str) -> None:
+        """Roll back a transaction the client left open (RESET, GOODBYE, a dropped connection). Never raises: the
+        session is ending or clearing a failure, and a connection that is gone has its transaction rolled back by
+        the server."""
+        if not self._tx_open:
+            return
+        self._tx_open = False
+        try:
+            self._tx_execute("ROLLBACK")
+        except Exception as e:  # noqa: BLE001 - see the docstring
+            log.warning("Bolt %s: rolling back the session's open transaction failed: %s", why, e)
 
     def _detect_graph_columns(self, columns: list) -> list | None:
         groups = []
@@ -953,6 +1025,7 @@ class TcpBoltSession(BoltSession):
         except Exception as e:
             log.debug("TcpBoltSession fatal: %s", e)
         finally:
+            self._abandon_transaction("end of session")
             try:
                 self._writer.close()
                 await self._writer.wait_closed()
