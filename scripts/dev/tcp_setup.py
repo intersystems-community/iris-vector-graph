@@ -156,7 +156,11 @@ def make_namespace(native, ns: str, globals_db: Optional[str] = None, routines_d
 def drop_namespace(native, ns: str, own: Iterable[str]) -> bool:
     """Delete `ns`: its Task Manager tasks, its configuration, then each database it maps that `own` names (with
     resource %DB_<db> for a database not named `ns`). A database `own` does not name is left. False when `ns` did not
-    exist."""
+    exist. A name not starting IVG is refused before anything is asked or deleted (4.7.0 listed and deleted the
+    namespace's tasks first, and only DeleteNamespace refused: `drop_namespace(native, "%SYS", own=())` deleted every
+    Task Manager task in %SYS); `IVGDev.Setup` refuses it too."""
+    if not ns.startswith("IVG"):
+        raise RuntimeError(f"{ns}: drop_namespace: FAIL refused: {ns} does not start with IVG")
     if not namespace_exists(native, ns):
         return False
     dbs = namespace_databases(native, ns)

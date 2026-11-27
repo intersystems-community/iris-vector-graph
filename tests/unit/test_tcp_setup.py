@@ -235,3 +235,46 @@ def _fake_ctx(native):
         yield native
 
     return ctx
+
+
+# ── 4.7.2: the name is refused before the first delete, and a lock that is not granted loads nothing ───────────
+
+
+@pytest.mark.parametrize("name", ["%SYS", "USER", "ENSEMBLE", "ivg470x"])
+def test_drop_of_a_name_not_starting_ivg_is_refused_before_anything_is_deleted(ts, fake, name):
+    """4.7.0 asked IRIS for the namespace's tasks and deleted each before DeleteNamespace refused the name:
+    `drop_namespace(native, "%SYS", own=())` deleted every Task Manager task of %SYS."""
+    fake.namespaces[name] = (name, name)
+    fake.tasks.update({"1": name, "2": name})
+    with pytest.raises(RuntimeError, match=rf"{re.escape(name)}.*refused.*IVG"):
+        ts.drop_namespace(fake, name, own=())
+    assert fake.tasks == {"1": name, "2": name}
+    assert name in fake.namespaces
+    assert not any(c[0] in ("TaskIds", "DeleteTask", "DeleteNamespace", "DeleteDatabase") for c in fake.calls)
+
+
+def test_the_class_refuses_task_ids_and_task_deletes_of_a_namespace_not_starting_ivg():
+    """The class is the last guard: a caller that skips the module's check cannot list or delete another namespace's
+    tasks either."""
+    text = CLASS.read_text()
+    task_ids = text.split("ClassMethod TaskIds(", 1)[1].split("\n}\n", 1)[0]
+    assert 'If $Extract(pName, 1, 3) \'= "IVG"' in task_ids
+    delete_task = text.split("ClassMethod DeleteTask(", 1)[1].split("\n}\n", 1)[0]
+    # DeleteTask is given an id: it reads the task's namespace itself and refuses one not starting IVG
+    assert "NameSpace" in delete_task and '"IVG"' in delete_task
+
+
+def test_a_lock_that_is_not_granted_loads_nothing_and_unlocks_nothing(ts):
+    """The Native API's lock raises <TIMEOUT> when it is not granted (measured on drivers 5.4.0 and 5.4.1), so the
+    helper never compiles without the lock, and never unlocks one it does not hold."""
+
+    class Refused(FakeIRIS):
+        def lock(self, mode, timeout, name, *subs):
+            self.locks.append(("lock", name))
+            raise RuntimeError("<TIMEOUT>")
+
+    native = Refused(loaded_hash=None)
+    with pytest.raises(RuntimeError, match="TIMEOUT"):
+        ts.ensure_helper(native)
+    assert native.loads == []
+    assert native.locks == [("lock", "^IVGDev.Setup")]

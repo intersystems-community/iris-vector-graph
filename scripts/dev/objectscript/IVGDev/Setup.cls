@@ -96,6 +96,9 @@ ClassMethod CreateNamespace(pName As %String, pGlobals As %String, pRoutines As 
 /// outlives its namespace and keeps running against it.
 ClassMethod TaskIds(pName As %String) As %String
 {
+    If $Extract(pName, 1, 3) '= "IVG" {
+        Return "FAIL refused: "_pName_" does not start with IVG"
+    }
     Set tIds = ""
     Set tRS = ##class(%SQL.Statement).%ExecDirect(, "SELECT ID FROM %SYS.Task WHERE NameSpace = ?", pName)
     If tRS.%SQLCODE < 0 {
@@ -107,8 +110,18 @@ ClassMethod TaskIds(pName As %String) As %String
     Return tIds
 }
 
+/// Task pId, unless it runs in a namespace whose name does not start with IVG (or does not exist).
 ClassMethod DeleteTask(pId As %String) As %String
 {
+    Set tTask = ##class(%SYS.Task).%OpenId(pId)
+    If '$IsObject(tTask) {
+        Return "FAIL task: no task "_pId
+    }
+    Set tNamespace = tTask.NameSpace
+    Set tTask = ""
+    If $Extract(tNamespace, 1, 3) '= "IVG" {
+        Return "FAIL refused: task "_pId_" runs in "_tNamespace_", which does not start with IVG"
+    }
     Set tSC = ##class(%SYS.Task).%DeleteId(pId)
     If $$$ISERR(tSC) {
         Return "FAIL task: "_$System.Status.GetErrorText(tSC)
