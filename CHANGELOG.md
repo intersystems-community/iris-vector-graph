@@ -233,6 +233,13 @@ WHERE z.val_key = 'q')"}) SET n.f = 1` answered the node and wrote nothing, and 
   `[x IN nodes WHERE ...]` and `any(x IN nodes(p) WHERE ...)`. They now answer stored numbers only, on the native and
   SQL routes. (`UNWIND nodes(p) AS x WITH x ...` over a variable-length path still fails with SQLCODE -149, whatever
   the filter; it is loud, and not this rule's.)
+- **A number filter in an OPTIONAL MATCH's `WHERE` answers again.** In this release's number rule above, the test for a
+  stored number names the property read several times, and the read inside an OPTIONAL MATCH's `WHERE`
+  (`MATCH (n:Single) OPTIONAL MATCH (n)-[r]-(m) WHERE m.num = 42 RETURN m`) carried a `"key" = ?` marker in each copy
+  with the key bound once; IRIS answered `<ARGUMENT ERROR> Incorrect number of parameters`. The key is written into
+  the SQL as text instead, so there is one marker for each bound value. (`any(x IN nodes(p) WHERE x.p > $v)` and the
+  same range in a list comprehension over `nodes(p)` bind a range's `$v` once for three markers, as 4.7.1 does, with
+  or without the number rule; not fixed here.)
 - **A `SET` on a namespace without `Prop_Set` says so.** On a namespace set up before 4.7.0 and not set up again,
   `SET n.p = toInteger(n.p)` over the string `'30'` kept the string and answered success without a word. The
   translator now logs once per process that the classes predate 4.7.0 and that `initialize_schema()` deploys them.

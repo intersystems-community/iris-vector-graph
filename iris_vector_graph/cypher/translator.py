@@ -23318,9 +23318,12 @@ def _expr_property_reference(expr, context, segment):
             # the property reference can be pushed into the edge JOIN's ON clause via
             # alias substitution (alias.node_id -> edge._dst) without creating a
             # dangling JOIN that precedes the node JOIN that defines the alias.
-            context.where_params.append(expr.property_name)
+            # The key is inlined, not bound (4.7.2): the number rule (`_stored_number_test`, `_stored_number_value`) names
+            # this subquery three to five times, and each copy's `?` would need its own parameter (TCK MatchWhere6
+            # [3]: 4 markers, 2 parameters, "Incorrect number of parameters").
             return (
-                f"(SELECT val FROM {_table('rdf_props')} WHERE s = {alias}.node_id AND \"key\" = ?)"
+                f"(SELECT val FROM {_table('rdf_props')} WHERE s = {alias}.node_id "
+                f"AND \"key\" = '{_sql_literal(expr.property_name)}')"
             )
         # Skip the structural guard when this property is also IS NULL / IS NOT NULL
         # checked in the current boolean context (e.g. `a.x IS NULL OR a.x > 'y'`).
