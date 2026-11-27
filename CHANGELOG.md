@@ -152,6 +152,29 @@
   the driver's `executemany` skips without an error, raises `GraphWriteError` from the read-back that 4.7.0 added;
   in both none of the batch is in `rdf_edges` or `^KG("out")`, and a batch where only some rows are refused writes
   none of them. A regression test pins it (`tests/e2e/test_472_bulk_edges_fk_e2e.py`).
+  **Fixed: setup says what it did not create**
+
+- **An index setup could not create is named in the reply and at WARNING.** On IRIS 2026.1 no expression index is
+  accepted in SQL DDL, so `idx_edges_confidence` (`JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER)`) is
+  refused with `SQLCODE -1`, "KEYS expected, IDENTIFIER (qualifiers) found". Setup carried on, as it should, and said
+  nothing at the default log level: the skip was a DEBUG line, `warnings` was `[]` and no key named the index.
+  `initialize_schema()` now returns `skipped_indexes`, a list of `{"index", "table", "reason"}` (the server's error on
+  one line; `[]` when nothing was skipped), and logs one WARNING per skipped index per run, naming it and saying
+  which queries run without it. It covers every index setup creates and lets fail without raising: `idx_edges_confidence`,
+  the two iFind indexes (`idx_props_val_ifind`, `idx_docs_text_ifind`), the plain indexes of `ensure_indexes`, and
+  `idx_edges_graph_id` and `idx_edges_graph_oid`. An index that already exists, or that the ALTER TABLE fallback
+  created, is not listed. `GraphSchema.ensure_indexes(cursor, skipped=None)` takes the list to fill. The
+  index is still not created where the server refuses it (2026.1, and the 2026.3 AI build `2026.3.0AI.113.0`): SQL
+  that filters on `JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER)` scans `rdf_edges`. IVG's own queries do
+  not filter on that expression (the Cypher translator writes `JSON_VALUE(qualifiers, '$.k')` without `RETURNING`, and
+  the confidence-threshold helpers use `JSON_TABLE`), so none is affected.
+- **A namespace with IVG's tables and none of its classes warns once.** Without the ObjectScript classes, BFS,
+  PageRank and the bulk loads run on Python and SQL fallbacks, and the only line logged was INFO, the same one a fresh
+  namespace gets. When `nodes` and `rdf_edges` exist in the engine's IVG Schema and `Graph.KG.PageRank` does not, the
+  engine logs one WARNING per instance, naming how many classes are missing and the first three, when it first reads
+  its capabilities. A namespace with no IVG tables still logs INFO only; a probe that fails logs at DEBUG and
+  raises nothing. `GraphSchema.check_objectscript_classes` fills the new `IRISCapabilities.missing_classes` with the
+  packaged classes the namespace lacks, `Graph.KG.PageRank` first; `[]` when the classes are there.
 
 ### v4.7.1 (2026-11-14)
 

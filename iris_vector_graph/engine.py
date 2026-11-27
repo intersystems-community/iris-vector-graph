@@ -1805,11 +1805,39 @@ class IRISGraphEngine(
             logger.debug("capability detection failed (%s)", exc)
             return IRISCapabilities()
         if not caps.objectscript_deployed:
+            self._report_classes_missing(cursor, caps)
+        return caps
+
+    def _report_classes_missing(self, cursor, caps: IRISCapabilities) -> None:
+        """Say, once per engine instance, that IVG's tables are here and its ObjectScript classes are not (4.7.2).
+
+        Without the classes BFS, PageRank and the bulk loads run on Python and SQL fallbacks, and nothing said so.
+        Warn and report, never fail: a probe that cannot run says nothing. A namespace with no IVG tables is a fresh
+        one before setup, where the classes are not missing yet, so it keeps the INFO line.
+        """
+        if self.__dict__.get("_classes_missing_warned"):
+            return
+        try:
+            tables = {str(t).lower() for t in self._base_tables(cursor)}
+        except Exception as exc:
+            logger.debug("IVG tables not listed, so the missing classes are not reported: %s", exc)
+            return
+        if not {"nodes", "rdf_edges"} <= tables:
             logger.info(
                 "Graph.KG classes not found in this namespace: bulk loads, BFS and "
                 "PageRank use the Python paths. initialize_schema() deploys them."
             )
-        return caps
+            return
+        self.__dict__["_classes_missing_warned"] = True
+        missing = list(caps.missing_classes)
+        shown = ", ".join(missing[:3])
+        more = f" and {len(missing) - 3} more" if len(missing) > 3 else ""
+        logger.warning(
+            "IVG tables exist in schema %s but its ObjectScript classes are not deployed in this namespace "
+            "(%d missing: %s%s). BFS, PageRank and the bulk loads run on Python and SQL fallbacks. "
+            "initialize_schema() deploys the classes.",
+            getattr(self, "_schema_prefix", "Graph_KG"), len(missing), shown, more,
+        )
 
     # --- Arno acceleration (optional) ---
 

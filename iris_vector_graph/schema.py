@@ -143,6 +143,15 @@ def _refuse_unreadable_routines(native) -> None:
         ) from exc
 
 
+_INDEX_TABLE = re.compile(r"\bON\s+(?:TABLE\s+)?([\w.]+)", re.IGNORECASE)
+
+
+def _index_table(create_sql: str) -> str:
+    """The table a ``CREATE INDEX`` statement names (``Graph_KG.rdf_edges``); empty when it names none."""
+    m = _INDEX_TABLE.search(create_sql)
+    return m.group(1) if m else ""
+
+
 def _iris_true(value: Any) -> bool:
     """A count or flag as IRIS returns it: an int, a bool, or the text of a number.
 
@@ -596,10 +605,43 @@ CREATE INDEX idx_props_val_ifind ON TABLE Graph_KG.rdf_props (val) AS %iFind.Ind
 CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER));
 """
 
+    #: Which queries run without each optional index, for the setup WARNING when it could not be created (4.7.2). An
+    #: index not listed here is a plain btree index: the queries that filter on its columns scan the table.
+    INDEX_IMPACT = {
+        "idx_edges_confidence": (
+            "SQL that filters on JSON_VALUE(qualifiers, '$.confidence' RETURNING INTEGER) scans rdf_edges; IVG's own "
+            "queries do not filter on that expression, so they are not affected"
+        ),
+        "idx_props_val_ifind": "iFind searches over property values (rdf_props.val) have no index to read",
+        "idx_docs_text_ifind": "full-text search over docs.text (kg_TXT) has no iFind index to read",
+    }
+
     @staticmethod
-    def ensure_indexes(cursor) -> Dict[str, bool]:
+    def _one_line(error, limit: int = 300) -> str:
+        """A server error on one line (IRIS's span several: SQLCODE, Location, %msg), at most ``limit`` characters."""
+        text = " ".join(str(error).split())
+        return text if len(text) <= limit else text[: limit - 1] + "\u2026"
+
+    @staticmethod
+    def _record_skipped_index(skipped, name: str, table: str, error) -> None:
+        """Append ``{index, table, reason}`` to ``skipped`` (a list, or None for a caller that does not ask), once per
+        index, and say why at DEBUG; the setup that asked reports it at WARNING."""
+        reason = GraphSchema._one_line(error)
+        logger.debug("Index %s on %s not created: %s", name, table, reason)
+        if skipped is not None and all(entry["index"] != name for entry in skipped):
+            skipped.append({"index": name, "table": table, "reason": reason})
+
+    @staticmethod
+    def ensure_indexes(cursor, skipped: Optional[list] = None) -> Dict[str, bool]:
         """
         Create performance indexes if they don't exist. Safe for existing databases.
+
+        Args:
+            cursor: Active IRIS dbapi cursor.
+            skipped: When given (a list), receives one ``{"index", "table", "reason"}`` dict for each index that could
+                not be created and does not exist: the optional ones (iFind, the confidence expression index) and the
+                plain ones alike. ``reason`` is the server's error on one line. An index that already existed, or that
+                the ALTER TABLE fallback created, is not listed (4.7.2).
 
         Returns:
             Dict mapping index name to success status
@@ -689,6 +731,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                             else:
                                 logger.debug("Index %s ALTER TABLE fallback failed: %s", name, e2)
                                 status[name] = False
+                                GraphSchema._record_skipped_index(skipped, name, _index_table(sql), e2)
                     else:
                         logger.debug(
                             "Index %s skipped (-400, no ALTER TABLE equivalent): %s",
@@ -696,16 +739,20 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
                             e,
                         )
                         status[name] = False
+                        GraphSchema._record_skipped_index(skipped, name, _index_table(sql), e)
                 elif name in _OPTIONAL_INDEXES or sqlcode == "-400":
                     logger.debug("Optional/fatal index %s skipped: %s", name, e)
                     status[name] = False
+                    GraphSchema._record_skipped_index(skipped, name, _index_table(sql), e)
                 else:
                     status[name] = False
+                    if not name.startswith("drop_"):  # a DROP of an index that may not exist is not a creation
+                        GraphSchema._record_skipped_index(skipped, name, _index_table(sql), e)
 
         status["upgrade_val_column"] = GraphSchema.upgrade_val_column(cursor)
         status["add_graph_id_column"] = GraphSchema.add_graph_id_column(cursor)
-        status["add_graph_id_index"] = GraphSchema.add_graph_id_index(cursor)
-        status["add_graph_oid_index"] = GraphSchema.add_graph_oid_index(cursor)
+        status["add_graph_id_index"] = GraphSchema.add_graph_id_index(cursor, skipped=skipped)
+        status["add_graph_oid_index"] = GraphSchema.add_graph_oid_index(cursor, skipped=skipped)
         # The repair itself is unguarded inside the migration — a caller that runs it
         # directly must hear that the default graph still has two spellings. Schema
         # setup is not that caller: it records the failure and carries on, the same
@@ -1177,17 +1224,18 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
             return False
 
     @staticmethod
-    def add_graph_id_index(cursor) -> bool:
+    def add_graph_id_index(cursor, skipped: Optional[list] = None) -> bool:
         try:
             cursor.execute("CREATE INDEX idx_edges_graph_id ON Graph_KG.rdf_edges (graph_id)")
             return True
         except Exception as e:
             if "already exists" in str(e).lower() or "already has" in str(e).lower():
                 return True
+            GraphSchema._record_skipped_index(skipped, "idx_edges_graph_id", "Graph_KG.rdf_edges", e)
             return False
 
     @staticmethod
-    def add_graph_oid_index(cursor) -> bool:
+    def add_graph_oid_index(cursor, skipped: Optional[list] = None) -> bool:
         """``(graph_id, o_id)``: is there an edge into this node in this graph? A bare-node retire asks it per node,
         and so does ``fk_edges_dest`` when the row goes. Without it, statistics that call ``o_id`` unselective plan
         both as a scan of ``u_spo_graph_ekey`` (``s`` leads it): 54 rows/s on a 500,000-row drop (4.5.2)."""
@@ -1197,6 +1245,7 @@ CREATE INDEX idx_edges_confidence ON Graph_KG.rdf_edges(JSON_VALUE(qualifiers, '
         except Exception as e:
             if "already exists" in str(e).lower() or "already has" in str(e).lower():
                 return True
+            GraphSchema._record_skipped_index(skipped, "idx_edges_graph_oid", "Graph_KG.rdf_edges", e)
             return False
 
     @staticmethod
@@ -2837,6 +2886,7 @@ LANGUAGE OBJECTSCRIPT
         caps.graphoperators_deployed = _class_present("iris.vector.graph.GraphOperators")
 
         if not caps.objectscript_deployed:
+            caps.missing_classes = GraphSchema._missing_packaged_classes(cursor)
             return caps
 
         # --- ^KG / ^NKG bootstrap markers via native API ---
@@ -2848,6 +2898,28 @@ LANGUAGE OBJECTSCRIPT
                 setattr(caps, marker, False)
 
         return caps
+
+    @staticmethod
+    def _missing_packaged_classes(cursor) -> list:
+        """The classes IVG ships that the class dictionary does not list, the sentinel first (4.7.2).
+
+        Asked once, and only when the sentinel is absent. A dictionary that cannot be listed (a reader without SELECT
+        on it) names every packaged class, which overstates a partial deploy and is exact for the case this serves:
+        the sentinel is absent, so the deploy never ran.
+        """
+        from iris_vector_graph._engine.class_deploy import SENTINEL_CLASS, packaged_class_names
+
+        expected = packaged_class_names() or [SENTINEL_CLASS]
+        present: set = set()
+        try:
+            cursor.execute(
+                "SELECT Name FROM %Dictionary.ClassDefinition "
+                "WHERE Name %STARTSWITH 'Graph.KG.' OR Name %STARTSWITH 'IVG.'"
+            )
+            present = {str(r[0]) for r in cursor.fetchall() or []}
+        except Exception as exc:
+            logger.debug("class dictionary not listed (%s): every packaged class taken as missing", exc)
+        return [name for name in expected if name not in present]
 
     @staticmethod
     def deploy_objectscript_classes(

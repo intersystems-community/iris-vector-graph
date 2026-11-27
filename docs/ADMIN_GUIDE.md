@@ -420,6 +420,7 @@ Every key of the dictionary `initialize_schema()` returns, and of the one `initi
 | `kg_built`               | both        | `True` when this run built `^KG` and `^NKG` from the rows in `rdf_edges`: the first setup in a namespace that finds rows does, once                                                                                                                                                              |
 | `ifind_indexes`          | run         | `{index: searchable}` for the two iFind indexes; one that is not is also a warning                                                                                                                                                                                                               |
 | `ledger_index`           | run         | `idx_ledger_correlation` on `ledger_revisions`: `present`, `created`, `skipped: …` or `not created: …` (also a warning)                                                                                                                                                                          |
+| `skipped_indexes`        | run         | `[{"index", "table", "reason"}]` for each index setup could not create and the namespace does not have, `reason` being the server's error on one line; `[]` when none. Each is logged once at WARNING, saying which queries run without it (4.7.2; [Troubleshooting](#11-troubleshooting))       |
 | `tuned`                  | run         | `{table: True}` for each core table `TUNE TABLE` ran on                                                                                                                                                                                                                                          |
 | `embedding_dimension`    | both        | the run: the width of the vector tables. The dry run: `{"configured", "alter", "unchanged", "needs_manual_migration", "needs_rewidth"}`, the width and the tables it would alter to it, leave, or cannot change                                                                                  |
 | `needs_manual_migration` | run         | the vector tables holding rows at another width, which the run cannot alter (each also a warning)                                                                                                                                                                                                |
@@ -1271,6 +1272,23 @@ or did not finish setup; or the engine asks for another schema than the namespac
 
 **`IVGSchemaError` from setup naming a privilege.** The user running setup lacks that SQL privilege
 ([Privileges](#3-privileges)). Grant it and run setup again; it finishes what an earlier run started.
+
+**Setup's log says `index idx_edges_confidence … was not created`, and `status["skipped_indexes"]` lists it.** IRIS
+2026.1 accepts no expression index in SQL DDL (`CREATE INDEX … (JSON_VALUE(qualifiers, '$.confidence' …))` fails with
+`SQLCODE -1`, "KEYS expected, IDENTIFIER (qualifiers) found"; the 2026.3 AI build `2026.3.0AI.113.0` answers the same),
+so on those releases the index does not exist and SQL that filters on that expression scans `rdf_edges`. IVG's own
+queries do not filter on it (the Cypher translator writes `JSON_VALUE(qualifiers, '$.k')` without `RETURNING`; the
+confidence-threshold helpers use `JSON_TABLE`), so none is affected. Every other index setup
+could not create is listed the same way, with the server's reason: an iFind index on a build without it, for one.
+Setup tries each again on its next run.
+
+**An engine's first call logs `IVG tables exist … but its ObjectScript classes are not deployed`.** The namespace has
+IVG's tables and none of its classes (a DDL-only namespace, or `initialize_schema(auto_deploy_objectscript=False)`),
+so BFS, PageRank and the bulk loads run on Python and SQL fallbacks. The line gives how many classes are missing and
+names the first three; `engine.capabilities.missing_classes` lists them all, `Graph.KG.PageRank` first. Run
+`initialize_schema()` in that namespace. A namespace with no IVG tables yet does not warn. The line is logged once
+per engine instance, when the engine first reads its capabilities (its first call that depends on them), not at
+construction.
 
 **`<CLASS DOES NOT EXIST> *Graph.KG.…`.** The call ran in a namespace IVG was not set up in: `%SYS` (a `%ZSTART`
 routine, for instance) or another namespace. Run it in the namespace setup ran in, or run setup there.

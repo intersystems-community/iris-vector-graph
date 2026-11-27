@@ -58,6 +58,17 @@ def packaged_class_dir() -> Optional[Path]:
     return None
 
 
+def packaged_class_names() -> List[str]:
+    """The names of the classes IVG ships (from the file names under :func:`packaged_class_dir`), the sentinel first;
+    empty when no sources ship."""
+    class_dir = packaged_class_dir()
+    if class_dir is None:
+        return []
+    names = {".".join(p.relative_to(class_dir).with_suffix("").parts) for p in class_dir.rglob("*.cls")}
+    names.discard(SENTINEL_CLASS)
+    return [SENTINEL_CLASS, *sorted(names)]
+
+
 def read_class_sources(class_dir: Path) -> Dict[str, str]:
     """``{class name: UDL text}`` for every ``.cls`` under ``class_dir``."""
     sources = {}

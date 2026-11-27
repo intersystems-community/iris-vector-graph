@@ -93,8 +93,7 @@ def _alter_tolerated_errors() -> tuple:
 
 def _one_line(error, limit: int = 300) -> str:
     """A server error on one line (IRIS's span several: SQLCODE, Location, %msg), at most ``limit`` characters."""
-    text = " ".join(str(error).split())
-    return text if len(text) <= limit else text[: limit - 1] + "…"
+    return GraphSchema._one_line(error, limit)
 
 
 def _setup_summary(namespace: str, schema: str, deploy, status: Dict[str, Any], dim: int,
@@ -2331,6 +2330,14 @@ class SchemaMixin:
                        "AND TABLE_TYPE = 'BASE TABLE'", [getattr(self, "_schema_prefix", "Graph_KG")])
         return {str(r[0]) for r in cursor.fetchall() or []}
 
+    def _skipped_indexes_in_schema(self, skipped: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """``skipped`` with each table named in this engine's IVG Schema (setup's statements are written for
+        ``Graph_KG`` and rewritten on the way to the server, so ``ensure_indexes`` reports the written name)."""
+        from iris_vector_graph.schema_name import rewrite_schema_text
+
+        schema = getattr(self, "_schema_prefix", "Graph_KG")
+        return [{**entry, "table": rewrite_schema_text(entry["table"], schema)} for entry in skipped]
+
     def _plan_setup(self, conn, iris_obj, auto_deploy_objectscript: bool) -> dict:
         """What a run would create or build, under the keys the run replies them in (4.6.0 R050, expert walkthrough
         W4): ``tables_created``, ``routines``, ``objectscript_compiled`` and ``objectscript_skipped``,
@@ -2511,7 +2518,19 @@ class SchemaMixin:
                         )
 
         # 3. Ensure indexes and run schema migrations (e.g. column size upgrades)
-        GraphSchema.ensure_indexes(cursor)
+        # 4.7.2: every index it could not create comes back named, with the server's reason; each is reported once per
+        # run (ensure_indexes lists an index once, though the base DDL above and it both asked for it)
+        skipped_indexes: List[Dict[str, str]] = []
+        GraphSchema.ensure_indexes(cursor, skipped=skipped_indexes)
+        skipped_indexes = self._skipped_indexes_in_schema(skipped_indexes)
+        for entry in skipped_indexes:
+            logger.warning(
+                "IVG setup: index %s on %s was not created, so %s. IRIS said: %s",
+                entry["index"],
+                entry["table"],
+                GraphSchema.INDEX_IMPACT.get(entry["index"], "queries that filter on its columns scan the table"),
+                entry["reason"],
+            )
         # ensure_indexes may just have created the rdf_props value-key column and index (spec: lookup by value).
         self._props_value_key_cached = None
         self._adjacency_indexed_cached = None
@@ -2713,6 +2732,7 @@ class SchemaMixin:
             "kg_built": kg_built,
             "adjacency_index": adjacency_index,
             "ledger_index": ledger_index,
+            "skipped_indexes": skipped_indexes,
             "routines": routines,
             "embedding_dimension": dim,
             "needs_manual_migration": needs_manual_migration,

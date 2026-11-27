@@ -173,6 +173,10 @@ GROUPS: Dict[str, Group] = {
     # Bolt server's per session), write temporal edges and nodes of their own names, and read the temporal globals of
     # the default graph and of a graph named g472; no other file may share that.
     "r472": Group("IVG_R472_NS", "472", "graph_kg"),
+    # 4.7.2: test_472_setup_visibility_e2e runs setup in an installed namespace (the indexes it lists against the
+    # catalog) and builds the tables with no classes in an empty one (the engine's missing-classes warning).
+    "r472vis": Group("IVG_SETUP_VIS_NS", "472V", "graph_kg"),
+    "r472nocls": Group("IVG_NOCLASSES_NS", "472N", "empty"),
 }
 #: Namespace variables an E2E module cannot be given per run, and why (tests/unit/test_460_gate_namespace_vars.py).
 SESSION_NAMESPACES: Dict[str, str] = {
