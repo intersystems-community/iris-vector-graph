@@ -5901,6 +5901,15 @@ def _pre_update_stage_snapshot(cypher_query, context, all_ctes, sql):
     return snap_stmt, ctes
 
 
+_SQL_LITERAL_RE = re.compile(r"'(?:[^']|'')*'")
+
+
+def _blank_sql_literals(sql: str) -> str:
+    """`sql` with the text of each quoted literal (`'` doubled inside one) replaced by a filler of the same length, its
+    quotes kept: the statement's own text at the same positions, for a scan that must not read a user's value (4.7.2)."""
+    return _SQL_LITERAL_RE.sub(lambda m: "'" + "\x01" * (len(m.group()) - 2) + "'", sql)
+
+
 def _hint_row_guards(sql: str) -> str:
     """`sql` with each per-node guard on rdf_props / rdf_labels (`NOT EXISTS (SELECT 1 FROM t WHERE ... s = ...)`)
     reading from `guard_from(t)`.
@@ -5912,20 +5921,25 @@ def _hint_row_guards(sql: str) -> str:
     finds the guards by their plain `FROM t WHERE` text.
     """
     prefix = "NOT EXISTS (SELECT 1 FROM "
+    # 4.7.2: the scan reads `code`, the statement with each quoted literal blanked (same length, same positions), and
+    # every edit is made to both, so a value that spells a guard is never one
+    code = _blank_sql_literals(sql)
     for name in ("rdf_props", "rdf_labels"):
         tbl = _table(name)
         needle = f"{prefix}{tbl} WHERE "
-        start = sql.find(needle)
+        start = code.find(needle)
         while start != -1:
             where_at = start + len(needle)
             depth, i = 1, where_at
-            while depth and i < len(sql):
-                depth += {"(": 1, ")": -1}.get(sql[i], 0)
+            while depth and i < len(code):
+                depth += {"(": 1, ")": -1}.get(code[i], 0)
                 i += 1
-            if re.search(r"\bs = ", sql[where_at:i]):
+            if re.search(r"\bs = ", code[where_at:i]):
                 at = start + len(prefix)
-                sql = sql[:at] + guard_from(tbl) + sql[at + len(tbl) :]
-            start = sql.find(needle, where_at)
+                hinted = guard_from(tbl)
+                sql = sql[:at] + hinted + sql[at + len(tbl) :]
+                code = code[:at] + hinted + code[at + len(tbl) :]
+            start = code.find(needle, where_at)
     return sql
 
 
@@ -5944,14 +5958,17 @@ def _hint_value_key_lookups(sql: str) -> str:
     nodes = _table("nodes")
     hint = f"%IGNOREINDEX {_table('rdf_props')}.idx_props_key, {_table('rdf_labels')}.idx_labels_label "
     lead = re.compile(rf"\s*SELECT [^()]*?\sFROM\s({re.escape(nodes)}\s+\w+\s)")
-    start = sql.find("(SELECT ")
+    # 4.7.2: read `code`, the statement with each quoted literal blanked (same length), and edit both: a value that
+    # spells `(SELECT ... val_key = '...')` is not a subquery, and its parentheses are not the statement's
+    code = _blank_sql_literals(sql)
+    start = code.find("(SELECT ")
     while start != -1:
         body = start + 1
         depth, i = 1, body
-        while depth and i < len(sql):
-            depth += {"(": 1, ")": -1}.get(sql[i], 0)
+        while depth and i < len(code):
+            depth += {"(": 1, ")": -1}.get(code[i], 0)
             i += 1
-        sub = sql[body : i - 1]
+        sub = code[body : i - 1]
         own = sub
         while True:  # the subquery's own text: nested subqueries taken out
             flat = re.sub(r"\([^()]*\)", "", own)
@@ -5962,10 +5979,11 @@ def _hint_value_key_lookups(sql: str) -> str:
         if m and ".val_key = '" in own:
             at = body + m.start(1)
             sql = sql[:at] + hint + sql[at:]
-        start = sql.find("(SELECT ", body)
+            code = code[:at] + hint + code[at:]
+        start = code.find("(SELECT ", body)
     # the capture form (several graphs: the ids read first, `__capture_ids__ <key> SELECT ...`) has the same lookup
-    m = re.match(rf"__capture_ids__ \w+\s+SELECT [^()]*?\sFROM\s({re.escape(nodes)}\s+\w+\s)", sql)
-    if m and ".val_key = '" in sql and "%IGNOREINDEX" not in sql[: m.end()]:
+    m = re.match(rf"__capture_ids__ \w+\s+SELECT [^()]*?\sFROM\s({re.escape(nodes)}\s+\w+\s)", code)
+    if m and ".val_key = '" in code and "%IGNOREINDEX" not in code[: m.end()]:
         sql = sql[: m.start(1)] + hint + sql[m.start(1) :]
     return sql
 
