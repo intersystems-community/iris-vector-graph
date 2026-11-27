@@ -109,7 +109,14 @@ def test_load_networkx_builds_the_globals(conn):
     g.add_edge(f"{u}a", f"{u}b", predicate="R470W")
     stats = BulkLoader(conn).load_networkx(g)
     assert stats["globals_built"] is True, stats
-    assert sum(_kg_out(conn, f"{u}a", p, f"{u}b") > 0 for p in ("R470W", "RELATED_TO", "related_to")) == 1
+    # one known answer (4.7.2: the check took any of three spellings): the edge's own `predicate` attribute, which
+    # networkx_edge_rows reads; neither default spelling may have been written
+    assert _kg_out(conn, f"{u}a", "R470W", f"{u}b") > 0
+    assert _kg_out(conn, f"{u}a", "RELATED_TO", f"{u}b") == 0
+    assert _kg_out(conn, f"{u}a", "related_to", f"{u}b") == 0
+    cur = conn.cursor()
+    cur.execute("SELECT p FROM Graph_KG.rdf_edges WHERE s = ? AND o_id = ?", [f"{u}a", f"{u}b"])
+    assert [r[0] for r in cur.fetchall()] == ["R470W"]
 
 
 # ------------------------------------------------------------------------------- (ii) attach_embeddings_to_table
