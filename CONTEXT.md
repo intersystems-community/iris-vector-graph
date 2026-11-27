@@ -197,7 +197,7 @@ boundary of a commit.
 
 **Erasure**
 The removal of graph content from every store that holds it — relational rows, native
-adjacency, temporal index, and live statements — as one atomic operation. Erasure
+adjacency, temporal index, search indexes, and live statements — as one atomic operation. Erasure
 removes content, not history: the **Revision** records of an erased graph survive,
 because a single revision may span several graphs and pruning it would destroy history
 the caller did not ask to erase. What erasure guarantees is that no live statement

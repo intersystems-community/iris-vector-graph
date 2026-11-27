@@ -146,6 +146,13 @@ ClassMethod EraseGraph(pGraph As %String = "") As %Integer
 			WHERE COALESCE(graph_id, '') = COALESCE(:tName, ''))
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("docs", SQLCODE)) }
 
+		// The BM25 indexes built for this graph (^BM25Idx). They hold the graph's text as
+		// postings and per-document records, and answer a search with node ids after the nodes
+		// are gone. Each is emptied and kept, with its parameters. They are written under their
+		// own lock, taken here inside the transaction: a writer holding it past the lock timeout
+		// fails the erase, which rolls back whole.
+		Do ##class(Graph.KG.BM25Index).EraseGraph(tName)
+
 		// The legacy tables keep their rows scoped and keep their schema: both are
 		// named statically by kg_KNN_VEC, by the bulk insert templates and by route
 		// adoption, so dropping either would take the schema with the content. Only
@@ -590,6 +597,12 @@ ClassMethod EraseIdSet(pKey, pName As %String) As %Integer [ Private ]
 			Set tRemoved = tRemoved + %ROWCOUNT
 		}
 
+		// --- the BM25 indexes ---------------------------------------------------
+		//
+		// A built index's document ids are node ids, so the ids erased here come out of every
+		// index built for this graph (^BM25Idx; an index of another graph is not touched).
+		Do ##class(Graph.KG.BM25Index).EraseDocs(pName, $Name(^||IVG.EraseIds))
+
 		// --- the temporal index -----------------------------------------------
 		//
 		// Graph.KG.TemporalIndex owns the temporal subtrees (ADR-0002). One walk for the
@@ -768,6 +781,8 @@ ClassMethod EraseAll() As %Integer
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("rdf_props", SQLCODE)) }
 		&sql(DELETE FROM Graph_KG.docs)
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("docs", SQLCODE)) }
+		// Every BM25 index, whichever graph it covers: emptied, with its parameters kept.
+		Do ##class(Graph.KG.BM25Index).EraseAll()
 		&sql(DELETE FROM Graph_KG.kg_NodeEmbeddings)
 		If (SQLCODE '= 0) && (SQLCODE '= 100) { $$$ThrowStatus(..SqlErr("kg_NodeEmbeddings", SQLCODE)) }
 		&sql(DELETE FROM Graph_KG.kg_NodeEmbeddings_optimized)

@@ -35,13 +35,15 @@ class IRISGraphOperators:
         )
 
     def kg_RRF_FUSE(self, k=50, k1=200, k2=200, c=60, query_vector="[]", query_text="",
-                    graph=None):
+                    graph=None, *, text_index=None, vector_index=None):
         """Same as ``IRISGraphEngine.kg_RRF_FUSE``, with defaults for every argument:
         reciprocal-rank fusion of a vector leg and a BM25 leg, as ``(node_id, rrf,
-        vector_score, bm25_score)`` tuples."""
+        vector_score, bm25_score)`` tuples. ``text_index`` and ``vector_index`` name the
+        index each leg reads."""
         return self._engine.kg_RRF_FUSE(k=k, k1=k1, k2=k2, c=c,
                                          query_vector=query_vector, query_text=query_text,
-                                         graph=graph)
+                                         graph=graph, text_index=text_index,
+                                         vector_index=vector_index)
 
     def kg_GRAPH_PATH(self, src_id, pred1, pred2, max_hops=2):
         """Same as ``IRISGraphEngine.kg_GRAPH_PATH``: two-hop paths

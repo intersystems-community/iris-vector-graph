@@ -115,6 +115,14 @@ ClassMethod Inventory() As %DynamicArray
 	// answer outlives erased content) and a snapshot does not carry them.
 	Do tStores.%Push(..Entry("^IVG.AlgoCache", "global", "subscript 1", 1))
 
+	// --- graph-scoped globals: BM25 indexes ---------------------------------
+	// ^BM25Idx(name, ...) holds the text of the nodes an index was built over as postings and
+	// per-document records, keyed by index name. The graph is recorded in ^BM25Idx(name, "cfg",
+	// "graph"), not in a subscript, so the Eraser reaches an index through BM25Index.EraseGraph
+	// and EraseDocs. The graph's own indexes are emptied and kept. (^IVF, ^VecIdx and ^PLAID
+	// record no graph at all and are not here: nothing says which graph's nodes they hold.)
+	Do tStores.%Push(..Entry("^BM25Idx", "global", "graph in cfg", 1))
+
 	// --- not graph-scoped ---------------------------------------------------
 	//
 	// Everything below can be emptied wholesale but not split by graph. Spec 230

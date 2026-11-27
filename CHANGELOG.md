@@ -25,6 +25,36 @@
   `foreign_classes` in `iris_vector_graph.schema_name` is now `colliding_classes`, which returns the clashes only;
   `package_collisions` is the decision on a list of class names.
 
+**Fixed: erasure**
+
+- **`erase_graph` and node deletions take the erased text out of the BM25 indexes.** 4.7.1 deleted a graph's
+  `Graph_KG.docs` rows and left `^BM25Idx` alone: after `erase_graph("g")`, `bm25_search` on an index built for `g`
+  still answered the erased nodes' ids, and their postings, document records and lengths stayed in the global. Now
+  `erase_graph` empties every BM25 index built for the graph (counters at zero, `k1`, `b` and the recorded graph kept,
+  the index still listed), `erase_all` empties every index, and `delete_nodes_by_prefix` and the other node deletions
+  remove just the erased ids from the indexes of their graph, in the erase's own transaction. A node id that lives in
+  two graphs leaves the other graph's index alone. An index built before 4.2.0 (no per-document token record) is
+  handled too. An index records its graph when it is built; one built before 4.0.0 records none and is read as the
+  default graph's. `^BM25Idx` is now in the graph-store inventory (`Graph.KG.GraphStores`), so `verify_graph` lists it
+  among the stores it does not compare.
+- **Not changed: `^IVF`, `^VecIdx` and `^PLAID`.** Their entries hold vectors and tokens keyed by a caller's document id,
+  and none records which graph it was built from, so an erase cannot tell which entries are the erased graph's. They
+  still hold an erased node's vector after the erase; rebuild them. The USER_GUIDE says so.
+
+**Fixed: retrieval**
+
+- **`kg_RRF_FUSE` takes the index each leg reads.** `text_index=` names the BM25 index and `vector_index=` the IVF index
+  (or `"hnsw"`). Without them the text leg read the first BM25 index the engine listed for the graph, so with two
+  BM25 indexes over one graph a fusion meant for one corpus ranked the other with no sign of it. The default is
+  unchanged, but a choice among several BM25 indexes is now logged at WARNING, naming them. A name the engine does
+  not list raises `IndexNotFoundError`; an index of the other kind, or one built for another graph, raises
+  `ValueError`. `IRISGraphOperators.kg_RRF_FUSE` passes both through.
+- **A failed leg of `kg_RRF_FUSE` raises `FusionLegError`.** Both legs shared one `try` whose handler logged the error
+  and fused what was left: a failed vector leg answered `[]` and the text leg never ran, and a failed text leg
+  answered the vector ranking alone, scored as a fusion. Each leg now runs on its own; when any fails, the call
+  raises `FusionLegError` after both were tried, naming each failed leg and its index (`.legs`, `.errors`). This
+  removes the KNOWN_ISSUES entry "`kg_RRF_FUSE` answers `[]` when an index search fails".
+
 ### v4.7.1 (2026-11-14)
 
 Fixes for the wrong answers a code review of 4.7.0 found, each checked against the 4.7.0 release.

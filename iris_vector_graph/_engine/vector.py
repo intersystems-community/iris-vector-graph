@@ -1379,6 +1379,58 @@ class VectorMixin:
                     if len(merged) >= top_k:
                         break
             return merged
+    def _named_fusion_index(
+        self, param: str, name: str, kinds: Sequence[str], graph_id: str
+    ) -> str:
+        """Check that ``name`` can serve the fusion leg ``param`` and return its registry type.
+
+        Raises ``IndexNotFoundError`` for a name the registry does not hold, and ``ValueError``
+        for an index of another kind, or one recorded as built for a graph other than
+        ``graph_id`` (its answers would come from the wrong graph, FR-009).
+        """
+        from iris_vector_graph.errors import IndexNotFoundError
+
+        registry = self._index_registry
+        if name not in registry:
+            raise IndexNotFoundError(name, known=list(registry))
+        index_type = registry[name]
+        if index_type not in kinds:
+            raise ValueError(
+                f"{param}={name!r} names a {index_type} index; it must name "
+                f"{' or '.join(repr(kind) for kind in kinds)} index"
+            )
+        if index_type != "hnsw":
+            recorded = self._index_graph(name, index_type)
+            if recorded is not None and recorded != graph_id:
+                raise ValueError(
+                    f"{param}={name!r} was built for graph {recorded!r}, not {graph_id!r}; "
+                    "fusing it would answer from another graph"
+                )
+        return index_type
+
+    def _warn_if_text_index_ambiguous(self, chosen: Optional[str], graph_id: str) -> None:
+        """Log at WARNING when several BM25 indexes could have served the text leg of ``kg_RRF_FUSE``.
+
+        An index built for another graph is not a candidate. The registry's first one was read
+        silently before 4.7.2, so a fusion meant for one corpus could rank another unnoticed.
+        """
+        if chosen is None:
+            return
+        candidates = [
+            name
+            for name, index_type in self._index_registry.items()
+            if index_type == "bm25" and self._index_graph(name, "bm25") in (graph_id, None)
+        ]
+        if len(candidates) > 1:
+            logger.warning(
+                "kg_RRF_FUSE: %d BM25 indexes cover graph %r (%s); the text leg reads %r. "
+                "Pass text_index=<name> to choose.",
+                len(candidates),
+                graph_id,
+                ", ".join(repr(name) for name in candidates),
+                chosen,
+            )
+
     def kg_RRF_FUSE(
         self,
         k: int,
@@ -1388,29 +1440,46 @@ class VectorMixin:
         query_vector: str,
         query_text: str,
         graph: Optional[str] = None,
+        *,
+        text_index: Optional[str] = None,
+        vector_index: Optional[str] = None,
     ) -> List[Tuple[str, float, float, float]]:
         """Client-side RRF over a vector leg and a BM25 leg.
         The vector leg takes ``k1`` hits from the graph's IVF index or ``kg_KNN_VEC``, the
         BM25 leg ``k2`` hits for ``query_text`` (skipped when it is empty); each hit scores
-        ``1 / (c + rank)``. Returns up to ``k`` tuples ``(node_id, rrf, vector_score,
-        bm25_score)``, highest ``rrf`` first. A failed index search is logged at ERROR and
-        the legs not yet searched contribute nothing. Read-only.
+        ``1 / (c + rank)``. ``text_index`` and ``vector_index`` name the index each leg reads.
+        Returns up to ``k`` tuples ``(node_id, rrf, vector_score, bm25_score)``, highest ``rrf``
+        first. A leg that fails raises ``FusionLegError``. Read-only.
 
         `graph` scopes every leg, matching the generated `kg_RRF_FUSE` procedure,
         which takes `graphId` in 4.0.0 (FR-023). `None` means the default graph,
         never every graph.
 
-        An IVF or BM25 index covers the one graph it was built for since 4.0.0
-        (FR-009), so this picks the index built for `graph` rather than the first one
+        `text_index` and `vector_index` name the BM25 index and the IVF index (or ``"hnsw"``)
+        the two legs read. Without a name a leg reads the index built for `graph`, the first
+        one the registry lists when there are several, and a choice among several BM25
+        indexes is logged at WARNING: a fusion meant for one corpus would otherwise rank
+        another and nothing would say so. A name the registry does not hold raises
+        ``IndexNotFoundError``; one of the wrong kind, or built for another graph, raises
+        ``ValueError``.
+
+        Without a name, an IVF or BM25 index covers the one graph it was built for since
+        4.0.0 (FR-009), so this picks the index built for `graph` rather than the first one
         of its type in the registry. An index whose graph cannot be determined — one
         built by another process, or before 4.0.0 — is used only when nothing built
         for `graph` exists, and that is logged at WARNING, because its answers may
         come from a graph the caller did not ask about.
 
+        Each leg runs on its own. A leg that fails raises ``FusionLegError`` after the other has
+        been tried, naming the failed legs and their indexes; it is never fused as an empty
+        list, which would rank on the surviving leg alone.
+
         A graph ID is collision avoidance, not an authorisation boundary: it is
         supplied by the caller, so it cannot decide what that caller may read
         (FR-032).
         """
+        from iris_vector_graph.errors import FusionLegError
+
         vec_results: List[Tuple[str, float]] = []
         txt_results: List[Tuple[str, float]] = []
 
@@ -1418,8 +1487,20 @@ class VectorMixin:
         vec_list = _json.loads(query_vector) if isinstance(query_vector, str) else query_vector
         graph_id = DEFAULT_GRAPH if graph is None else graph
 
+        if vector_index is not None:
+            self._named_fusion_index("vector_index", vector_index, ("ivf", "hnsw"), graph_id)
+        if text_index is not None and query_text:
+            self._named_fusion_index("text_index", text_index, ("bm25",), graph_id)
+
+        failed: Dict[str, str] = {}
+        errors: Dict[str, BaseException] = {}
+
+        vec_name: Optional[str] = vector_index
         try:
-            vec_name, vec_type = self._fusion_leg_index(("ivf", "hnsw"), graph_id)
+            if vector_index is not None:
+                vec_type = self._index_registry[vector_index]
+            else:
+                vec_name, vec_type = self._fusion_leg_index(("ivf", "hnsw"), graph_id)
             if vec_type == "ivf":
                 # ivf_search answers (node_id, score) tuples; reading them as dicts raised
                 # TypeError here, and the fusion answered nothing (4.6.0, R086)
@@ -1428,12 +1509,24 @@ class VectorMixin:
                 # The HNSW leg is scoped by the query, not by the index, so it needs
                 # no recorded graph of its own.
                 vec_results = self.kg_KNN_VEC(query_vector, k=k1, graph=graph)
+        except Exception as e:  # noqa: BLE001 - reported below as FusionLegError, after the other leg ran
+            failed["vector"] = vec_name or "(none resolved)"
+            errors["vector"] = e
+
+        txt_name: Optional[str] = text_index
+        try:
             if query_text:  # skip BM25 leg when no text query provided
-                txt_name, _txt_type = self._fusion_leg_index(("bm25",), graph_id)
+                if text_index is None:
+                    txt_name, _txt_type = self._fusion_leg_index(("bm25",), graph_id)
+                    self._warn_if_text_index_ambiguous(txt_name, graph_id)
                 if txt_name is not None:
                     txt_results = self.bm25_search(txt_name, query_text, k=k2)
-        except Exception as e:
-            logger.error(f"kg_RRF_FUSE index search failed: {e}")
+        except Exception as e:  # noqa: BLE001 - reported below as FusionLegError
+            failed["text"] = txt_name or "(none resolved)"
+            errors["text"] = e
+
+        if failed:
+            raise FusionLegError(failed, errors) from next(iter(errors.values()))
 
         vec_rank = {nid: i + 1 for i, (nid, _) in enumerate(vec_results)}
         txt_rank = {nid: i + 1 for i, (nid, _) in enumerate(txt_results)}

@@ -153,6 +153,8 @@ STORE_PLAN = {
     '^KG("degw")': "derived",
     # Other globals
     "^NKG": "global",
+    # The BM25 indexes, every one whole (`snapshot_globals` lists `^BM25Idx` with no subscript prefix).
+    "^BM25Idx": "global",
     '^IVG.Ledger("tuple")': "global",
     '^IVG.Ledger("stmt")': "global",
     # Spec 234: which graphs are multigraphs. Without it a restored multigraph's

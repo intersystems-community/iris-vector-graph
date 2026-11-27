@@ -795,12 +795,17 @@ class TestKgRRFFuse:
         eng, conn, cursor = _make_eng()
         eng._index_registry = {"ivf1": "ivf", "bm1": "bm25"}
 
-        with patch.object(eng, "ivf_search", return_value=[{"id": "n1", "score": 0.9}]):
+        # ivf_search answers (node_id, score) tuples, as the real one does. This mock answered dicts, which
+        # the fusion could not read: the failure was logged and swallowed, and the test checked only the shape.
+        with patch.object(eng, "ivf_search", return_value=[("n1", 0.9)]):
             with patch.object(eng, "bm25_search", return_value=[("n1", 0.8), ("n2", 0.6)]):
                 result = eng.kg_RRF_FUSE(5, 10, 10, 60, "[1,0,0,0]", "query")
 
-        assert isinstance(result, list)
-        assert all(len(r) == 4 for r in result)
+        assert [r[0] for r in result] == ["n1", "n2"]
+        assert result[0][1] == pytest.approx(1 / 61 + 1 / 61)  # first in both legs
+        assert result[0][2:] == (0.9, 0.8)
+        # n2 is in the text leg only: vector rank len(vec) + c = 61
+        assert result[1][1] == pytest.approx(1 / 121 + 1 / 62)
 
     def test_fuse_hnsw_uses_kg_knn_vec(self):
         """kg_RRF_FUSE with only hnsw registered must use kg_KNN_VEC, not return []."""

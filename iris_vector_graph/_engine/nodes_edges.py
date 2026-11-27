@@ -1488,6 +1488,12 @@ class NodesEdgesMixin:
         Splitting the transaction across the seam is what made a partial erasure
         possible (ADR-0004).
 
+        The BM25 indexes built for the graph (``bm25_build(..., graph=...)``) are
+        emptied with it: their postings and document records go, and the index keeps
+        its name and parameters. ``delete_nodes_by_prefix`` and the other node
+        deletions take the erased nodes' documents out of those indexes the same way.
+        ``^IVF``, ``^VecIdx`` and ``^PLAID`` record no graph and are not touched.
+
         Args:
             graph: The graph to erase. ``None`` and ``""`` both mean the default
                 graph, which is erased in both of its spellings — ``graph_id`` is

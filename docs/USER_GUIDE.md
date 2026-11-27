@@ -894,6 +894,13 @@ than, then, there, here, when, where, which, who, what, how.
 `bm25_delete` keep an index current. An index built before 4.2.0 needs `bm25_upgrade(name)` once before it accepts
 writes.
 
+Erasing a graph (`erase_graph`, `erase_all`) or deleting nodes (`delete_nodes_by_prefix` and the other node deletions)
+takes the erased text out of the BM25 indexes built for that graph, in the same transaction: the postings and document
+records go, so a search for a word only an erased node held answers nothing. `erase_graph` empties the index and keeps
+its name and its `k1` and `b`; `bm25_drop` removes the index. An index records its graph when it is built, and an
+index built before 4.0.0 records none and is read as the default graph's. `^IVF`, `^VecIdx` and `^PLAID` indexes record
+no graph and are not changed by an erase: rebuild them after one.
+
 ### Vector search
 
 A node's vector is stored in the IVG Schema's `kg_NodeEmbeddings`, at the engine's `embedding_dimension`. Choose it

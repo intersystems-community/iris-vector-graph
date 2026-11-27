@@ -169,17 +169,6 @@ r = engine.execute_cypher(
 - **Workaround:** `RETURN toFloat(r.p)`, which answers `1e+20`.
 - **Check:** `RETURN r.p` after `SET r.p = 1e20` answers `100000000000000000000`.
 
-### `kg_RRF_FUSE` answers `[]` when an index search fails
-
-- **Symptom:** `engine.kg_RRF_FUSE(...)` (and `IRISGraphOperators.kg_RRF_FUSE`) runs its vector leg (IVF or HNSW)
-  and then its BM25 leg inside one `try`, and a failure in either only logs `kg_RRF_FUSE index search failed: ...` at
-  ERROR. A failed vector leg (a query vector of the wrong width, an index IRIS refuses) answers `[]`, which reads as
-  "nothing matched", and the BM25 leg never runs; a failed BM25 leg answers the vector leg's ranking alone.
-- **Versions:** 4.6.5 and 4.7.0 (found during 4.7.0; planned for 4.7.1, which raises naming the leg).
-- **Workaround:** run the legs yourself (`kg_KNN_VEC` or `ivf_search`, and `bm25_search`), which raise, before
-  trusting an empty fusion; or treat the log line as a failure.
-- **Check:** the log of the process that called it shows `kg_RRF_FUSE index search failed`.
-
 ### A property cannot tell a number from a string that spells it
 
 - **Symptom:** a number filter also matches a string that spells the number, and a read can answer the wrong one of

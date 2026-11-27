@@ -45,6 +45,7 @@ from ._engine.schema import EmbeddingInventoryRow, QuarantinedVector
 from .errors import (
     CallerTransactionOpenError,
     EmbeddingsMissingError,
+    FusionLegError,
     GraphWriteError,
     IndexNotBuiltError,
     IndexNotFoundError,
@@ -170,6 +171,7 @@ __all__ = [
     "IndexNotFoundError",
     "IndexNotBuiltError",
     "EmbeddingsMissingError",
+    "FusionLegError",
     "IndexNotSyncedError",
     "NodeNotFoundError",
     "PowerIterationFailedConvergence",

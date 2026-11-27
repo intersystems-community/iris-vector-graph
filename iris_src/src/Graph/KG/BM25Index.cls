@@ -581,6 +581,122 @@ ClassMethod Upgrade(name As %String) As %String
 }
 
 // ================================================================
+// Erase — take an erased graph's or node's text out of the indexes
+// ================================================================
+
+/// Empty every index built for graph pGraph. Called by Graph.KG.Eraser inside its transaction,
+/// so a failure here (a writer holding the lock for longer than the index's lock timeout)
+/// rolls the whole erase back rather than leaving text behind.
+///
+/// An index covers one graph (cfg "graph", written by Build). One that records none, built
+/// before spec 230, is read as the default graph, which is what Info reports for it. An index
+/// of another graph is not touched.
+///
+/// The index is emptied and kept: its parameters and its graph stay, so a re-ingest followed
+/// by Insert scores with the same k1 and b, and the name still resolves. Use Drop to remove it.
+/// Returns the number of indexes emptied.
+ClassMethod EraseGraph(pGraph As %String = "") As %Integer
+{
+    Set tCount = 0, tName = ""
+    For {
+        Set tName = $Order(^BM25Idx(tName))
+        Quit:tName=""
+        If '..IsIndex(tName) { Continue }
+        If $Get(^BM25Idx(tName, "cfg", "graph"), "") '= pGraph { Continue }
+        Do ..EmptyIndex(tName)
+        Set tCount = tCount + 1
+    }
+    Quit tCount
+}
+
+/// Empty every index, whatever graph it covers. For Graph.KG.Eraser.EraseAll. Returns the
+/// number of indexes emptied.
+ClassMethod EraseAll() As %Integer
+{
+    Set tCount = 0, tName = ""
+    For {
+        Set tName = $Order(^BM25Idx(tName))
+        Quit:tName=""
+        If '..IsIndex(tName) { Continue }
+        Do ..EmptyIndex(tName)
+        Set tCount = tCount + 1
+    }
+    Quit tCount
+}
+
+/// Take the documents named in @pRoot@(docId) out of every index built for graph pGraph, as
+/// Delete does for one. The document ids of a built index are node ids, so this is the
+/// node-level counterpart of EraseGraph. Returns the number of documents removed.
+ClassMethod EraseDocs(pGraph As %String, pRoot As %String) As %Integer
+{
+    Set tRemoved = 0, tName = ""
+    For {
+        Set tName = $Order(^BM25Idx(tName))
+        Quit:tName=""
+        If '..IsIndex(tName) { Continue }
+        If $Get(^BM25Idx(tName, "cfg", "graph"), "") '= pGraph { Continue }
+        Do ..LockWrite(tName)
+        Try {
+            Set tId = ""
+            For {
+                Set tId = $Order(@pRoot@(tId))
+                Quit:tId=""
+                If +$Get(^BM25Idx(tName, "cfg", "schema"), 1) >= 2 {
+                    Set tRemoved = tRemoved + ..RemoveDoc(tName, tId)
+                } Else {
+                    Set tRemoved = tRemoved + ..RemoveDocV1(tName, tId)
+                }
+            }
+        } Catch tEx {
+            Lock -^BM25Idx(tName, "lock")
+            Throw tEx
+        }
+        // Inside a transaction the unlock is deferred to its end, so the removal and the
+        // erase that called this commit together.
+        Lock -^BM25Idx(tName, "lock")
+    }
+    Quit tRemoved
+}
+
+/// 1 when ^BM25Idx(pName) is an index and not the stopword list or a name nothing was built under.
+ClassMethod IsIndex(pName As %String) As %Boolean [ Private ]
+{
+    Quit (pName '= "__stop__") && $Data(^BM25Idx(pName, "cfg", "N"))
+}
+
+/// Remove every document and posting of one index and zero its counters, keeping cfg.
+/// Takes the write lock (waiting as Insert does), so it cannot interleave with a writer.
+ClassMethod EmptyIndex(pName As %String) [ Private ]
+{
+    Do ..LockWrite(pName)
+    Kill ^BM25Idx(pName, "tf"), ^BM25Idx(pName, "df"), ^BM25Idx(pName, "doc"), ^BM25Idx(pName, "len"), ^BM25Idx(pName, "idf")
+    Set ^BM25Idx(pName, "cfg", "N") = 0
+    Set ^BM25Idx(pName, "cfg", "totalLen") = 0
+    Set ^BM25Idx(pName, "cfg", "vocab_size") = 0
+    Lock -^BM25Idx(pName, "lock")
+}
+
+/// RemoveDoc for a schema 1 index, which has no per-document token record and no df: the
+/// document's postings are found by walking the vocabulary (cost: the number of distinct terms).
+/// N and totalLen follow; the stored idf and avgdl stay as stale as every schema 1 edit leaves them.
+/// Caller holds the write lock. Returns 1 if the document was there.
+ClassMethod RemoveDocV1(pName As %String, pDocId As %String) As %Integer [ Private ]
+{
+    If '$Data(^BM25Idx(pName, "len", pDocId)) Quit 0
+    Set tLen = +$Get(^BM25Idx(pName, "len", pDocId), 0)
+    Set tTok = ""
+    For {
+        Set tTok = $Order(^BM25Idx(pName, "tf", tTok))
+        Quit:tTok=""
+        Kill ^BM25Idx(pName, "tf", tTok, pDocId)
+    }
+    Kill ^BM25Idx(pName, "len", pDocId)
+    Set ^BM25Idx(pName, "cfg", "N") = +$Get(^BM25Idx(pName, "cfg", "N"), 0) - 1
+    Set ^BM25Idx(pName, "cfg", "totalLen") = +$Get(^BM25Idx(pName, "cfg", "totalLen"), 0) - tLen
+    Quit 1
+}
+
+// ================================================================
 // Drop — remove entire index
 // ================================================================
 

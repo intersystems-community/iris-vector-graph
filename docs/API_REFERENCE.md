@@ -993,10 +993,13 @@ def kg_RRF_FUSE(
     query_vector: str,
     query_text: str,
     graph: Optional[str] = None,
+    *,
+    text_index: Optional[str] = None,
+    vector_index: Optional[str] = None,
 ) -> List[Tuple[str, float, float, float]]
 ```
 
-Client-side RRF over a vector leg and a BM25 leg. The vector leg takes `k1` hits from the graph's IVF index or `kg_KNN_VEC`, the BM25 leg `k2` hits for `query_text` (skipped when it is empty); each hit scores `1 / (c + rank)`. Returns up to `k` tuples `(node_id, rrf, vector_score, bm25_score)`, highest `rrf` first. A failed index search is logged at ERROR and the legs not yet searched contribute nothing. Read-only.
+Client-side RRF over a vector leg and a BM25 leg. The vector leg takes `k1` hits from the graph's IVF index or `kg_KNN_VEC`, the BM25 leg `k2` hits for `query_text` (skipped when it is empty); each hit scores `1 / (c + rank)`. `text_index` and `vector_index` name the index each leg reads. Returns up to `k` tuples `(node_id, rrf, vector_score, bm25_score)`, highest `rrf` first. A leg that fails raises `FusionLegError`. Read-only.
 
 #### `kg_TXT`
 
@@ -2937,10 +2940,21 @@ Same as `IRISGraphEngine.kg_RERANK`: the `top_n` best nodes for a vector and a t
 #### `IRISGraphOperators.kg_RRF_FUSE`
 
 ```python
-def kg_RRF_FUSE(k=50, k1=200, k2=200, c=60, query_vector='[]', query_text='', graph=None)
+def kg_RRF_FUSE(
+    k=50,
+    k1=200,
+    k2=200,
+    c=60,
+    query_vector='[]',
+    query_text='',
+    graph=None,
+    *,
+    text_index=None,
+    vector_index=None,
+)
 ```
 
-Same as `IRISGraphEngine.kg_RRF_FUSE`, with defaults for every argument: reciprocal-rank fusion of a vector leg and a BM25 leg, as `(node_id, rrf, vector_score, bm25_score)` tuples.
+Same as `IRISGraphEngine.kg_RRF_FUSE`, with defaults for every argument: reciprocal-rank fusion of a vector leg and a BM25 leg, as `(node_id, rrf, vector_score, bm25_score)` tuples. `text_index` and `vector_index` name the index each leg reads.
 
 #### `IRISGraphOperators.kg_SUBGRAPH`
 
@@ -3047,6 +3061,12 @@ A vector operation needs embeddings that have not been generated.
 `from iris_vector_graph.exceptions import FHIRGraphError`; subclass of `RuntimeError`.
 
 Raised when `Graph.KG.FHIRGraph` answers `{"status": "error"}` (spec 231).
+
+### `FusionLegError`
+
+`from iris_vector_graph import FusionLegError`; subclass of `IVGError`, `RuntimeError`.
+
+One or both legs of `kg_RRF_FUSE` failed.
 
 ### `GraphWriteError`
 

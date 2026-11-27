@@ -242,3 +242,19 @@ __all__ = [
     "ParallelEdgesPresentError",
     "PowerIterationFailedConvergence",
 ]
+
+
+class FusionLegError(IVGError, RuntimeError):
+    """One or both legs of ``kg_RRF_FUSE`` failed.
+
+    A fusion of a failed leg and a working one is a different ranking from the one asked for, and
+    it looks like an answer, so the call raises instead of fusing what is left. ``legs`` maps each
+    failed leg (``"vector"`` or ``"text"``) to the name of the index it was reading; the first
+    underlying error is the ``__cause__``.
+    """
+
+    def __init__(self, legs: dict, errors: dict):
+        self.legs = dict(legs)
+        self.errors = dict(errors)
+        parts = [f"{leg} leg (index {legs[leg]!r}): {errors[leg]}" for leg in legs]
+        super().__init__("kg_RRF_FUSE: " + "; ".join(parts))
