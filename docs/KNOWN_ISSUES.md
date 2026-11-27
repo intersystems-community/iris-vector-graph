@@ -423,6 +423,16 @@ RETURN CASE WHEN input.fixed THEN input.list ELSE null END AS l
   or a fixed-length pattern and `RETURN a, b`.
 - **Check:** `RETURN nodes(p)` of a variable-length match answers strings, not maps.
 
+### `UNWIND nodes(p) AS x WITH x ...` over a variable-length path fails with SQLCODE -149
+
+- **Symptom:** `MATCH p = (a)-[:R*2]->(b) UNWIND nodes(p) AS x WITH x RETURN x.id` fails with `SQLCODE -149`, whatever
+  the later clauses filter. The query never answers wrongly.
+- **Cause:** not yet traced; queued for 4.8.0.
+- **Versions:** all 4.x (the 4.7.2 review found it on the 4.7.1 base).
+- **Workaround:** use a list comprehension over the path, which answers correctly:
+  `RETURN [x IN nodes(p) WHERE x.p > 1 | x.id]`, or `UNWIND nodes(p) AS x RETURN x.id` with no `WITH` after it.
+- **Check:** the error names `SQLCODE -149`.
+
 ### A list predicate over a list holding a stored NaN fails
 
 - **Symptom:** over a list built from a node property holding NaN or an infinity a Cypher write stored
