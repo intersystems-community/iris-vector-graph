@@ -2,6 +2,29 @@
 
 # Changelog
 
+### Unreleased
+
+**Fixed: setup**
+
+- **`initialize_schema()` works again in a schema that another tool keeps its own tables in.** With
+  `schema_prefix="RAG"` and a namespace that already held `RAG.KGEntities` and `RAG.SourceDocuments` (tables of
+  another tool, in the same schema), 4.6.0 to 4.7.1 stopped with "already holds classes IVG did not create ... Nothing
+  was created". IVG 4.4.2 set up in such a schema, and ADR-0016 names the layout as supported, so a tool that
+  keeps its own tables in the same schema could not upgrade. IRIS compiles IVG's tables beside another tool's classes
+  without trouble (spec 262, research R2), so the blanket refusal is gone. Setup now refuses only a real name
+  clash: a class already in the package with the name of a class IVG is about to create there. That is one of IVG's
+  table classes (`RAG.nodes`), a schema class (`RAG.SqlProcs`, `RAG.LedgerRevision`, `RAG.LedgerStats`) that IVG did not
+  deploy, the class IRIS makes for one of IVG's functions or procedures (`RAG.funcJSONVALUE`, `RAG.prockgKNNVEC`), or a
+  class shaped like a routed embedding table (`kgemb` or `kgeemb` and 16 hex digits). A class that only starts with
+  `func` or `proc` (`RAG.funcFoo`) is the other tool's and is allowed; 4.7.1 skipped it by its prefix and did not
+  protect an exact clash. The refusal still comes before any DDL, names the classes and says nothing was created.
+  Setup never drops, rewrites or recompiles a class it did not create. Once a schema holds IVG's
+  `nodes` table with `rdf_edges`, or with the staging table of an interrupted `rdf_edges` rescue, a class named like
+  one of IVG's is IVG's own, so a second run and the retry that resumes a rescue are not refused. A `nodes` table
+  alone is not enough.
+  `foreign_classes` in `iris_vector_graph.schema_name` is now `colliding_classes`, which returns the clashes only;
+  `package_collisions` is the decision on a list of class names.
+
 ### v4.7.1 (2026-11-14)
 
 Fixes for the wrong answers a code review of 4.7.0 found, each checked against the 4.7.0 release.

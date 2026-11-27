@@ -142,8 +142,14 @@ side by side in one, use named graphs ([User Guide](USER_GUIDE.md#4-named-graphs
 one: `IRISGraphEngine(conn, schema_prefix="RAG")`, or `IVG_SCHEMA_PREFIX=RAG` in the application's environment (the
 argument wins; IVG never reads iris-vector-rag's `IRIS_SCHEMA_PREFIX`). The name must match `[A-Za-z][A-Za-z0-9_]*`,
 must not be `SQLUser` or start with `%`, and its class package (the name with `_` turned into `.`, so `MY_APP` is
-package `MY.APP`) must not be one of IVG's own packages (`Graph.KG`, `IVG`, `IVGC`) or already hold someone else's
-classes. A name that breaks a rule raises `ValueError` before any database call. Choose before the first setup: a
+package `MY.APP`) must not be one of IVG's own packages (`Graph.KG`, `IVG`, `IVGC`). The schema may already hold
+another tool's tables (`RAG.KGEntities`, `RAG.SourceDocuments`): IVG compiles its own beside them and never drops or
+recompiles them. Only a class with a name IVG itself creates there is refused, before anything is created: one of
+IVG's table classes (`RAG.nodes`), a schema class (`RAG.SqlProcs`), the class IRIS makes for one of IVG's functions or
+procedures (`RAG.funcJSONVALUE`; a class that only starts with `func` is fine), or a class shaped like a routed
+embedding table (`kgemb` and 16 hex digits). The error names the classes and says nothing was created. 4.6.0 to
+4.7.1 refused any package holding a class IVG did not create. A name that breaks a rule raises `ValueError` before any
+database call. Choose before the first setup: a
 recorded name cannot be changed in 4.6.0.
 
 **The record.** The first `initialize_schema()` in a namespace writes the name to `^IVG.Deploy("schema")`, with

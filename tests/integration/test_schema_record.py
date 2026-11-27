@@ -115,21 +115,33 @@ def test_no_record_with_the_46_objects_is_accepted(live):
         cur.close()
 
 
-def test_a_package_holding_someone_elses_class_is_refused_and_ivgs_own_are_not(live):
-    from iris_vector_graph.schema_name import IVGSchemaError, foreign_classes, refuse_package_clash
+def test_a_package_shared_with_another_tool_is_accepted_and_only_a_name_clash_is_refused(live):
+    """4.7.2: 4.7.1 refused a package holding any class IVG did not create (`IVGCLASH.foreign_t`); a tool that keeps
+    its own tables in the schema is locked out by that, so now only a class IVG would create a class of the same name
+    over is refused (`IVGCLASH2.nodes`), and IVG's own tables, once both base tables are in the schema, are IVG's."""
+    from iris_vector_graph.schema_name import IVGSchemaError, colliding_classes, refuse_package_clash
 
     conn, _ = live
     cur = conn.cursor()
     cur.execute("CREATE TABLE IVGCLASH.foreign_t (x INTEGER)")
+    cur.execute("CREATE TABLE IVGCLASH2.foreign_t (x INTEGER)")
+    cur.execute("CREATE TABLE IVGCLASH2.nodes (x INTEGER)")
     cur.execute("CREATE TABLE IVGOWN.nodes (node_id VARCHAR(10))")
+    cur.execute("CREATE TABLE IVGOWN.rdf_edges (edge_id INTEGER)")
     try:
-        assert foreign_classes(conn, "IVGCLASH") == ["IVGCLASH.foreignt"]
+        assert colliding_classes(conn, "IVGCLASH") == []
+        refuse_package_clash(conn, "ivgclash")  # another tool's table: allowed
+        assert colliding_classes(conn, "IVGCLASH2") == ["IVGCLASH2.nodes"]
         with pytest.raises(IVGSchemaError) as raised:
-            refuse_package_clash(conn, "ivgclash")
-        assert "IVGCLASH.foreignt" in str(raised.value) and "Nothing was created" in str(raised.value)
-        refuse_package_clash(conn, "IVGOWN")  # only an IVG table class: IVG's own
+            refuse_package_clash(conn, "ivgclash2")
+        assert "IVGCLASH2.nodes" in str(raised.value) and "Nothing was created" in str(raised.value)
+        assert "foreign_t" not in str(raised.value)
+        refuse_package_clash(conn, "IVGOWN")  # IVG's two base tables: IVG's own, as on a second run
         refuse_package_clash(conn, "IVGEMPTY")  # nothing there
     finally:
         cur.execute("DROP TABLE IVGCLASH.foreign_t")
+        cur.execute("DROP TABLE IVGCLASH2.foreign_t")
+        cur.execute("DROP TABLE IVGCLASH2.nodes")
         cur.execute("DROP TABLE IVGOWN.nodes")
+        cur.execute("DROP TABLE IVGOWN.rdf_edges")
         cur.close()

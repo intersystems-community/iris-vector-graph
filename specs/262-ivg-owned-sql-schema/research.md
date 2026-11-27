@@ -84,7 +84,11 @@ Consequences for validation (FR-004, spec Edge Cases):
 
 - A schema whose package is, or is under, one of IVG's code packages (`Graph.KG`, `IVG`, `IVGC`) is refused, except the
   default `Graph_KG` itself. `IVG` → package `IVG` would put table classes beside `IVG.CypherEngine`.
-- A schema whose package already holds classes IVG did not create is refused, naming one of them.
+- A schema whose package already holds a class IVG would create a class of the same name over (its table classes, schema
+  classes, the exact `func`/`proc` class of one of its routines, a routed embedding table's shape) is refused, naming
+  them. Other classes in the package are left alone: IRIS compiles IVG's beside them. (4.7.2: 4.6.0 to 4.7.1 refused any
+  class IVG did not create, which locked out a tool that keeps its own tables in the same schema; the measurement
+  above needs no such refusal.)
 - Two IVG function names must not compile to the same class (`JSON_VALUE` and `JSONVALUE` both give `funcJSONVALUE`); a
   unit test checks the generated names.
 - The record stores the name as given; it is compared upper-cased (`same_schema`).

@@ -18,7 +18,7 @@ import re
 import pytest
 
 from iris_vector_graph._engine.class_deploy import packaged_class_dir, read_class_sources
-from iris_vector_graph.schema_name import SCHEMA_CLASS_MARKER, SCHEMA_CLASSES, foreign_classes
+from iris_vector_graph.schema_name import SCHEMA_CLASS_MARKER, SCHEMA_CLASSES, colliding_classes
 
 FORWARDER = "Graph.KG.SqlProcs"
 
@@ -187,7 +187,9 @@ class _Cursor:
         self.classes, self.marked, self.rows = classes, marked, []
 
     def execute(self, sql, params=None):
-        if "%Dictionary.ParameterDefinition" in sql:
+        if "INFORMATION_SCHEMA.TABLES" in sql:  # IVG's two base tables are in the schema (4.7.2: a re-run)
+            self.rows = [("nodes",), ("rdf_edges",)]
+        elif "%Dictionary.ParameterDefinition" in sql:
             assert params[0] == SCHEMA_CLASS_MARKER
             self.rows = [(c,) for c in self.marked]
         else:
@@ -212,10 +214,10 @@ class _Conn:
 def test_the_schema_classes_ivg_deployed_are_not_someone_elses():
     conn = _Conn(["IVGALT.SqlProcs", "IVGALT.LedgerStats", "IVGALT.LedgerRevision", "IVGALT.rdfedges"],
                  marked=["IVGALT.SqlProcs", "IVGALT.LedgerStats", "IVGALT.LedgerRevision"])
-    assert foreign_classes(conn, "IVGALT") == []
+    assert colliding_classes(conn, "IVGALT") == []
 
 
 def test_a_class_of_a_schema_class_name_without_the_marker_is_someone_elses():
     """An application's own table `IVGALT.SqlProcs` (class `IVGALT.SqlProcs`) must never be loaded over."""
     conn = _Conn(["IVGALT.SqlProcs", "IVGALT.LedgerStats"], marked=["IVGALT.LedgerStats"])
-    assert foreign_classes(conn, "IVGALT") == ["IVGALT.SqlProcs"]
+    assert colliding_classes(conn, "IVGALT") == ["IVGALT.SqlProcs"]

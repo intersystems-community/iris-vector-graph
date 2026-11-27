@@ -199,8 +199,9 @@ the 4.6.0 migration notes say what moved.
 ### Edge Cases
 
 - **Package names.** IRIS derives a class package from the schema name (`Graph_KG` becomes `Graph.KG`). A chosen name
-  whose package already holds application classes, or maps onto another schema's package, is refused at
-  `initialize_schema()` with the clash named.
+  whose package already holds an application class named like one IVG creates, or maps onto another schema's package,
+  is refused at `initialize_schema()` with the clash named. Other application classes in the package are allowed
+  (4.7.2; 4.6.0 to 4.7.1 refused them).
 - **Case.** SQL schema names are not case-sensitive in IRIS and package names are; `ivgalt` and `IVGALT` are the same
   schema and must be recorded and compared as one.
 - **A function named like a table.** No IVG function may share a name with an IVG table or view in the IVG Schema; a

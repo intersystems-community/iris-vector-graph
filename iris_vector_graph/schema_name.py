@@ -10,6 +10,7 @@ Its name is chosen once per namespace (``IRISGraphEngine(schema_prefix=...)``, e
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 import re
 from datetime import datetime, timezone
@@ -462,10 +463,83 @@ def _ivg_class_short_names() -> set:
     return {t.replace("_", "").lower() for t in (*VALID_GRAPH_TABLES, *ddl)}
 
 
-def foreign_classes(conn, schema: str) -> list:
-    """Classes in ``schema``'s package that IVG did not create (research R2): not a table class of IVG's, not a
-    function or procedure class its DDL generates, not a routed embedding table, not a schema class the deploy moved
-    there (known by its marker parameter, not its name: R084). Empty for ``Graph_KG``, whose package is IVG's own."""
+_ROUTINE_DDL = re.compile(r"CREATE\s+OR\s+REPLACE\s+(FUNCTION|PROCEDURE)\s+\w+\.(\w+)", re.IGNORECASE)
+
+
+@functools.lru_cache(maxsize=1)
+def _ivg_generated_class_names() -> frozenset:
+    """The lower-case short names of the function and procedure classes IVG's setup DDL makes in an IVG Schema.
+
+    IRIS compiles ``CREATE FUNCTION <schema>.JSON_VALUE`` to class ``<package>.funcJSONVALUE`` and ``CREATE PROCEDURE
+    <schema>.kg_KNN_VEC`` to ``<package>.prockgKNNVEC`` (research R2: ``func``/``proc``, then the name with ``_``
+    removed). Read from the DDL setup runs, so a routine added there is covered without a second list."""
+    from iris_vector_graph.schema import GraphSchema
+
+    names = set()
+    for stmt in GraphSchema.get_procedures_sql_list(table_schema=DEFAULT_SCHEMA):
+        m = _ROUTINE_DDL.search(stmt)
+        if m:
+            names.add(("func" if m.group(1).upper() == "FUNCTION" else "proc") + m.group(2).replace("_", "").lower())
+    return frozenset(names)
+
+
+#: A routed embedding table, ``kg_emb_<16 hex>`` or ``kg_eemb_<16 hex>`` (constants.ROUTE_TABLE_PREFIX): the class is
+#: the name with ``_`` removed. The hash is IVG's to choose when a graph first gets a route, so no class of this
+#: shape is safe to leave to someone else.
+_ROUTED_TABLE_CLASS = re.compile(r"kge?emb[0-9a-f]{16}", re.IGNORECASE)
+
+
+def package_collisions(package: str, class_names, marked=(), ivg_tables_present: bool = False) -> list:
+    """The classes in ``package`` that IVG would create a class of the same name over: the real name clashes, and
+    nothing else (4.7.2; 4.7.1 refused any class IVG did not create, which locked out a tool that keeps its own
+    tables in the same schema, as 4.4.2 allowed).
+
+    ``class_names`` are the full names of the classes the package holds; ``marked`` those among them that declare the
+    schema-class marker (IVG's own ``SqlProcs`` and ledger tables, which the deploy moved there). A class clashes when
+    its short name is, case-insensitively, one of: a schema class without the marker; and, unless IVG's tables are
+    already in the schema (``ivg_tables_present``: a re-run, where these are IVG's own), a table class IVG creates,
+    the exact class IRIS makes for one of IVG's functions or procedures (``funcJSONVALUE``, not any name that starts
+    ``func``), or a routed embedding table class's shape (``kgemb`` or ``kgeemb`` and 16 hex). A class IRIS
+    generates under a table's (an index's, ``docs.hCBQuQ``) is the table's, and a sub-package is the other tool's:
+    neither is one. Sorted, each name once."""
+    ours = _ivg_class_short_names()
+    generated = _ivg_generated_class_names()
+    schema_classes = {c.lower() for c in SCHEMA_CLASSES}
+    marked_lower = {m.lower() for m in marked}
+    cut = len(package) + 1
+    out = set()
+    for name in class_names:
+        short = name[cut:]
+        if "." in short:
+            continue
+        low = short.lower()
+        if low in schema_classes:
+            if name.lower() not in marked_lower:
+                out.add(name)
+        elif not ivg_tables_present and (low in ours or low in generated or _ROUTED_TABLE_CLASS.fullmatch(short)):
+            out.add(name)
+    return sorted(out)
+
+
+def ivg_tables_in(tables) -> bool:
+    """Whether a schema holding these base tables holds IVG's own: ``nodes`` and ``rdf_edges`` (the test
+    ``_ivg_table_schemas`` uses), or ``nodes`` and the staging table of an interrupted ``rdf_edges`` rescue, which
+    has dropped ``rdf_edges`` and holds its rows there until the retry that resumes it."""
+    from iris_vector_graph.schema import RESCUE_STAGING_TABLE
+
+    have = set(tables)
+    return "nodes" in have and bool(have & {"rdf_edges", RESCUE_STAGING_TABLE})
+
+
+def colliding_classes(conn, schema: str) -> list:
+    """The classes already in ``schema``'s package that IVG's setup would collide with (:func:`package_collisions`),
+    read from the class dictionary. Empty for ``Graph_KG``, whose package is IVG's own.
+
+    IVG's tables are taken to be in the schema already (:func:`ivg_tables_in`) when it holds ``nodes`` with
+    ``rdf_edges`` or with the staging table of an interrupted ``rdf_edges`` rescue: then a class named like one of
+    IVG's is IVG's, as on any second run of setup. A ``nodes`` alone is not enough."""
+    from iris_vector_graph.schema import RESCUE_STAGING_TABLE
+
     if same_schema(schema, DEFAULT_SCHEMA):
         return []
     package = schema_package(schema)
@@ -475,37 +549,31 @@ def foreign_classes(conn, schema: str) -> list:
         cur.execute("SELECT Name FROM %Dictionary.ClassDefinition WHERE UPPER(Name) %STARTSWITH ?",
                     [package.upper() + "."])
         names = [str(r[0]) for r in cur.fetchall()]
-        marked = set()
+        marked = []
         if any(n[len(package) + 1:] in SCHEMA_CLASSES for n in names):
             cur.execute("SELECT parent FROM %Dictionary.ParameterDefinition WHERE Name = ? "
                         "AND UPPER(parent) %STARTSWITH ?", [SCHEMA_CLASS_MARKER, package.upper() + "."])
-            marked = {str(r[0]) for r in cur.fetchall()}
+            marked = [str(r[0]) for r in cur.fetchall()]
+        cur.execute("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE UPPER(TABLE_SCHEMA) = ? "
+                    "AND TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME IN ('nodes', 'rdf_edges', ?)",
+                    [schema.upper(), RESCUE_STAGING_TABLE])
+        present = ivg_tables_in(str(r[0]) for r in cur.fetchall())
     finally:
         cur.close()
-    ours = _ivg_class_short_names()
-    out = []
-    for name in names:
-        short = name[len(package) + 1:]
-        if short in SCHEMA_CLASSES:
-            if name not in marked:
-                out.append(name)
-        elif "." in short:
-            # a class IRIS generates under a table's (an index's, `docs.hCBQuQ`) is the table's
-            if short.split(".", 1)[0].lower() not in ours:
-                out.append(name)
-        elif not (short.lower() in ours or short.startswith(("func", "proc", "kgemb", "kgeemb"))):
-            out.append(name)
-    return sorted(out)
+    return package_collisions(package, names, marked, ivg_tables_present=present)
 
 
 def refuse_package_clash(conn, schema: str) -> None:
-    """Raise :class:`IVGSchemaError` before any DDL when ``schema``'s package already holds someone else's classes."""
-    clash = foreign_classes(conn, schema)
+    """Raise :class:`IVGSchemaError` before any DDL when a class IVG is about to create in ``schema``'s package is
+    already someone else's. Other classes in the package (another tool's tables kept in the same schema) are left
+    alone: IRIS compiles IVG's tables beside them (research R2), and IVG never drops or recompiles them."""
+    clash = colliding_classes(conn, schema)
     if clash:
         raise IVGSchemaError(
             f"schema_prefix {schema!r} compiles IVG's tables into class package {schema_package(schema)}, which "
-            f"already holds classes IVG did not create ({', '.join(clash[:5])}). Choose another IVG Schema name. "
-            "Nothing was created."
+            f"already holds {'a class' if len(clash) == 1 else 'classes'} named like one IVG creates "
+            f"({', '.join(clash[:5])}). Rename or move {'it' if len(clash) == 1 else 'them'}, or choose another "
+            "IVG Schema name. Nothing was created."
         )
 
 

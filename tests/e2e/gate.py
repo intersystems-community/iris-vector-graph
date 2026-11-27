@@ -111,6 +111,10 @@ GROUPS: Dict[str, Group] = {
     "legacy": Group("IVG_LEGACY_NAMESPACE", "LEG", "name"),
     "new252": Group("IVG_NS_IVG252NEW", "252", "name"),
     "ns262alt": Group("IVG_NS_IVG262ALT", "ALT", "name"),
+    # 4.7.2: the shared-package file makes and drops three scratch namespaces of its own, a name each
+    "shared472a": Group("IVG_NS_IVG470S1", "472A", "name"),
+    "shared472b": Group("IVG_NS_IVG470S2", "472B", "name"),
+    "shared472c": Group("IVG_NS_IVG470S3", "472C", "name"),
     "fx8": Group("IVG_NS_IVG262FX8", "FX8", "name"),
     "fx8d": Group("IVG_NS_IVG262FX8D", "FX8D", "name"),
     "rcd262": Group("IVG_NS_IVG262RCD", "RCD", "name"),

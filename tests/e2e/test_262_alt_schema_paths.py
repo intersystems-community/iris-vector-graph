@@ -468,8 +468,9 @@ def test_ledger_redact(alt):
 
 # --------------------------------------------------------------------------- T030: package clash
 
-def test_a_schema_whose_package_holds_someone_elses_class_is_refused(alt):
-    """Research R2: IVGCLASH maps to package IVGCLASH; an application class there would sit among IVG's table classes."""
+def test_a_schema_whose_package_holds_a_class_named_like_an_ivg_class_is_refused(alt):
+    """Research R2: IVGCLASH maps to package IVGCLASH; an application's `IVGCLASH.nodes` would sit where IVG's table
+    class `nodes` goes. 4.7.2: another class there (`IVGCLASH.mine`) is not a clash, and a dry run goes through."""
     from iris_vector_graph import IRISGraphEngine, IVGSchemaError
 
     conn = alt["conn"]
@@ -482,13 +483,19 @@ def test_a_schema_whose_package_holds_someone_elses_class_is_refused(alt):
         # recorded IVGALT: the mismatch is what refuses it first (FR-006)
         with pytest.raises(IVGSchemaError, match="records IVGALT"):
             engine.initialize_schema()
-        # with no record, IVGCLASH named explicitly beside IVGALT's tables reaches the package check (spec 262 T030)
+        # with no record, IVGCLASH named explicitly beside IVGALT's tables reaches the package check (spec 262 T030):
+        # `mine` is not a name IVG creates, so a dry run (which runs the check and writes nothing) is accepted
         nat.kill("^IVG.Deploy", "schema")
         engine = IRISGraphEngine(conn, embedding_dimension=4, namespace=NS, schema_prefix="IVGCLASH")
-        with pytest.raises(IVGSchemaError, match="IVGCLASH.mine"):
-            engine.initialize_schema()
-        tables = {r[0] for r in ns262.rows(conn, "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'IVGCLASH'")}
-        assert tables == {"mine"}
+        assert engine.initialize_schema(dry_run=True)["dry_run"] is True
+        conn.cursor().execute("CREATE TABLE IVGCLASH.nodes (x INT)")
+        try:
+            with pytest.raises(IVGSchemaError, match="IVGCLASH.nodes"):
+                engine.initialize_schema()
+            tables = {r[0] for r in ns262.rows(conn, "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'IVGCLASH'")}
+            assert tables == {"mine", "nodes"}
+        finally:
+            conn.cursor().execute("DROP TABLE IVGCLASH.nodes")
     finally:
         nat.set(recorded, "^IVG.Deploy", "schema")
         nat.set(stamp, "^IVG.Deploy", "schema", "recorded")
