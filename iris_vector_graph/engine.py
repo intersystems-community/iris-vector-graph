@@ -718,7 +718,13 @@ class IRISGraphEngine(
                 kind = GraphSchema.adjacency_index_kind(
                     self.conn.cursor(), schema=self._ivg_schema, native=self._native_or_none())
                 self._adjacency_indexed_cached = kind == "functional"
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - said (4.7.2); the writers' own ^KG write is the safe path
+                logger.warning(
+                    "The adjacency-index probe failed (%s: %s): this engine's edge writers write ^KG themselves, as for "
+                    "a namespace without the index, until the probe runs again (a new engine, or initialize_schema(), "
+                    "which writes the schema and resets it).",
+                    type(exc).__name__, exc,
+                )
                 self._adjacency_indexed_cached = False
         return self._adjacency_indexed_cached is True
 
