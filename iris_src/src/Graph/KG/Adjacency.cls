@@ -32,8 +32,11 @@
 ///                                         no-wait probe fail while an uncommitted write is visible
 ///
 /// Erase and rebuild kill the affected gen and degc subtrees with the out/in kill, under the
-/// same lock. A lock that cannot be taken in 5 seconds is an error status and nothing is written, but for the row
-/// writers (4.7.0 row 17: IRIS ignores a functional index's error), which write without it: see WriterLock.
+/// same lock. A lock that cannot be taken in 5 seconds is an error status and nothing is written for RemoveGraph,
+/// RemoveAll and BeginRebuild. Every writer of an edge goes on without it (4.7.0 row 17: IRIS ignores the error status
+/// of a functional index's callback, so the row was filed and its ^KG entry was not): Put, PutShadow, Remove,
+/// PutKeyed, RemoveKeyed, RemoveSource and RowUpdate, whoever calls them (the row index's callbacks, the ledger's
+/// apply, the temporal index, the eraser, the edge scan). See WriterLock.
 /// Reweight does not change a degree, so it takes no lock and does not bump.
 ///
 /// graph is a derived index key: integer 0 for the default graph, the graph name
