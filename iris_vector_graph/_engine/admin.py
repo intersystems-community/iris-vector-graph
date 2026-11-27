@@ -569,7 +569,8 @@ class AdminMixin:
             where = "the default graph" if graph == "" else f"graph {graph!r}"
             errors.append(
                 f"the degree cache of {where} is off: a write went in without the adjacency writer lock "
-                "(Graph.KG.Adjacency.WriterLock); run engine.sync() to clear"
+                "(Graph.KG.Adjacency.WriterLock); run engine.sync() to clear (a write of that kind still in flight keeps it "
+                "until the next sync() after it ends)"
             )
 
         os_classes = []

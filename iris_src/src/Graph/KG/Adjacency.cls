@@ -58,21 +58,53 @@ Class Graph.KG.Adjacency Extends %RegisteredObject
 /// Degree, WarmFill) fails while a writer holds it, and the unlock waits for the writer's commit or rollback, so no
 /// count that includes an uncommitted entry is stored. Without the lock that probe would succeed, so the writer marks
 /// the graph in ^IVG.AdjNoLock(pGraph) with $Increment, which a rollback does not take back, and the readers store no
-/// degree for that graph until a rebuild of ^KG from the rows (RemoveAll, RemoveGraph) clears it. ^KG("gen") and
-/// ^KG("__version") move as with the lock, so ^IVG.AlgoCache and ^ArnoKG see the write. A WARNING goes to messages.log
-/// once per process and graph.
+/// degree for that graph while the marker stands. ^KG("gen") and ^KG("__version") move as with the lock, so
+/// ^IVG.AlgoCache and ^ArnoKG see the write. A WARNING goes to messages.log once per process and graph.
+///
+/// The marker outlives a rebuild of ^KG for as long as a lock-less writer is in flight (4.7.2). Such a writer takes a
+/// shared lock on the name ^IVG.AdjNoLock(pGraph) before it marks, and unlocks it at once: inside a transaction IRIS
+/// holds the lock to commit or rollback, outside one it is gone with the unlock, so the lock stands exactly while an
+/// uncommitted lock-less write may. ClearNoLockMarker, which RemoveAll and RemoveGraph (a rebuild, an erase) call,
+/// kills the marker only when it can take that name exclusive without waiting. A pass that finds a writer in flight
+/// leaves the marker, and the graph's degree cache stays off; the next pass that finds none clears it. Neither waits,
+/// refuses or raises.
 ClassMethod WriterLock(pGraph, pWho As %String) As %Boolean
 {
 	Lock +^IVG.AdjW(pGraph)#"S":5
 	If $Test {
 		Quit 1
 	}
+	// Before the marker, so that a rebuild which finds no writer in flight and kills the marker cannot miss this one:
+	// the writer holds the name when the rebuild probes it, or marks after the kill. A refusal (nothing holds the name
+	// for 5 seconds but a rebuild's momentary probe) still marks and writes: the write is never refused.
+	Lock +^IVG.AdjNoLock(pGraph)#"S":5
+	Lock -^IVG.AdjNoLock(pGraph)#"S"
 	Set tmp = $Increment(^IVG.AdjNoLock(pGraph))
 	If '$Data(^||IVG.AdjNoLockWarned(pGraph)) {
 		Set ^||IVG.AdjNoLockWarned(pGraph) = 1
-		Do ##class(%SYS.System).WriteToConsoleLog("IVG Graph.KG.Adjacency."_pWho_": the writer lock for graph "_pGraph_" was not granted in 5 seconds; ^KG was written without it, and the graph's degree cache is not stored until sync() rebuilds ^KG", 0, 1)
+		Do ##class(%SYS.System).WriteToConsoleLog("IVG Graph.KG.Adjacency."_pWho_": the writer lock for graph "_pGraph_" was not granted in 5 seconds; ^KG was written without it, and the graph's degree cache is not stored until a sync() finds no such write in flight", 0, 1)
 	}
 	Quit 0
+}
+
+/// Kill graph pGraph's ^IVG.AdjNoLock marker unless a lock-less writer is in flight (WriterLock): 1 when the marker is
+/// gone, 0 when a writer holds ^IVG.AdjNoLock(pGraph) and the marker stays. The name is taken exclusive without
+/// waiting, the kill is made while it is held, and the lock is released at once with the immediate unlock "I": a
+/// rebuild calls this inside its own transaction, which would otherwise keep the lock, and every lock-less writer's
+/// request for it, waiting until the commit. The caller's own writes never conflict (a lock does not conflict with its
+/// own process).
+ClassMethod ClearNoLockMarker(pGraph) As %Boolean
+{
+	If '$Data(^IVG.AdjNoLock(pGraph)) {
+		Quit 1
+	}
+	Lock +^IVG.AdjNoLock(pGraph)#"E":0
+	If '$Test {
+		Quit 0
+	}
+	Kill ^IVG.AdjNoLock(pGraph)
+	Lock -^IVG.AdjNoLock(pGraph)#"EI"
+	Quit 1
 }
 
 /// Write adjacency for one edge. pWeight "" means 1.0.
@@ -440,7 +472,8 @@ ClassMethod RemoveGraph(pGraph) As %Status
 	Kill ^KG("gen", pGraph)
 	Kill ^KG("degc", pGraph)
 	Kill ^KG("degw", pGraph)
-	Kill ^IVG.AdjNoLock(pGraph)  // nothing of the graph is left in the degree cache (WriterLock)
+	// nothing of the graph is left in the degree cache; the marker stays while a lock-less writer is in flight
+	Do ..ClearNoLockMarker(pGraph)
 	// Residue of the stored counters, as in RemoveSource.
 	Kill ^KG("deg", pGraph)
 	Kill ^KG("degp", pGraph)
@@ -464,8 +497,13 @@ ClassMethod RemoveAll() As %Status
 	Kill ^KG("gen")
 	Kill ^KG("degc")
 	Kill ^KG("degw")
-	// rebuilt from the rows next: no lock-less write is left in the degree cache (WriterLock)
-	Kill ^IVG.AdjNoLock
+	// rebuilt from the rows next: a graph's marker goes unless a lock-less writer is in flight (ClearNoLockMarker)
+	Set tNLGraph = ""
+	For {
+		Set tNLGraph = $Order(^IVG.AdjNoLock(tNLGraph))
+		Quit:tNLGraph=""
+		Do ..ClearNoLockMarker(tNLGraph)
+	}
 	// Residue of the stored counters, as in RemoveSource.
 	Kill ^KG("deg")
 	Kill ^KG("degp")

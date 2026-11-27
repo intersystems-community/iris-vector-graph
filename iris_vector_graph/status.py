@@ -36,7 +36,7 @@ class AdjacencyStatus:
     # "absent", or "unknown" when the probe failed (named in `errors`)
     index: str = "unknown"
     # 4.7.0 row 17: the graphs ("" the default graph) a write went into without the adjacency writer lock
-    # (^IVG.AdjNoLock): their degree cache stores nothing until engine.sync() rebuilds ^KG
+    # (^IVG.AdjNoLock): their degree cache stores nothing until an engine.sync() finds no such write still in flight
     degree_cache_off: List[str] = field(default_factory=list)
 
 

@@ -248,6 +248,14 @@ WHERE z.val_key = 'q')"}) SET n.f = 1` answered the node and wrote nothing, and 
   the log names the cause and what the writers do.
 - **`import_rdf`'s refused-batch message is true inside a caller's transaction.** It said "the batches before this one
   are committed" where those batches are open in the caller's transaction. It now says so there.
+- **`sync()` no longer clears the degree-cache marker under a write that is still in flight.** A write that went in
+  without the adjacency writer lock (4.7.0) marks its graph in `^IVG.AdjNoLock`, so no reader stores a degree counted
+  over an entry that may not be committed. `sync()` (and an erase) killed the marker while that writer's transaction
+  could still be open, and the next reader stored a count that included the uncommitted edge. A write of that kind now
+  holds a shared lock on the marker's name until its transaction ends, and the rebuild kills a graph's marker only when
+  it can take that name exclusive without waiting: a `sync()` that finds such a write in flight leaves the marker, the
+  graph's degree cache stays off and `status().adjacency.degree_cache_off` still names the graph, and the next `sync()`
+  that finds none clears it. `sync()` does not wait for the writer and raises nothing new.
 
 **Fixed: setup and tooling**
 

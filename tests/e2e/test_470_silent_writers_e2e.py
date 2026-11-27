@@ -339,3 +339,123 @@ def test_no_writer_lock_is_left_behind(conn, held_writer_lock):
     held_writer_lock.unlock("", "^IVG.AdjW", 0)
     assert _lock_free(conn), "a writer kept ^IVG.AdjW(0) after its write"
     held_writer_lock.lock("", 1, "^IVG.AdjW", 0)  # the fixture releases it
+
+
+# ----------------------------------------------- row 17, 4.7.2: sync() and a write that is still in flight
+#
+# A write that went in without the writer lock marks its graph in ^IVG.AdjNoLock so that no reader stores a degree
+# counted over an entry that is not yet committed. sync() used to kill the marker as it rebuilt ^KG, while the
+# writer's transaction could still be open: the next reader's exclusive probe on ^IVG.AdjW then succeeded (the writer
+# holds no lock) and stored a count that includes the uncommitted edge. Now a lock-less writer also holds a shared
+# lock on ^IVG.AdjNoLock(graph) until its transaction ends, and sync() kills the marker of a graph only when it can
+# take that lock exclusive without waiting: a pass that finds a writer in flight keeps the marker, the next pass
+# that finds none clears it.
+
+
+@pytest.mark.parametrize("ending", ("commit", "rollback"))
+def test_sync_keeps_the_marker_while_a_lockless_writer_is_in_flight(conn, held_writer_lock, ending):
+    import iris
+
+    from iris_vector_graph import IRISGraphEngine
+
+    u = _uid()
+    native = iris.createIRIS(conn)
+    eng = IRISGraphEngine(conn, embedding_dimension=rr.DIM)
+    writer = _connect()
+    writer.setAutoCommit(False)
+    try:
+        cur = writer.cursor()
+        for n in (f"{u}a", f"{u}b"):
+            cur.execute("INSERT INTO Graph_KG.nodes (node_id, graph_id) VALUES (?, '')", [n])
+        # ^IVG.AdjW(0) is held by the fixture's connection: this write goes in without the lock, transaction open
+        cur.execute("INSERT INTO Graph_KG.rdf_edges (s, p, o_id, graph_id) VALUES (?, 'R470L', ?, '')",
+                    [f"{u}a", f"{u}b"])
+        assert int(native.isDefined("^IVG.AdjNoLock", 0)) > 0, "the lock-less write left no marker"
+        held_writer_lock.unlock("", "^IVG.AdjW", 0)  # the rebuild takes ^IVG.AdjW shared; the writer's txn stays open
+
+        eng.sync()
+        assert int(native.isDefined("^IVG.AdjNoLock", 0)) > 0, "sync() cleared the marker under an open lock-less write"
+        native.kill("^KG", "degc", 0, f"{u}a")
+        native.classMethodValue("Graph.KG.Adj", "Degree", 0, f"{u}a")
+        assert int(native.isDefined("^KG", "degc", 0, f"{u}a")) == 0, "a degree was stored over an uncommitted write"
+
+        getattr(writer, ending)()
+        eng.sync()
+        assert int(native.isDefined("^IVG.AdjNoLock", 0)) == 0, "the second pass left the marker with no writer in flight"
+        expected = 1 if ending == "commit" else 0
+        assert int(native.classMethodValue("Graph.KG.Adj", "Degree", 0, f"{u}a")) == expected
+        assert int(native.isDefined("^KG", "degc", 0, f"{u}a")) > 0, "the degree cache did not store again"
+    finally:
+        writer.rollback()
+        writer.close()
+
+
+def test_a_lockless_writer_outside_a_transaction_leaves_no_lock_behind(conn, held_writer_lock):
+    """Autocommit: the write is committed as it is made, so nothing is in flight and sync() clears the marker at once."""
+    import iris
+
+    from iris_vector_graph import IRISGraphEngine
+
+    u = _uid()
+    native = iris.createIRIS(conn)
+    eng = IRISGraphEngine(conn, embedding_dimension=rr.DIM)
+    assert eng.create_edge(f"{u}a", "R470L", f"{u}b") is True  # without the lock, committed
+    assert int(native.isDefined("^IVG.AdjNoLock", 0)) > 0
+    held_writer_lock.unlock("", "^IVG.AdjW", 0)
+    eng.sync()
+    assert int(native.isDefined("^IVG.AdjNoLock", 0)) == 0
+    probe = _connect()
+    try:
+        other = iris.createIRIS(probe)
+        other.lock("", 0, "^IVG.AdjNoLock", 0)  # exclusive, no wait: raises when a writer still holds it
+        other.unlock("", "^IVG.AdjNoLock", 0)
+    finally:
+        probe.close()
+
+
+def test_clearing_the_marker_inside_a_transaction_releases_its_lock_at_once(conn):
+    """sync() clears the marker inside BuildKG's transaction; the probe lock must not stand to the commit, or every
+    lock-less writer asking for the name meanwhile waits for it."""
+    import iris
+
+    native = iris.createIRIS(conn)
+    native.set(1, "^IVG.AdjNoLock", 0)
+    probe = _connect()
+    try:
+        other = iris.createIRIS(probe)
+        native.tStart()
+        try:
+            assert int(native.classMethodValue("Graph.KG.Adjacency", "ClearNoLockMarker", 0)) == 1
+            assert int(native.isDefined("^IVG.AdjNoLock", 0)) == 0
+            other.lock("", 0, "^IVG.AdjNoLock", 0)  # raises when the clear's lock is still held
+            other.unlock("", "^IVG.AdjNoLock", 0)
+        finally:
+            native.tRollback()
+    finally:
+        probe.close()
+        native.kill("^IVG.AdjNoLock")
+
+
+def test_clear_leaves_the_marker_of_a_graph_with_a_writer_in_flight_and_clears_the_others(conn):
+    """RemoveGraph and RemoveAll go through ClearNoLockMarker: a graph whose name a lock-less writer holds keeps its
+    marker (0), and a graph nobody holds loses it (1), in one pass."""
+    import iris
+
+    native = iris.createIRIS(conn)
+    holder = _connect()
+    try:
+        other = iris.createIRIS(holder)
+        native.set(1, "^IVG.AdjNoLock", "g472a")
+        native.set(1, "^IVG.AdjNoLock", "g472b")
+        other.lock("S", 1, "^IVG.AdjNoLock", "g472a")  # a lock-less writer's shared lock, as WriterLock leaves it
+        assert int(native.classMethodValue("Graph.KG.Adjacency", "ClearNoLockMarker", "g472a")) == 0
+        assert int(native.classMethodValue("Graph.KG.Adjacency", "ClearNoLockMarker", "g472b")) == 1
+        assert int(native.isDefined("^IVG.AdjNoLock", "g472a")) > 0
+        assert int(native.isDefined("^IVG.AdjNoLock", "g472b")) == 0
+        other.unlock("S", "^IVG.AdjNoLock", "g472a")
+        assert int(native.classMethodValue("Graph.KG.Adjacency", "ClearNoLockMarker", "g472a")) == 1
+        assert int(native.isDefined("^IVG.AdjNoLock", "g472a")) == 0
+    finally:
+        holder.close()
+        native.kill("^IVG.AdjNoLock", "g472a")
+        native.kill("^IVG.AdjNoLock", "g472b")
