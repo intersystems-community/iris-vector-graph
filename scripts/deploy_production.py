@@ -34,10 +34,15 @@ def deploy_classes(host, port, namespace, user, password):
         result = _deploy_packaged_classes(conn)
     finally:
         conn.close()
-    errors = list(result.errors) if result is not None else []
-    if errors:
-        raise RuntimeError(f"ObjectScript class deploy failed: {errors}")
-    logger.info("ObjectScript classes deployed.")
+    if result is None:
+        # 4.7.0 logged "deployed" here: `deploy_packaged_classes` answers None when no classes ship
+        raise RuntimeError(f"no ObjectScript classes are packaged with this install: nothing was deployed to {namespace}")
+    if result.errors:
+        raise RuntimeError(f"ObjectScript class deploy failed: {list(result.errors)}")
+    if result.unchanged and not result.compiled:
+        logger.info(f"ObjectScript classes are already current in {namespace}: nothing was loaded.")
+    else:
+        logger.info(f"{len(result.compiled)} ObjectScript classes deployed and compiled in {namespace}.")
 
 
 def deploy_via_sql(host, port, namespace, user, password, schema):
