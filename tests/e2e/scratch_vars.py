@@ -19,9 +19,28 @@ import os
 import pytest
 
 
+def _is_scratch(name: str) -> bool:
+    """An upper-case name starting with one of the gate's scratch prefixes (`gate.SCRATCH_PREFIXES`), as the helpers that
+    read IVG_NAMESPACE (ns463, ns460alt, reading_role460) take one."""
+    from tests.e2e import gate
+
+    return name.upper() == name and name.startswith(gate.SCRATCH_PREFIXES)
+
+
 def requires(*variables: str) -> pytest.MarkDecorator:
-    """A skipif mark: true when one of `variables` is unset or empty, naming the first such."""
+    """A skipif mark: true when one of `variables` is unset or empty, naming the first such, or holds a name that is not
+    a scratch namespace (4.7.2: files that use this write destructively where the variable points, and
+    `IVG_R470_WR_NS=USER` on a manual run wiped USER), naming the first such."""
+    from tests.e2e import gate
+
     unset = [v for v in variables if not os.environ.get(v)]
-    if not unset:
-        return pytest.mark.skipif(False, reason="")
-    return pytest.mark.skipif(True, reason=f"set {unset[0]} to a scratch namespace of this run")
+    if unset:
+        return pytest.mark.skipif(True, reason=f"set {unset[0]} to a scratch namespace of this run")
+    for variable in variables:
+        name = os.environ[variable]
+        if not _is_scratch(name):
+            shown = ", ".join(f"{p}*" for p in gate.SCRATCH_PREFIXES)
+            return pytest.mark.skipif(
+                True, reason=f"{variable}={name!r} is not a scratch namespace (an upper-case {shown} name)"
+            )
+    return pytest.mark.skipif(False, reason="")
