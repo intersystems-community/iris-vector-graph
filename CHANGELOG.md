@@ -215,7 +215,7 @@ Y`, which no node usually holds: `MATCH (a:Doc)-[:REFERS]->(b:Req|Test)` answere
   the instance, so a second connection or process and a different parameter value run at once, and only a new query
   shape compiles. `FROM %INORDER` would cut five hops to 0.37 s and the later runs to 0.105 s; IVG does not add it,
   because it pins the order the translator wrote. Measurements and workaround: `docs/KNOWN_ISSUES.md`.
-Fixes for the findings of the code review of 4.7.0 that 4.7.1 did not take.
+  Fixes for the findings of the code review of 4.7.0 that 4.7.1 did not take.
 
 **Fixed: Cypher**
 
