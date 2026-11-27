@@ -458,30 +458,46 @@ RETURN CASE WHEN input.fixed THEN input.list ELSE null END AS l
   under `OPTIONAL MATCH`. For the bound end, write the pattern from it: `OPTIONAL MATCH (x)<-[r:R*1..2]-(a:L)`.
 - **Check:** `"OPTIONAL MATCH" in str(error)` and `"WITH a, b WHERE" in str(error)`.
 
-### A variable-length read from a hub fails past IRIS's string limit
+### A variable-length read of many paths fails past IRIS's string limit
 
-- **Symptom:** a variable-length read with no relationship variable and no `DISTINCT`, such as
-  `MATCH (h {node_id: 'hub'})-[*1..2]->(x) RETURN x.node_id`, lists every path, as openCypher says it should. IVG
-  builds each start node's paths as one JSON string (`CY_VLP_PATHS`), about 150 characters a path, and IRIS refuses a
-  string longer than 3,641,144 characters. Past that the read answers no rows and an `IVGResult.error` ending
+- **Symptom:** a variable-length read that lists its paths (no `DISTINCT` on the far end), such as
+  `MATCH (h {node_id: 'hub'})-[*1..2]->(x) RETURN x.node_id`, answers one row per path, as openCypher says it should.
+  IVG builds each start node's paths as one JSON string (`CY_VLP_PATHS`) and IRIS refuses a string longer than
+  3,641,144 characters. Past that the read answers no rows and an `IVGResult.error` ending
   `ObjectScript error: <MAXSTRING>zCYVLPPATHS+1^Graph.KG.funcCYVLPPATHS.1`; `raise_on_error=True` raises it as
-  `RuntimeError`. Measured on a star with 12-character node IDs and no relationship properties: 23,798 leaves
-  answer, 23,799 fail. Longer IDs or relationship properties lower the count. `count(x)`, `count(*)`, a relationship
-  variable (`-[r*1..2]->`), and `DISTINCT` with `ORDER BY` or `LIMIT` read the same paths and fail the same way.
-- **Versions:** 4.6.0. 4.5.x answered such a read with fewer rows than it has paths, some of them wrong.
+  `RuntimeError`. IRIS can name the overflow `<STRINGSTACK>` instead: an outside run on IRIS 2026.1 met it at five hops
+  and 5,273 trails, which is 3.64 million characters at the 690 or so each took, and 2026.3 reports it at 125,000
+  leaves (`count(r)`; 100,000 gave `<MAXSTRING>`). How many paths fit depends on what the query
+  reads of each (4.7.2 asks for only that): a query that reads nothing of the relationships (`RETURN x.node_id`,
+  `count(*)`, `count(x)`, even with `r` bound) takes about 26 characters a path; one that reads `r` (`count(r)`,
+  `RETURN r`, a test such as `all(x IN r WHERE x.state <> 'stale')`) about 330 at five hops with two properties
+  on each relationship; one that also compares two hops' trails for a shared edge (two variable-length hops in one
+  pattern), about 560; a named path `p` reads the node IDs and the types. Longer node IDs and more relationship
+  properties raise those figures. Measured (4.7.2, 12-character node IDs, no relationship properties, a star): 125,000
+  leaves answer a read of the nodes, 30,000 answer `count(r)` and `RETURN r`, and 100,000 do not answer those two. On
+  4.6.0 to 4.7.1 every read took about 700 characters at five hops and 150 on the star, and 23,798 leaves was the most
+  that answered (23,799 failed).
+- **Versions:** 4.6.0 (4.5.x answered such a read with fewer rows than it has paths, some of them wrong). 4.7.2 raises
+  the number of paths that fit, about 27 times for a read of the nodes and 2 times for a read of `r`; it does not
+  remove the limit.
 - **Workaround:** ask for the nodes rather than the paths. `RETURN DISTINCT x.node_id` and `count(DISTINCT x)` take
-  another route, which holds no path, and answer on any hub; sort or cut the `DISTINCT` rows in Python.
-- **Check:** `"<MAXSTRING>" in result.error`.
+  another route, which holds no path, and answer on any hub; sort or cut the `DISTINCT` rows in Python. A test on the
+  relationships (`all(x IN r WHERE ...)`) cannot take that route: five hops of 5,000 trails answer, six hops of
+  20,000 do not. Where the test is on a status, store the status in the type (`extends` and `extends_stale`) and
+  write the hop with the types it may take and `DISTINCT` on the far end (`-[:extends|calls*1..6]->`), which does:
+  0.05 s through six hops on the outside run's graph.
+- **Check:** `"<MAXSTRING>" in result.error or "<STRINGSTACK>" in result.error`.
 
-On a hub with 30,000 leaves, listing the paths fails and the two alternatives answer.
+On a hub with 30,000 leaves, listing the nodes of the paths answers (4.7.1 raised the error above) and so do the two
+alternatives.
 
 ```python
 engine.bulk_create_edges(
     [{"source_id": "ki071hub", "predicate": "R", "target_id": f"ki071l{i:05d}"} for i in range(30000)]
 )
 r = engine.execute_cypher("MATCH (h {node_id: 'ki071hub'})-[*1..2]->(x) RETURN x.node_id")
-(r.rows, "<MAXSTRING>" in r.error)
-# → ([], True)
+(len(r.rows), r.error)
+# → (30000, None)
 ```
 
 The nodes reached, each once:
@@ -664,6 +680,29 @@ tables`), as such a write fails anyway (the entry below).
 - **Versions:** 4.3.0 and later (by design).
 - **Workaround:** run each such query shape once at startup if first-call latency matters.
 - **Check:** time the first and the second call of the shape.
+
+### The first run of a long typed chain compiles for seconds in IRIS
+
+- **Symptom:** a fixed chain of typed hops, each with a label (`MATCH (d:Doc)-[:PART_OF|CITES]->(s:Spec)<-[:PART_OF]-(d0:Doc)
+-[:CITES]->(r:Req)-[:INTENT]-(m:Member)-[:MEMBER_OF]->(c:Class) RETURN DISTINCT d.node_id`), takes seconds the first
+  time and a fraction of a second after. Measured on a 17,000-node, 55,000-edge typed graph (IRIS
+  2026.3.0AI.113.0 Enterprise, one new query text in a new process each time): the first run of three
+  hops 0.8 s, four hops 2.4 s, five hops 3.2 s, six hops 4.0 s; the runs after, 0.09, 0.20, 0.18 and 0.18 s. An
+  outside run on a graph of the same size measured 4.3 s and 7.6 s for five and six hops, and 0.016 to 0.05 s after.
+  The same five-hop chain with its first node named by a parameter and one undirected hop (the `UNION ALL` split
+  above) took 8.3 s the first time.
+- **Cause:** IRIS compiling the statement. The time is in `cursor.execute()` (3.09 s of the 3.24 s for five hops;
+  `fetchall()` took 0.15 s), not in the translation (0.007 s) and not in anything IVG caches. Each hop adds an edge
+  table, a node table and a label table to the JOIN, and the optimizer searches their order. IRIS keeps the compiled
+  statement for the instance, so a second connection, a second process and a second engine run the same text at once
+  (0.18 s), and a different value for the same parameter or literal is the same statement (0.006 s). A new query shape
+  compiles again, and so does the first run after IRIS purges its cached queries (not measured here).
+- **Versions:** all 4.x (not an IVG regression).
+- **Workaround:** run each chain shape once at startup, with the query as it will be written. A statement given the join order with `FROM %INORDER` compiled
+  in 0.37 s (five hops) and 0.42 s (six hops) and ran in 0.105 s on this graph, against 3.0 s and 0.18 s; IVG does not
+  add it, because it fixes the order the translator wrote, which is not the cheapest on every graph.
+- **Check:** time `cursor.execute()` apart from `fetchall()` on the first and the second run of the SQL
+  (`result.sql`): the first run's time is all in `execute()`.
 
 ### Named graphs are not accelerated by Arno
 

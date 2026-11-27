@@ -7097,13 +7097,98 @@ def translate_to_sql(
     prefix when there is no engine, or the engine has none)."""
     schema = getattr(engine, "_schema_prefix", None)
     prop_set = _translation_prop_set.set(getattr(engine, "_prop_set_deployed", True) is not False)
+    # whether the deployed CY_VLP_PATHS takes the `cols` argument (4.7.2); False leaves every path column in
+    vlp_cols = getattr(engine, "_vlp_cols_deployed", True) is not False
     schema_token = _translation_schema.set(schema) if isinstance(schema, str) and schema else None
     try:
-        return _translate_to_sql(cypher_query, params, engine, procedures)
+        result = _translate_to_sql(cypher_query, params, engine, procedures)
+        if vlp_cols:
+            if isinstance(result.sql, str):
+                result.sql = _prune_vlp_columns(result.sql)
+            elif isinstance(result.sql, list):
+                result.sql = [_prune_vlp_columns(s) if isinstance(s, str) else s for s in result.sql]
+        return result
     finally:
         if schema_token is not None:
             _translation_schema.reset(schema_token)
         _translation_prop_set.reset(prop_set)
+
+
+_VLP_PATHS_CALL = re.compile(r"\b\w+\.CY_VLP_PATHS\(")
+_VLP_JSON_TABLE_TAIL = ", '$[*]' COLUMNS("
+_VLP_ALIAS = re.compile(r"\) (\w+)")
+_VLP_COLUMN_TEXT = {c: ", " + c + " VARCHAR(32000) PATH '$." + c + "'" for c in "nyrk"}  # fixed keys, not user text
+_SELECT_STAR = re.compile(r"\bSELECT\s+(?:DISTINCT\s+)?\*", re.IGNORECASE)
+
+
+def _closing_paren(sql: str, i: int) -> int:
+    """The index of the `)` that closes the `(` before `i`, skipping quoted text; -1 when there is none."""
+    depth, quoted = 1, False
+    while i < len(sql):
+        ch = sql[i]
+        if quoted:
+            if ch == "'":
+                if sql[i + 1 : i + 2] == "'":
+                    i += 1
+                else:
+                    quoted = False
+        elif ch == "'":
+            quoted = True
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return -1
+
+
+def _prune_vlp_columns(sql: str) -> str:
+    """Ask `CY_VLP_PATHS` only for the path columns the SQL reads (4.7.2).
+
+    The function returns one JSON string holding every trail, and IRIS refuses a string past 3,641,144 characters
+    (`<MAXSTRING>`; on 2026.1 an outside run met `<STRINGSTACK>` at five hops and 5,273 trails). Each trail carries four
+    columns, `n` (the node ids), `y` (the types), `r` (the relationships with their properties) and `k` (the edge keys),
+    and most queries read one or none of them: with the unread ones left out a five-hop trail takes under half the
+    text, so more than twice the trails fit. A column the SQL reads in any way this cannot see (`vlp1.*`, the alias
+    on its own, a `SELECT *`) keeps every column, so the answer is never the pruned one by accident."""
+    if "CY_VLP_PATHS(" not in sql or _SELECT_STAR.search(sql):
+        return sql
+    pos = 0
+    while True:
+        m = _VLP_PATHS_CALL.search(sql, pos)
+        if m is None:
+            return sql
+        pos = m.end()
+        end = _closing_paren(sql, pos)
+        if end < 0 or not sql.startswith(_VLP_JSON_TABLE_TAIL, end + 1):
+            continue  # a call wrapped in another function (CY_VLP_OPT) keeps every column
+        cols_open = end + 1 + len(_VLP_JSON_TABLE_TAIL)
+        cols_end = _closing_paren(sql, cols_open)
+        alias_at = _VLP_ALIAS.match(sql, cols_end + 1) if cols_end > 0 else None
+        columns = sql[cols_open:cols_end]
+        if alias_at is None or not all(t in columns for t in _VLP_COLUMN_TEXT.values()):
+            continue
+        alias, alias_start = alias_at.group(1), alias_at.start(1)
+        used = set()
+        for u in re.finditer(rf"\b{re.escape(alias)}\b(\.\w+|\.\*)?", sql):
+            if u.start() == alias_start:
+                continue
+            attr = (u.group(1) or "")[1:]
+            if attr in _VLP_COLUMN_TEXT:
+                used.add(attr)
+            elif attr in ("", "*"):
+                used = set(_VLP_COLUMN_TEXT)  # the alias on its own: whatever it stands for needs all of it
+                break
+        if used == set(_VLP_COLUMN_TEXT):
+            continue
+        for c, text in _VLP_COLUMN_TEXT.items():
+            if c not in used:
+                columns = columns.replace(text, "")
+        mask = "".join(c for c in "nyrk" if c in used) or "x"
+        sql = sql[:end] + f", '{mask}'" + sql[end:cols_open] + columns + sql[cols_end:]
+        pos = end
 
 
 def _match_vars(clause) -> set:
@@ -14704,6 +14789,32 @@ def translate_subquery_call(subquery: ast.SubqueryCall, context: TranslationCont
         _subquery_uncorrelated(subquery, inner, context, metadata)
 
 
+def _labels_any_sql(node_col: str, labels, add_param) -> str:
+    """One `EXISTS` over `rdf_labels` that holds when the node carries any of `labels` (4.7.2). An `OR` of one
+    `EXISTS` per label planned on IRIS as a scan of the label table per row (0.16 s against 0.004 s on 450 rows from
+    17,000 nodes), and a join on `label IN (...)` repeats a node that holds two of the labels."""
+    marks = ", ".join(add_param(lab) for lab in labels)
+    return f"EXISTS (SELECT 1 FROM {_table('rdf_labels')} _lp WHERE _lp.s = {node_col} AND _lp.label IN ({marks}))"
+
+
+def _bound_label_or_filter(node_id_col: str, alias: str, labels, optional: bool, context) -> None:
+    """The label test of a node `(b:X|Y)` that an earlier hop already registered, as the rows' filter. In an
+    OPTIONAL MATCH over a hop's far end it goes into the edge join's ON, as each single label does, so a hop whose
+    edges all fail the test still gives its one row of nulls."""
+    if optional and not alias.startswith("Stage"):
+        pat = re.compile(
+            rf"LEFT OUTER JOIN\s+\S+\s+{re.escape(alias)}\s+ON\s+{re.escape(alias)}\.node_id\s*=\s*(\S+)"
+        )
+        for idx in range(len(context.join_clauses) - 1, 0, -1):
+            m = pat.search(context.join_clauses[idx])
+            if m:
+                cond = _labels_any_sql(m.group(1).rstrip(")"), labels, context.add_join_param)
+                context.join_clauses[idx - 1] += f" AND {cond}"
+                return
+    cond = _labels_any_sql(node_id_col, labels, context.add_where_param)
+    context.where_conditions.append(f"({node_id_col} IS NULL OR {cond})" if optional else cond)
+
+
 def translate_node_pattern(node, context, metadata, optional=False, standalone=False):
     if node.variable and node.variable in context.variable_aliases:
         # Special case: scalar variable used as node in OPTIONAL MATCH.
@@ -14752,6 +14863,10 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
                 else:
                     node_id_col = f"{alias}.node_id"
                 jt = "LEFT OUTER JOIN" if optional else "JOIN"
+                if getattr(node, "labels_or", False) and len(set(effective_labels)) > 1:
+                    # `(a)-[:R]->(b:X|Y)`: one test for any of the labels (4.7.2: each label was ANDed here)
+                    _bound_label_or_filter(node_id_col, alias, list(dict.fromkeys(effective_labels)), optional, context)
+                    effective_labels = []
                 for label in effective_labels:
                     # For optional non-anchor targets: push the label check into the
                     # PRECEDING EDGE JOIN's ON clause via EXISTS, rather than a separate
@@ -14886,9 +15001,13 @@ def translate_node_pattern(node, context, metadata, optional=False, standalone=F
             pass  # label already enforced by SQL table mapping; no rdf_labels JOIN needed
         elif getattr(node, "labels_or", False) and len(node.labels) > 1:
             l_alias = context.next_alias("l")
-            labels_inlined = ", ".join(f"'{_sql_literal(lab)}'" for lab in node.labels)
+            labels_inlined = ", ".join(f"'{_sql_literal(lab)}'" for lab in dict.fromkeys(node.labels))
+            # a node holding two of the labels matches on each: the join keeps only its least one (4.7.2; it
+            # answered the node once per label)
             context.join_clauses.append(
                 f"{effective_jt} {_table('rdf_labels')} {l_alias} ON {l_alias}.s = {alias}.node_id AND {l_alias}.label IN ({labels_inlined})"
+                f" AND NOT EXISTS (SELECT 1 FROM {_table('rdf_labels')} _ld WHERE _ld.s = {l_alias}.s"
+                f" AND _ld.label IN ({labels_inlined}) AND _ld.label < {l_alias}.label)"
             )
             if not optional or is_anchor_optional:
                 context.where_conditions.append(f"{l_alias}.s IS NOT NULL")
@@ -18651,6 +18770,36 @@ def translate_boolean_expression(expr, context) -> str:
         context._filter_position = direct
 
 
+def _or_of_labels(expr, context):
+    """(variable, labels) when `expr` is `n:A OR n:B [OR ...]` over one node variable that holds a nodes row, else
+    None (4.7.2). One `EXISTS ... label IN (...)` answers it: the OR of an `EXISTS` per label ran 40 times slower
+    than the same hop without the test on an undirected hop."""
+    if not (isinstance(expr, ast.BooleanExpression) and expr.operator == ast.BooleanOperator.OR):
+        return None
+    preds, todo = [], list(reversed(expr.operands))
+    while todo:
+        op = todo.pop()
+        if isinstance(op, ast.BooleanExpression) and op.operator == ast.BooleanOperator.OR:
+            todo.extend(reversed(op.operands))
+        elif isinstance(op, ast.LabelPredicate):
+            preds.append(op)
+        else:
+            return None
+    var = preds[0].variable
+    alias = context.variable_aliases.get(var)
+    if (
+        not alias
+        or any(p.variable != var for p in preds)
+        or var in context.rel_variables
+        or var in context.scalar_variables
+        or alias.startswith(("e", "Stage", "__"))
+        or alias in context.mapped_node_aliases
+        or var in getattr(context, "edge_stage_variables", set())
+    ):
+        return None
+    return var, list(dict.fromkeys(p.label for p in preds))
+
+
 def _translate_boolean_expression(expr, context, direct: bool) -> str:
     if isinstance(expr, ast.BooleanExpression):
         _folded, _fv = _cy_try_fold(expr)
@@ -18664,6 +18813,10 @@ def _translate_boolean_expression(expr, context, direct: bool) -> str:
         if result is not None:
             return result
         return "1=1"
+    any_of = _or_of_labels(expr, context)
+    if any_of is not None:
+        var, labels = any_of
+        return _labels_any_sql(f"{context.variable_aliases[var]}.node_id", labels, context.add_where_param)
     if isinstance(expr, ast.LabelPredicate):
         alias = context.variable_aliases.get(expr.variable)
         node_col = f"{alias}.node_id" if alias else "node_id"

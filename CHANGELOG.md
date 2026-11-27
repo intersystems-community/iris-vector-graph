@@ -175,6 +175,46 @@
   its capabilities. A namespace with no IVG tables still logs INFO only; a probe that fails logs at DEBUG and
   raises nothing. `GraphSchema.check_objectscript_classes` fills the new `IRISCapabilities.missing_classes` with the
   packaged classes the namespace lacks, `Graph.KG.PageRank` first; `[]` when the classes are there.
+Fixes for what an outside run measured on 4.7.1 and IRIS 2026.1 (a typed graph of 17,000 nodes and 52,000 edges). Each
+was reproduced here on a synthetic graph of that size (16,850 nodes, 55,717 edges, a few hubs) before the fix, and the
+numbers are from IRIS 2026.3.0AI.113.0.
+
+**Fixed: Cypher**
+
+- **A variable-length hop of five hops no longer fails on a `<STRINGSTACK>` or `<MAXSTRING>` for a query that reads
+  `r` or tests a property.** `CY_VLP_PATHS` builds every trail of a start as one JSON string and IRIS refuses a string
+  past 3,641,144 characters; each trail carried four columns (the node IDs, the types, the relationships with their
+  properties, the edge keys) whether or not the query read them, about 700 characters at five hops. The outside run's
+  5,273 trails are the 3.64 million. The translator now asks the function for only the columns the SQL reads
+  (`CY_VLP_PATHS` takes a ninth argument, `cols`, defaulting to all four; `initialize_schema()` redeploys it, and an
+  engine on a namespace that still has the eight-argument function asks for every column, as 4.7.1 did). A read of
+  the nodes alone (`RETURN b.node_id`, `count(*)`, `count(x)`) takes 26 characters a trail instead of 701 (27 times
+  more trails fit), and a read of `r` or a test `all(x IN r WHERE x.state <> 'stale')` takes 330 (2.1 times more).
+  On a layered graph with 9,330 trails of one to five hops (5.4 million characters before), the qualifier test, `count(r)`,
+  `count(*)`, the end of each trail and `RETURN b.node_id, r` all answer, each the exact set of ends or count a plain walk
+  over the edges gives, and the ends equal those of the same question as a fixed chain of five hops and as the types
+  alone. The limit moves; it does not go: six hops of 18,000 trails that test `r` still fail, and `docs/KNOWN_ISSUES.md`
+  says what to write instead.
+- **An OR of labels on a hop's far end ran 20 to 75 times slower than the hop without it.** `MATCH (a:Doc)-[:REFERS]-(b)
+WHERE b:Req OR b:Test` took 0.16 s warm against 0.008 s for the hop with no label test on 17,000 nodes (the outside
+  run: 2.0 s against 0.027 s); the OR of one `EXISTS` per label planned as a scan of the label table for each row. It is
+  now one `EXISTS` over `label IN (...)`, 0.007 s, for an undirected, an outgoing and an incoming hop, any number of
+  labels, with the same rows in the same count.
+- **`(a)-[:R]->(b:X|Y)` answered no rows.** A label OR written in the pattern on a hop's far end was tested as `X AND
+Y`, which no node usually holds: `MATCH (a:Doc)-[:REFERS]->(b:Req|Test)` answered 0 rows where 234 hops end at a
+  `Req` or a `Test`, and the undirected form 0 where 450 do. It now answers those rows, under `OPTIONAL MATCH` too
+  (a document with no such neighbour keeps its row of nulls).
+- **`MATCH (b:Req|Test)` answered a node holding both labels twice.** The join on `label IN ('Req', 'Test')` matched the
+  node once per label; it keeps one match per node.
+
+**Measured, not changed**
+
+- **A first run of a long typed chain pays IRIS's compile of the statement**, 0.8 s at three hops, 2.4 s at four, 3.2 s
+  at five, 4.0 s at six on the synthetic graph (the outside run: 4.3 s and 7.6 s at five and six), and 0.09 to 0.2 s
+  after. All of it is in the driver's `execute()`; the translation takes 7 ms. IRIS keeps the compiled statement for
+  the instance, so a second connection or process and a different parameter value run at once, and only a new query
+  shape compiles. `FROM %INORDER` would cut five hops to 0.37 s and the later runs to 0.105 s; IVG does not add it,
+  because it pins the order the translator wrote. Measurements and workaround: `docs/KNOWN_ISSUES.md`.
 
 ### v4.7.1 (2026-11-14)
 

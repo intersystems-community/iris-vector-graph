@@ -123,7 +123,8 @@ class TestDdl:
             s for s in GraphSchema.get_procedures_sql_list() if "FUNCTION Graph_KG.CY_VLP_PATHS(" in s
         )
         sig = lambda s: s.split("(", 1)[1].split(") RETURNS", 1)[0]
-        assert sig(ddl) == sig(paths)
+        # CY_VLP_PATHS takes one more, the path columns to return (4.7.2, `cols`, which defaults to all of them)
+        assert sig(paths) == sig(ddl) + ", cols VARCHAR(16) DEFAULT 'nyrk'"
         assert ddl.lstrip().startswith("CREATE OR REPLACE FUNCTION")
 
     def test_locals_are_private_and_body_survives_dbapi_ddl(self):

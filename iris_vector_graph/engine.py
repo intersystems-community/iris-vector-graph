@@ -1758,6 +1758,7 @@ class IRISGraphEngine(
     def capabilities(self, value: Optional[IRISCapabilities]) -> None:
         self._capabilities = value
         self.__dict__.pop("_prop_set_ok", None)  # setup may have deployed Prop_Set: ask again
+        self.__dict__.pop("_vlp_cols_ok", None)  # ... or the CY_VLP_PATHS that takes `cols`
 
     @property
     def _prop_set_deployed(self) -> bool:
@@ -1778,6 +1779,33 @@ class IRISGraphEngine(
                 logger.debug("Prop_Set detection could not read the dictionary (%s): taken as deployed", exc)
                 ok = True
             self.__dict__["_prop_set_ok"] = ok
+        return ok
+
+    @property
+    def _vlp_cols_deployed(self) -> bool:
+        """Whether the IVG Schema's CY_VLP_PATHS takes the `cols` argument (4.7.2), which the translator uses to ask
+        for only the path columns a query reads. A namespace set up by an earlier IVG has the function with eight
+        arguments until `initialize_schema()` runs again; the call below (it returns at once, `maxh < minh`) is
+        refused there, and the translator then leaves every column in, as 4.7.1 did. Asked once, and again after the
+        capabilities are set (initialize_schema)."""
+        ok = self.__dict__.get("_vlp_cols_ok")
+        if ok is None:
+            schema = self._ivg_schema
+            try:
+                cursor = self.conn.cursor()
+                try:
+                    cursor.execute(
+                        f"SELECT {schema}.CY_VLP_PATHS('x', '[]', 'out', 1, 0, 1, '-', '{schema}.rdf_edges', 'x')"
+                    )
+                    cursor.fetchone()
+                finally:
+                    with contextlib.suppress(Exception):
+                        cursor.close()
+                ok = True
+            except Exception as exc:
+                logger.debug("CY_VLP_PATHS takes no `cols` here (%s): every path column is asked for", exc)
+                ok = False
+            self.__dict__["_vlp_cols_ok"] = ok
         return ok
 
     @property
