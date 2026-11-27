@@ -175,9 +175,9 @@
   its capabilities. A namespace with no IVG tables still logs INFO only; a probe that fails logs at DEBUG and
   raises nothing. `GraphSchema.check_objectscript_classes` fills the new `IRISCapabilities.missing_classes` with the
   packaged classes the namespace lacks, `Graph.KG.PageRank` first; `[]` when the classes are there.
-Fixes for what an outside run measured on 4.7.1 and IRIS 2026.1 (a typed graph of 17,000 nodes and 52,000 edges). Each
-was reproduced here on a synthetic graph of that size (16,850 nodes, 55,717 edges, a few hubs) before the fix, and the
-numbers are from IRIS 2026.3.0AI.113.0.
+  Fixes for what an outside run measured on 4.7.1 and IRIS 2026.1 (a typed graph of 17,000 nodes and 52,000 edges). Each
+  was reproduced here on a synthetic graph of that size (16,850 nodes, 55,717 edges, a few hubs) before the fix, and the
+  numbers are from IRIS 2026.3.0AI.113.0.
 
 **Fixed: Cypher**
 
