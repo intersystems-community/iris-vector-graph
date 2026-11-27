@@ -1099,6 +1099,21 @@ engine.ledger.verify().result
 # → 'equal'
 ```
 
+`verify()` reads every node by its graph (4.7.2). The same ID in the default graph and in a named graph is two nodes,
+each with its own labels and properties, and a difference names its graph (`DiffEntry.graph`; `None` is the default
+graph). A node that only a named graph holds, a copy deleted from one graph, and a node moved from one graph to
+another outside the ledger each make `verify()` report `'diverges'`, and `verify(adopt=True)` records the difference in
+the graph it is in. A ledger `commit` writes nodes, labels and properties in the default graph (it checks that the ID
+exists in any graph first). The bare node row a relationship in a named graph needs for each endpoint (no label, no
+property) belongs to that relationship, and `verify()` does not count it as a node of its own. Before 4.7.2 `verify()`
+read the node tables without their graph, so the states above verified `'equal'`. A ledger enabled before 4.7.2
+recorded every node with no graph: if your graph has nodes with labels or properties in named graphs, its first
+`verify()` on 4.7.2 reports them, and `verify(adopt=True)` records them once.
+
+A qualifier's number compares by value: a graph loaded with a qualifier of 0.8 verifies `'equal'` right after
+`enable()` (the genesis stores the number as IRIS spells it, `.8`; 4.7.1 read it back as `0.8` and reported
+`'diverges'`). A string `"0.8"` is a different value from the number 0.8, and a changed number is still a difference.
+
 Inside a transaction you opened on the engine's connection, `commit` is part of it (4.7.0; "Writes inside your
 transaction" in section 3 has the details). Your rollback takes the revision back, with its writes, and leaves no gap in
 the chain: the next revision gets the next `seq` and the last kept revision as its parent. Until your transaction ends,

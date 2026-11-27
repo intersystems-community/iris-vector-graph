@@ -55,6 +55,33 @@
   raises `FusionLegError` after both were tried, naming each failed leg and its index (`.legs`, `.errors`). This
   removes the KNOWN_ISSUES entry "`kg_RRF_FUSE` answers `[]` when an index search fails".
 
+**Fixed: the revision ledger**
+
+- **`ledger.verify()` reads nodes by graph.** It read `nodes`, `rdf_labels` and `rdf_props` without `graph_id`, and its
+  replay held one node per ID, so these states verified `'equal'` in 4.7.1: a node that only a named graph holds (the
+  genesis and `verify(adopt=True)` recorded it with no graph, as the default graph's); the same ID in the default graph
+  and in a named graph (one node); the default graph's copy deleted outside the ledger while the named copy stayed; a
+  node adopted from a named graph and then moved to the default graph outside the ledger. Each is now `'diverges'`,
+  and a difference names its graph (`DiffEntry.graph`; `None` is the default graph, and the wire form carries `graph`
+  only when it is set). The genesis and an adoption record a named graph's node, labels and properties with that
+  graph; a ledger `commit` still writes the default graph, and a ledger operation on an ID that only a named graph holds
+  is replayed as the default graph's rows it wrote. The bare node row a relationship in a named graph needs for each
+  endpoint (no label, no property; the ledger registers it with the relationship and a temporal write makes it) belongs
+  to that relationship and is not a node of its own. `GraphState.nodes` holds the default graph's nodes, `graph_nodes`
+  the named graphs'; the export still lists one line per ID, the graphs merged (`GraphState.blind_nodes()`), so its
+  bytes are unchanged.
+  **A ledger enabled before 4.7.2 recorded every node with no graph.** If its graph has nodes with labels or
+  properties in a named graph, the first `verify()` on 4.7.2 reports them (and any ID held by two graphs) as
+  differences, which they are; `verify(adopt=True)` records them once. A graph with nodes in the default graph only is
+  unaffected. `redact(graph)` now also tombstones the genesis' and adoptions' node records of that graph.
+- **`enable()` on a graph with fractional qualifiers no longer reports `'diverges'` at once.** The genesis spells a
+  JSON number the way IRIS does (`0.8` as `.8`, `1.0` as `1`, `-0.25` as `-.25`, `1e-5` as `.00001`, `1e22` as
+  `10000000000000000000000`) and `verify()` read it back as Python does (`0.8`, `1.0`, `-0.25`, `1e-05`, `1e+22`), so
+  every statement with such a qualifier differed from its own genesis, with nothing written in between. `verify()` now
+  compares a number by value. A qualifier the tables hold as the string `"0.8"` is still not the number the genesis
+  recorded as `.8`, a changed number is still a difference, and a nested qualifier (an object or a list) is compared as
+  JSON (4.7.1 compared Python's spelling, with spaces, against IRIS's compact one).
+
 ### v4.7.1 (2026-11-14)
 
 Fixes for the wrong answers a code review of 4.7.0 found, each checked against the 4.7.0 release.

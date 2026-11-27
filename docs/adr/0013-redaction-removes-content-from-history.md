@@ -34,7 +34,9 @@ ADR-0004 kept `rec` on erasure because one revision's ordinals can belong to sev
 
 There is no hash chain over records (spec 213). "Verifiable" means replay equals the store. A tombstone contributes nothing to replay, and its target is gone from the store, so both sides lose the same content.
 
-The ledger's node operations are graph-blind. `LedgerApply.OpCreateNode` writes into the default graph, and every node record has graph `""`. A tenant's node records can therefore only be addressed by entity-id prefix in the default graph. The prefix is matched with its separator (`acme|`), so `acme` never matches `acme-health|`. The full redaction of a tenant whose relationships live in its own graph is `redact(tenantGraph)` plus `redact(None, prefix=tenant)`.
+The ledger's node operations write the default graph. `LedgerApply.OpCreateNode` writes into the default graph, and a node record of a commit has graph `""`. A tenant's node records from commits can therefore only be addressed by entity-id prefix in the default graph. The prefix is matched with its separator (`acme|`), so `acme` never matches `acme-health|`. The full redaction of a tenant whose relationships live in its own graph is `redact(tenantGraph)` plus `redact(None, prefix=tenant)`.
+
+Since 4.7.2 the genesis and an adoption record a named graph's node, labels and properties with that graph, and `verify()` reads nodes by graph (the replay keeps a node per graph). `redact(tenantGraph)` therefore also takes the genesis' and the adoptions' node records of that graph. A ledger enabled before 4.7.2 recorded every node with graph `""`, and its records are still addressed by prefix.
 
 ## Alternatives considered
 

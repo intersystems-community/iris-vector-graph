@@ -113,6 +113,7 @@ class TestUS11TemporalCoexistence:
         cur.execute("SELECT qualifiers FROM Graph_KG.rdf_edges WHERE s = 'a' AND p = 'T2' AND o_id = 'b' AND graph_id = 'g'")
         assert '"temporal"' in (cur.fetchone()[0] or "")
         assert ("a", "T2", "b", "g") not in canonical_tables(engine.conn)["rels"]
+        # (4.7.2: the bare node rows the write made for the edge's endpoints in graph g are part of the edge)
         assert engine.ledger.verify().result == "equal"
         engine.ledger.set_strict(True)
         before = canonical_tables(engine.conn)

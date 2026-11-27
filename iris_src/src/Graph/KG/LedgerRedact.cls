@@ -12,9 +12,11 @@
 /// The run ends with a content-free revision of kind "redaction" naming the redacted
 /// revisions by seq (Decision 1).
 ///
-/// The ledger's node operations are graph-blind: every node record has graph "". A
-/// tenant's node records are therefore addressed by prefix in the default graph, and
-/// a tenant whose relationships live in its own graph takes two targets.
+/// A ledger commit's node records have graph "" (its node operations write the default
+/// graph), and so do every node record of a genesis before 4.7.2. A tenant's node records
+/// are therefore addressed by prefix in the default graph, and a tenant whose
+/// relationships live in its own graph takes two targets. Since 4.7.2 the genesis and an
+/// adoption record a named graph's nodes with that graph, which the graph target takes.
 ///
 /// Storage added by this class:
 ///   ^IVG.Ledger("redacting") = $LB(targetDigest, graph, match, startedMs, actor)   (while a run is unfinished)
@@ -143,9 +145,9 @@ ClassMethod PrePass(pName As %String)
 /// Live rows of the target in the content tables. -1 on a SQL failure (pWhat says which).
 ///
 /// A prefix target in the default graph counts node, label and property rows in every
-/// graph: the ledger's node records are graph-blind, and so is verify(), so a node id
-/// live in any graph would still be replayed against. Relationships are counted in the
-/// target graph only, because that is where their records are.
+/// graph: a ledger written before 4.7.2 holds its named graphs' node records with graph "",
+/// so a node id live in any graph could still be replayed against. Relationships are
+/// counted in the target graph only, because that is where their records are.
 ClassMethod LiveRows(pName As %String, pMatch As %String, pSchema As %String, Output pWhat As %String) As %Integer
 {
     Set pWhat = "", tTotal = 0

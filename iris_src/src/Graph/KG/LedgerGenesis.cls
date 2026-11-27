@@ -14,25 +14,28 @@ Class Graph.KG.LedgerGenesis Extends %RegisteredObject
 ClassMethod Capture(pSeq As %Integer, pSchema As %String, ByRef pRecords, ByRef pFirst As %String, ByRef pLast As %String) As %String
 {
     Set pRecords = $Get(pRecords, 0)
+    // nodes, labels and properties are per graph (4.7.2): a named graph's record names its graph, the default
+    // graph's has none. Before 4.7.2 every record had none, so a node only a named graph held was recorded as
+    // the default graph's, and verify() read the tables the same way and called them equal.
     // nodes
-    Set tRS = ##class(Graph.KG.LedgerApply).Run("SELECT node_id FROM " _ pSchema _ ".nodes ORDER BY node_id")
+    Set tRS = ##class(Graph.KG.LedgerApply).Run("SELECT node_id, graph_id FROM " _ pSchema _ ".nodes ORDER BY node_id, graph_id")
     If tRS.%SQLCODE < 0 Return ##class(Graph.KG.Ledger).Err("inconsistent", "genesis node scan failed: " _ tRS.%Message)
     While tRS.%Next() {
-        Do ##class(Graph.KG.LedgerApply).Rec(.pRecords, "create_node", "node", tRS.%GetData(1), "", "N", "S", "", "genesis")
+        Do ##class(Graph.KG.LedgerApply).Rec(.pRecords, "create_node", "node", tRS.%GetData(1), "", "N", "S", ..GraphOf(tRS.%GetData(2)), "genesis")
     }
     // labels
-    Set tRS = ##class(Graph.KG.LedgerApply).Run("SELECT s, label FROM " _ pSchema _ ".rdf_labels ORDER BY s, label")
+    Set tRS = ##class(Graph.KG.LedgerApply).Run("SELECT s, label, graph_id FROM " _ pSchema _ ".rdf_labels ORDER BY s, label, graph_id")
     If tRS.%SQLCODE < 0 Return ##class(Graph.KG.Ledger).Err("inconsistent", "genesis label scan failed: " _ tRS.%Message)
     While tRS.%Next() {
-        Do ##class(Graph.KG.LedgerApply).Rec(.pRecords, "add_label", "node", tRS.%GetData(1), tRS.%GetData(2), "N", "S", "", "genesis")
+        Do ##class(Graph.KG.LedgerApply).Rec(.pRecords, "add_label", "node", tRS.%GetData(1), tRS.%GetData(2), "N", "S", ..GraphOf(tRS.%GetData(3)), "genesis")
     }
     // properties (reserved names excluded, FR-014b)
-    Set tRS = ##class(Graph.KG.LedgerApply).Run("SELECT s, ""key"", val FROM " _ pSchema _ ".rdf_props ORDER BY s, ""key""")
+    Set tRS = ##class(Graph.KG.LedgerApply).Run("SELECT s, ""key"", val, graph_id FROM " _ pSchema _ ".rdf_props ORDER BY s, ""key"", graph_id")
     If tRS.%SQLCODE < 0 Return ##class(Graph.KG.Ledger).Err("inconsistent", "genesis prop scan failed: " _ tRS.%Message)
     While tRS.%Next() {
         Set tKey = tRS.%GetData(2)
         If ##class(Graph.KG.LedgerApply).IsReserved(tKey) Continue
-        Do ##class(Graph.KG.LedgerApply).Rec(.pRecords, "set_prop", "node", tRS.%GetData(1), tKey, "N", "S" _ tRS.%GetData(3), "", "genesis")
+        Do ##class(Graph.KG.LedgerApply).Rec(.pRecords, "set_prop", "node", tRS.%GetData(1), tKey, "N", "S" _ tRS.%GetData(3), ..GraphOf(tRS.%GetData(4)), "genesis")
     }
     // relationships
     Set tRS = ##class(Graph.KG.LedgerApply).Run("SELECT s, p, o_id, graph_id, qualifiers FROM " _ pSchema _ ".rdf_edges ORDER BY s, p, o_id, graph_id")
@@ -57,6 +60,13 @@ ClassMethod Capture(pSeq As %Integer, pSchema As %String, ByRef pRecords, ByRef 
         }
     }
     Return ""
+}
+
+/// A row's graph as a record names it: "" for the default graph, which SQL spells '' and IRIS may store as
+/// $Char(0) (replay._graph_key reads every spelling as the default graph).
+ClassMethod GraphOf(pGraphId As %String) As %String [ Private ]
+{
+    Return $Translate(pGraphId, $Char(0), "")
 }
 
 /// 1 when a row's qualifiers carry the JSON boolean marker {"temporal": true}: the same test

@@ -161,6 +161,7 @@ class TestStrictMode:
             engine.create_edge_temporal("a", "T2", "b", timestamp=1_700_000_001, graph="g") is True
         )
         assert ("a", "T2", "b", "g") not in canonical_tables(engine.conn)["rels"]
+        # (4.7.2: the bare node rows the temporal writes made for the edges' endpoints in graph g are part of the edges)
         assert engine.ledger.verify().result == "equal"
 
 

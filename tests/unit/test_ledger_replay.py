@@ -381,9 +381,9 @@ class TestVerify:
     def test_read_canonical_excludes_reserved_and_joins_stmt_ids(self):
         conn = _FakeConn(
             {
-                "nodes": [("a",), ("b",)],
-                "rdf_labels": [("a", "L")],
-                "rdf_props": [("a", "k", "v"), ("a", "id", "a"), ("a", "__graph", "g")],
+                "nodes": [("a", ""), ("b", "")],
+                "rdf_labels": [("a", "L", "")],
+                "rdf_props": [("a", "k", "v", ""), ("a", "id", "a", ""), ("a", "__graph", "g", "")],
                 "rdf_edges": [
                     ("a", "R", "b", None, '{"w": 1, "flag": true}'),
                     ("b", "R", "a", "g", None),
@@ -600,7 +600,7 @@ class TestTemporalExclusion:
     def test_read_canonical_ignores_temporal_only_edges(self):
         # ^KG("tout") rows have no SQL mirror; the fake store exposes none in rdf_edges
         conn = _FakeConn(
-            {"nodes": [("a",), ("b",)], "rdf_labels": [], "rdf_props": [], "rdf_edges": []}
+            {"nodes": [("a", ""), ("b", "")], "rdf_labels": [], "rdf_props": [], "rdf_edges": []}
         )
         st = R.read_canonical(conn, "Graph_KG", lambda t: None)
         assert set(st.nodes) == {"a", "b"} and st.statements == {}
@@ -608,7 +608,7 @@ class TestTemporalExclusion:
     def test_mirrored_temporal_row_is_a_structural_statement(self):
         conn = _FakeConn(
             {
-                "nodes": [("a",), ("b",)],
+                "nodes": [("a", ""), ("b", "")],
                 "rdf_labels": [],
                 "rdf_props": [],
                 "rdf_edges": [("a", "T", "b", "g", None)],

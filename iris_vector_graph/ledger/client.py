@@ -650,9 +650,11 @@ class GraphLedger:
 
         The target is ``graph`` (``None`` is the default graph), narrowed by ``prefix``
         to the ids that start with ``prefix + separator`` (``"acme"`` does not match
-        ``"acme-health|..."``). The ledger records nodes graph-blind, in the default
-        graph, so a tenant whose relationships live in its own graph is two calls:
-        ``redact(tenant_graph)`` and ``redact(None, prefix=tenant)``.
+        ``"acme-health|..."``). A ledger commit writes nodes in the default graph, and
+        the genesis of a ledger enabled before 4.7.2 recorded every node there, so a tenant
+        whose relationships live in its own graph is two calls: ``redact(tenant_graph)``
+        and ``redact(None, prefix=tenant)``. (Since 4.7.2 the genesis and an adoption
+        record a named graph's nodes with that graph, which ``redact(tenant_graph)`` takes.)
 
         Erase first: a target with live rows is refused (``RedactionTargetLiveError``)
         and nothing changes. Each batch of ``batch_size`` tombstones is one transaction

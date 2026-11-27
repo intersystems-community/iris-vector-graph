@@ -84,6 +84,8 @@ def test_history_lists_the_revisions_and_verify_is_equal(upg):
     assert {r.revision_id for r in engine.ledger.history(limit=10).revisions} == ids
     assert engine.ledger.head().seq == 3
     report = engine.ledger.verify()
+    # 4.7.2 reads nodes by graph: the seed's n5 and n6 are in graph `acme` too, as the bare endpoint rows of its edges,
+    # which 4.5.1's genesis never recorded and which are part of those edges
     assert (report.result, report.differences) == ("equal", [])
     stats = ns262.rows(upg["conn"], f"SELECT state, head_seq FROM {SCHEMA}.ledger_stats")
     assert [tuple(r) for r in stats] == [("enabled", 3)]

@@ -26,7 +26,8 @@ class ExportSummary:
 
 def _iter_entities(state_or_iter: Union[GraphState, Iterable]):
     if isinstance(state_or_iter, GraphState):
-        for nid, ns in sorted(state_or_iter.nodes.items()):
+        # one line per id, the graphs merged: a node line carries no graph (4.7.2: the replay keeps a node per graph)
+        for nid, ns in sorted(state_or_iter.blind_nodes().items()):
             yield ("node", nid, ns)
         for sid, st in sorted(
             state_or_iter.statements.items(),
