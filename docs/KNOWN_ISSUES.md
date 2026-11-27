@@ -433,6 +433,16 @@ RETURN CASE WHEN input.fixed THEN input.list ELSE null END AS l
   `RETURN [x IN nodes(p) WHERE x.p > 1 | x.id]`, or `UNWIND nodes(p) AS x RETURN x.id` with no `WITH` after it.
 - **Check:** the error names `SQLCODE -149`.
 
+### A range over a `$parameter` inside a path's `nodes(p)` fails with "Incorrect number of parameters"
+
+- **Symptom:** `MATCH p = (a)-[:R*2]->(b) WHERE any(x IN nodes(p) WHERE x.p > $v) RETURN count(p)`, and the same range
+  in a list comprehension over `nodes(p)` (`RETURN [x IN nodes(p) WHERE x.p > $v | x.id]`), fail with
+  `<ARGUMENT ERROR> Incorrect number of parameters`. The query never answers wrongly.
+- **Cause:** the parameter's value is bound once, and the generated SQL names it in three places.
+- **Versions:** all 4.x. Found in the 4.7.2 review on the 4.7.1 base, with or without the number rule.
+- **Workaround:** write the number into the query text (`x.p > 5`).
+- **Check:** the error names `Incorrect number of parameters`.
+
 ### A list predicate over a list holding a stored NaN fails
 
 - **Symptom:** over a list built from a node property holding NaN or an infinity a Cypher write stored
