@@ -15,8 +15,9 @@ Known answers: on the freshly set-up namespace, EXPLAIN of each per-row guard (t
 Graph.KG.EdgeScan's own source; the Python writers' guards, built by schema.guard_from; the Cypher writers' guards,
 from translating CREATE, UNWIND CREATE, SET, MERGE and USE GRAPH CREATE) names idx_props_s / idx_labels_s, not the
 index that leads with the key or the label (9995d0d7: idx_labels_label for the first). Then, ratios, robust to a
-busy host: the tenth UNWIND CREATE statement takes under 2x the first (9995d0d7: 3.6x); 10,000 nodes, each with the
-label and the `id` property (R089), load with the last 1,000-node chunk under 2x the first (9995d0d7: 11x). Where: `IVG_LOAD_NS`, a namespace with no data yet (`make_scratch_namespace.py --no-install`),
+busy host (global references, not seconds: 4.7.2): the tenth UNWIND CREATE statement makes under 2x the first's (9995d0d7: 3.6x in
+time); 10,000 nodes, each with the label and the `id` property (R089), load with the last 1,000-node chunk under 2x the
+first's (9995d0d7: 11x in time). Where: `IVG_LOAD_NS`, a namespace with no data yet (`make_scratch_namespace.py --no-install`),
 on `IVG_PORT` (default 31972).
 """
 
@@ -25,7 +26,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from pathlib import Path
 
 import pytest
@@ -66,13 +66,21 @@ def _cypher_guards(schema):
     return out
 
 
-def _timed_unwind(engine, label, n_chunks=10, size=1000):
+def _refs(native) -> int:
+    """The global references this connection's server process has made: what a chunk's cost is measured in. A count,
+    not a time (docs/dev/TESTING_POLICY.md: timing assertions do not run under load), and it grows with the rows a
+    statement reads, which is the defect (every row of the label or key, more at each chunk)."""
+    return int(native.classMethodValue("%SYSTEM.Process", "GlobalReferences"))
+
+
+def _counted_unwind(engine, native, label, n_chunks=10, size=1000):
+    """The global references each of `n_chunks` UNWIND CREATE statements of `size` rows made."""
     out = []
     for c in range(n_chunks):
-        t0 = time.perf_counter()
+        before = _refs(native)
         engine.execute_cypher(f"UNWIND $rows AS r CREATE (:{label} {{uwk: r, name: 'x'}})",
                               {"rows": [f"{label}:{c}:{i}" for i in range(size)]}, raise_on_error=True)
-        out.append(time.perf_counter() - t0)
+        out.append(_refs(native) - before - 1)  # the second GlobalReferences call itself
     return out
 
 
@@ -102,27 +110,30 @@ def test_a_new_namespace_loads_10k_nodes_in_flat_chunks():
         ]
         for sql in guards:
             assert _first_read(cur, sql) in ([f"{t_props}.idx_props_s"], [f"{t_labels}.idx_labels_s"]), sql
-        unwind_s = _timed_unwind(engine, "T470Unwind")
-        assert unwind_s[-1] < 2 * unwind_s[0], json.dumps([round(s, 2) for s in unwind_s])
-        chunk_s = []
+        native = iris.createIRIS(conn)
+        unwind_refs = _counted_unwind(engine, native, "T470Unwind")
+        print("UNWIND grefs per chunk:", unwind_refs)
+        assert unwind_refs[-1] < 2 * unwind_refs[0], json.dumps(unwind_refs)
+        chunk_refs = []
         real = schema_mod._call_classmethod_large
 
-        def timed(c, cls, method, *args, **kwargs):
-            t0 = time.perf_counter()
+        def counted(c, cls, method, *args, **kwargs):
+            before = _refs(native)
             try:
                 return real(c, cls, method, *args, **kwargs)
             finally:
                 if method == "BulkIngestNodesSQL":
-                    chunk_s.append(time.perf_counter() - t0)
+                    chunk_refs.append(_refs(native) - before - 1)
 
-        schema_mod._call_classmethod_large = timed
+        schema_mod._call_classmethod_large = counted
         try:
             ids = [f"t470load:{i}" for i in range(N)]
             assert engine.bulk_create_nodes([{"id": n, "labels": ["T470Load"]} for n in ids]) == ids
         finally:
             schema_mod._call_classmethod_large = real
-        assert len(chunk_s) >= 5, chunk_s
-        assert chunk_s[-1] < 2 * chunk_s[0], json.dumps([round(s, 2) for s in chunk_s])
+        assert len(chunk_refs) >= 5, chunk_refs
+        print("loader grefs per chunk:", chunk_refs)
+        assert chunk_refs[-1] < 2 * chunk_refs[0], json.dumps(chunk_refs)
         cur.execute(f"SELECT COUNT(*) FROM {engine._ivg_schema}.rdf_labels WHERE label = 'T470Load'")
         assert cur.fetchone()[0] == N
         cur.execute(f"SELECT COUNT(*) FROM {engine._ivg_schema}.rdf_props WHERE \"key\" = 'id' AND val = s")
