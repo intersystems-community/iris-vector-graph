@@ -42,15 +42,16 @@ def test_purge_raw_before_parses_one_two_or_three_fields(raw, expected):
     assert tuple(store.purge_raw_before(100, retire_bare_nodes=raw.count(":") == 2)) == expected
 
 
-def test_the_option_is_always_sent():
-    """4.7.0 row 6: the Python default is on and the class's stays off, so the store says which it wants every time
-    rather than leave the choice to the class's default: 1 by default, 0 for False."""
+def test_the_option_is_sent_when_it_is_on_and_left_out_when_it_is_off():
+    """4.7.0 row 6 made the Python default on and sent the fourth argument every time; the class's own default stays 0,
+    so 4.7.2 leaves it out for False (an older class has no such parameter and fails <PARAMETER> with it): 1 by default,
+    nothing for False (tests/unit/test_472_purge_retire_arguments.py)."""
     store, calls = _store("1:0:1")
     store.purge_raw_before(100, graph="g")
     assert calls[-1][1] == "PurgeRawBefore" and len(calls[-1][2]) == 4 and calls[-1][2][3] == 1
     store, calls = _store("1:0")
     store.purge_raw_before(100, graph="g", retire_bare_nodes=False)
-    assert len(calls[-1][2]) == 4 and calls[-1][2][3] == 0
+    assert len(calls[-1][2]) == 3
 
 
 def test_erase_bare_nodes_sends_the_arguments_in_the_order_the_class_takes_them_and_parses_the_counts():

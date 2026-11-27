@@ -656,10 +656,9 @@ class TemporalMixin:
         that leaves bare (see ``purge_raw_before``) and returns how many; with ``retire_bare_nodes=False``
         it keeps them and returns 0 (the default before 4.7.0).
         """
-        return int(self._iris_obj().classMethodValue(
-            "Graph.KG.TemporalIndex", "PurgeBefore", int(ts),
-            1 if retire_bare_nodes else 0,
-        ) or 0)
+        # the flag only when it is on: PurgeBefore of a namespace set up before 4.5.0 takes the timestamp alone (4.7.2)
+        flag = (1,) if retire_bare_nodes else ()
+        return int(self._iris_obj().classMethodValue("Graph.KG.TemporalIndex", "PurgeBefore", int(ts), *flag) or 0)
 
     def purge_bucket_range(
         self, bucket_start: int, bucket_end: int, graph: Optional[str] = None

@@ -2814,12 +2814,12 @@ class IRISGraphStore:
         from iris_vector_graph._engine.temporal import PurgeResult
 
         ts_start = max(0, int(ts_start))
-        # Always the fourth argument (4.7.0 row 6): the Python default is on and the class's stays 0 (ObjectScript
-        # callers such as opsreview rely on it), so the choice is never left to the class's default
-        result = self._call_classmethod(
-            "Graph.KG.TemporalIndex", "PurgeRawBefore",
-            validate_graph_name(graph), str(ts_end), str(ts_start), 1 if retire_bare_nodes else 0,
-        )
+        # The fourth argument only when it is on (4.7.0 row 6 sent it always, and a namespace whose classes predate 4.5.0
+        # failed <PARAMETER> with it off): the Python default is on and the class's stays 0 (ObjectScript callers such
+        # as opsreview rely on it), so leaving it out is "off" on every class that has it. On a class that has not, "on"
+        # raises, which is the answer: it cannot retire.
+        args = (validate_graph_name(graph), str(ts_end), str(ts_start)) + ((1,) if retire_bare_nodes else ())
+        result = self._call_classmethod("Graph.KG.TemporalIndex", "PurgeRawBefore", *args)
         # "deleted", "deleted:skipped" or, with retire_bare_nodes, "deleted:skipped:retired"
         parts = str(result).split(":")
         nums = [int(p) if p else 0 for p in parts] + [0, 0]
