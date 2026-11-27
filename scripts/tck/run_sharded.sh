@@ -8,6 +8,9 @@
 #   Same environment variables as run_all.sh (IVG_REPO, IVG_TCK_MULTIGRAPH, ...).
 #
 # Writes <outdir>/<area>/TESTS-*.xml and <outdir>/results.tsv.
+#
+# exit status: 0 only when every shard exited 0 (see run_all.sh) and the merged results
+# hold at least one scenario and no failure; 1 otherwise.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -46,6 +49,8 @@ while IFS= read -r line; do
   IVG_REPO=$repo IVG_TCK_NAMESPACE=$ns "$here/run_all.sh" "$out" $line >"$out/shard_$ns.log" 2>&1 &
   pids+=($!); i=$((i + 1))
 done <<<"$queues"
-for p in "${pids[@]}"; do wait "$p" || true; done
+rc=0
+for p in "${pids[@]}"; do wait "$p" || rc=1; done
 
-"$py" "$here/summarize.py" "$out" "$out/results.tsv" --features "$repo/tests/tck/features"
+"$py" "$here/summarize.py" "$out" "$out/results.tsv" --features "$repo/tests/tck/features" --exit-status || rc=1
+exit "$rc"

@@ -23,7 +23,7 @@ class TestSchemaInitialization:
         from iris_vector_graph.engine import IRISGraphEngine
 
         self.conn = iris_connection
-        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
 
     def test_initialize_schema_completes_without_error(self):
         self.engine.initialize_schema(auto_deploy_objectscript=False)

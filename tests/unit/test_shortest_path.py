@@ -159,9 +159,9 @@ class TestShortestPathE2E:
 
         q = f"MATCH p = shortestPath((x {{id:'{a}'}})-[*..5]-(y {{id:'{e}'}})) RETURN p"
         result = self.engine.execute_cypher(q)
-        import json
         assert len(result["rows"]) == 1
-        path = json.loads(result["rows"][0][0])
+        path = result["rows"][0][0]
+        assert isinstance(path, dict)  # a path is a Python dict, not JSON text (4.6.0)
         assert len(path["rels"]) == 4  # RETURN p is {"nodes", "rels"}, as for every path (4.6.0)
         assert path["nodes"][0] == a
         assert path["nodes"][-1] == e
@@ -181,9 +181,9 @@ class TestShortestPathE2E:
 
         q = f"MATCH p = shortestPath((x {{id:'{a}'}})-[*..5]-(y {{id:'{a}'}})) RETURN p"
         result = self.engine.execute_cypher(q)
-        import json
         assert len(result["rows"]) == 1
-        path = json.loads(result["rows"][0][0])
+        path = result["rows"][0][0]
+        assert isinstance(path, dict)  # a path is a Python dict, not JSON text (4.6.0)
         assert len(path["rels"]) == 0
         assert path["nodes"] == [a]
         assert path["rels"] == []
@@ -213,10 +213,10 @@ class TestShortestPathE2E:
 
         q = f"MATCH p = allShortestPaths((x {{id:'{a}'}})-[*..4]-(y {{id:'{c}'}})) RETURN p"
         result = self.engine.execute_cypher(q)
-        import json
         assert len(result["rows"]) == 2
         for row in result["rows"]:
-            path = json.loads(row[0])
+            path = row[0]
+            assert isinstance(path, dict)  # a path is a Python dict, not JSON text (4.6.0)
             assert len(path["rels"]) == 2
 
     def test_all_shortest_paths_single_path(self):

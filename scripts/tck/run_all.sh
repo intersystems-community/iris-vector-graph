@@ -19,6 +19,11 @@
 #
 # Writes <outdir>/<area>/TESTS-*.xml and <outdir>/<area>.log, and prints the
 # summary from scripts/tck/summarize.py at the end.
+#
+# exit status: 0 only when every area wrote results, at least one scenario ran and none
+# failed. 1 when any scenario failed, no scenario ran, or an area wrote no results at all
+# (behave crashed or timed out; its log is <outdir>/<area>.log). behave's own status is
+# not used: it is 1 for any failing scenario, and a TCK run is expected to carry some.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -66,12 +71,19 @@ fi
   echo "started    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } | tee "$out/RUN_INFO"
 
+silent=()
 for d in "${dirs[@]}"; do
   a=$(basename "$d")
   rm -f "$out/$a"/TESTS-*.xml 2>/dev/null || true
   ${to[@]+"${to[@]}"} "$py" -m behave -f null --junit --junit-directory "$out/$a" "$d" >"$out/$a.log" 2>&1 || true
-  echo "$a done"
+  if ls "$out/$a"/TESTS-*.xml >/dev/null 2>&1; then echo "$a done"; else echo "$a wrote no results"; silent+=("$a"); fi
 done
 echo "finished   $(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"$out/RUN_INFO"
 
-"$py" "$here/summarize.py" "$out" "$out/results.tsv" --features "$repo/tests/tck/features"
+rc=0
+"$py" "$here/summarize.py" "$out" "$out/results.tsv" --features "$repo/tests/tck/features" --exit-status || rc=$?
+if [ ${#silent[@]} -gt 0 ]; then
+  echo "run_all.sh: ${#silent[@]} area(s) wrote no results: ${silent[*]} (see $out/<area>.log)" >&2
+  rc=1
+fi
+exit "$rc"

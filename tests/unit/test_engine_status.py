@@ -170,7 +170,7 @@ class TestEngineStatusE2E:
     def setup(self, iris_connection):
         from iris_vector_graph.engine import IRISGraphEngine
         self.conn = iris_connection
-        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self.engine.initialize_schema()
         self._run = uuid.uuid4().hex[:8]
         self._nodes = []

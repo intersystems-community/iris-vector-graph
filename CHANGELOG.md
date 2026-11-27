@@ -82,6 +82,28 @@
   recorded as `.8`, a changed number is still a difference, and a nested qualifier (an object or a list) is compared as
   JSON (4.7.1 compared Python's spelling, with spaces, against IRIS's compact one).
 
+**Fixed: test infrastructure**
+
+- **`scripts/tck/run_all.sh` and `run_sharded.sh` exit non-zero when the run is not a pass.** They ran each `behave`
+  process with `|| true` and ended on a summary that exited 0 whenever it found results, so a run with every scenario
+  failed (the container was down: `0 / 3896 eligible`) exited 0, as did a run where one area's `behave` crashed and
+  wrote nothing while the others passed. `run_all.sh` now exits 1 when any scenario failed, when no scenario ran, or
+  when an area wrote no results (it names the area), and `run_sharded.sh` when any shard or the merged results do.
+  `summarize.py --exit-status` is the same rule for the summary. A gate that wants the known failures of a run reads
+  `results.tsv`, as before; `tests/unit/test_472_tck_run_all_exit_status.py` runs both scripts against a stand-in
+  `behave`.
+- **Ten live unit-test files pass on a session namespace at width 768 again (77 failures and errors on the 4.7.1 tree).**
+  Seventy-two tests built an engine at width 4 (or 128) and called plain `initialize_schema()`, which since 4.7.0
+  refuses to change a width unasked (`EmbeddingIdentityConflict`). Those that never store a vector now use the session
+  width; those that store 4-wide vectors (`test_rrf_fuse_e2e.py`, `test_ivf_index.py`) pass `rewidth=True`. The
+  per-test width guard in `tests/conftest.py` did not cover a test that reaches the session namespace only through
+  `arno_iris_connection` (the same namespace when the Arno container is the session's), so the first test after such a
+  `rewidth=True` ran on a width-4 table; it covers them now. Three more were stale tests, not product defects:
+  `test_shortest_path.py` ran `json.loads` on a path, which has been a dict since 4.6.0; `test_centrality_unit.py`'s mock
+  store lacked the `loners` argument the Store protocol gives `execute_eigenvector`; `test_structural_guard_e2e.py` stored
+  `score` as the text `"0.9"` and compared it with `> 0.5`, which openCypher never holds (it also swallowed a failing
+  `initialize_schema()`, which hid the width conflict).
+
 ### v4.7.1 (2026-11-14)
 
 Fixes for the wrong answers a code review of 4.7.0 found, each checked against the 4.7.0 release.

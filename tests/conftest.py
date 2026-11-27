@@ -900,20 +900,34 @@ def _restore_session_embedding_width(conn) -> None:
         logger.warning("Session teardown: embedding width restore skipped: %s", e)
 
 
-def touches_shared_namespace(fixturenames) -> bool:
+def touches_shared_namespace(fixturenames, arno_shared=None) -> bool:
     """Could this test have re-declared the shared legacy embedding table?
 
     Only a test wired to the live session connection could. pytest resolves the
     whole fixture closure into `request.fixturenames`, so asking about
     `iris_connection` covers every fixture that depends on it. `arno_iris_connection`
-    is a different namespace and shares no table with it.
+    is the same namespace whenever the Arno container is the session's container (the
+    default: both are `ivg-iris-enterprise`), and then a width a test re-declares through
+    it is the session's width too; on another container it shares no table.
     """
-    return "iris_connection" in fixturenames
+    if arno_shared is None:
+        arno_shared = arno_shares_session_namespace()
+    return "iris_connection" in fixturenames or (arno_shared and "arno_iris_connection" in fixturenames)
+
+
+def arno_shares_session_namespace(environ=None, arno_container=None) -> bool:
+    """Is `arno_iris_connection` the session's container (and so, with the same IVG_NAMESPACE, its namespace)?"""
+    environ = os.environ if environ is None else environ
+    arno_container = arno_container or os.environ.get("IVG_ARNO_CONTAINER", "ivg-iris-enterprise")
+    return environ.get("IVG_TEST_CONTAINER", "ivg-iris-enterprise") == arno_container
 
 
 # Set by the `iris_connection` fixture once it has a live connection, so the
 # per-test width guard can reach it without requesting (and thereby creating) it.
 _RESOLVED_SESSION_CONN: list = [None]
+# The same for `arno_iris_connection`, which the guard falls back on when a run's session connection was never opened
+# (a test on the Arno connection alone) and the two share a namespace.
+_RESOLVED_ARNO_CONN: list = [None]
 
 
 @pytest.fixture(autouse=True)
@@ -936,7 +950,7 @@ def _keep_shared_embedding_width(request):
     # Never force the fixture into existence: a test that skipped before touching
     # the connection has nothing to restore, and opening one here would undo the
     # laziness that keeps Community's connection limit intact.
-    conn = _RESOLVED_SESSION_CONN[0]
+    conn = _RESOLVED_SESSION_CONN[0] or (_RESOLVED_ARNO_CONN[0] if arno_shares_session_namespace() else None)
     if conn is None:
         return
 
@@ -1075,7 +1089,9 @@ def arno_iris_connection():
             logger.warning("arno container schema init: %s", e)
 
     _SESSION_HEARTBEAT.register("arno_iris_connection", conn)
+    _RESOLVED_ARNO_CONN[0] = conn
     yield conn
+    _RESOLVED_ARNO_CONN[0] = None
     _SESSION_HEARTBEAT.unregister("arno_iris_connection")
     conn.close()
 

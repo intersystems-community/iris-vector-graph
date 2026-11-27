@@ -19,7 +19,7 @@ class TestBooleanTextStorageE2E:
         from iris_vector_graph.engine import IRISGraphEngine
 
         self.conn = iris_connection
-        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self.engine.initialize_schema()
         self.label = f"BoolE2E{uuid.uuid4().hex[:8]}"
         yield

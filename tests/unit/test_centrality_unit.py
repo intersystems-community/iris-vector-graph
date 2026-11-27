@@ -63,9 +63,10 @@ class CentralityMockStore:
                             max_hops=max_hops, top_k=top_k,
                             has_callback=progress_callback is not None)
 
-    def execute_eigenvector(self, max_iter, tol, top_k, progress_callback=None):
+    def execute_eigenvector(self, max_iter, tol, top_k, progress_callback=None, loners=None):
+        # the Store protocol's signature: the engine passes the graph's edgeless nodes (store_protocol.py)
         return self._record("execute_eigenvector", max_iter=max_iter, tol=tol,
-                            top_k=top_k, has_callback=progress_callback is not None)
+                            top_k=top_k, has_callback=progress_callback is not None, loners=loners)
 
     def capabilities(self):
         return dict(self._caps)
@@ -174,6 +175,8 @@ class TestEngineRoutingThroughStore:
         assert "execute_eigenvector" in store.called_methods
         assert store.last_call["max_iter"] == 50
         assert store.last_call["tol"] == 1e-7
+        # the engine hands the store the nodes with no edge (here none: the engine's connection is a mock)
+        assert store.last_call["loners"] == []
 
     def test_engine_raises_not_implemented_when_store_unsupported(self):
         caps = dict(CENTRALITY_CAPS)

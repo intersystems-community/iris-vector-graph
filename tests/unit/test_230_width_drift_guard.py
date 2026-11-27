@@ -50,7 +50,22 @@ def test_a_pure_unit_test_is_not_checked():
     assert not touches_shared_namespace(["request", "tmp_path", "monkeypatch"])
 
 
-def test_the_arno_connection_is_not_the_shared_namespace():
-    # `arno_iris_connection` is its own container and its own namespace: it has no
+def test_the_arno_connection_is_its_own_namespace_when_it_is_another_container():
+    # `arno_iris_connection` on a container other than the session's has no
     # `Graph_KG.kg_NodeEmbeddings` in common with the session connection.
-    assert not touches_shared_namespace(["request", "arno_iris_connection"])
+    assert not touches_shared_namespace(["request", "arno_iris_connection"], arno_shared=False)
+
+
+def test_the_arno_connection_is_the_shared_namespace_when_it_is_the_session_container():
+    # The usual setup (`IVG_TEST_CONTAINER` is `ivg-iris-enterprise`, and so is the Arno container) opens
+    # `arno_iris_connection` in the run's namespace: a test that re-declares the table's width through it
+    # (`initialize_schema(rewidth=True)`) leaves the next test, on `iris_connection`, at that width.
+    assert touches_shared_namespace(["request", "arno_iris_connection"], arno_shared=True)
+
+
+def test_arno_shares_the_session_namespace_only_on_the_same_container():
+    from tests.conftest import arno_shares_session_namespace
+
+    assert arno_shares_session_namespace({"IVG_TEST_CONTAINER": "ivg-iris-enterprise"}, "ivg-iris-enterprise")
+    assert arno_shares_session_namespace({}, "ivg-iris-enterprise")  # the default session container
+    assert not arno_shares_session_namespace({"IVG_TEST_CONTAINER": "ivg-iris"}, "ivg-iris-enterprise")

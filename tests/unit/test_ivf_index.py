@@ -484,7 +484,9 @@ class TestRRFFuseCommunityE2E:
 
         self.conn = iris_connection
         self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
-        self.engine.initialize_schema()
+        # these vectors are 4 wide: 4.7.0 re-declares the empty columns at 4 only when asked, and the
+        # per-test width guard in tests/conftest.py puts the session width back afterwards
+        self.engine.initialize_schema(rewidth=True)
         self._run = uuid.uuid4().hex[:8]
 
         cursor = iris_connection.cursor()

@@ -30,7 +30,7 @@ class TestCypherNewFeaturesE2E:
         from iris_vector_graph.engine import IRISGraphEngine
 
         self.conn = iris_connection
-        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self.engine.initialize_schema()
         self._run = uuid.uuid4().hex[:8]
         self._nodes = []
@@ -381,7 +381,7 @@ class TestCypherRound2E2E:
     def setup(self, iris_connection):
         from iris_vector_graph.engine import IRISGraphEngine
         self.conn = iris_connection
-        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self.engine.initialize_schema()
         self._run = uuid.uuid4().hex[:8]
         self._nodes = []
@@ -473,7 +473,7 @@ class TestUndirectedBFSE2E:
     def setup(self, iris_connection):
         from iris_vector_graph.engine import IRISGraphEngine
         self.conn = iris_connection
-        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self.engine.initialize_schema()
         self._run = uuid.uuid4().hex[:8]
         self._nodes = []
@@ -573,7 +573,7 @@ class TestAdjacencyIndexBuilt:
     def setup(self, iris_connection):
         from iris_vector_graph.engine import IRISGraphEngine
         self.conn = iris_connection
-        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self.engine.initialize_schema()
         self._run = uuid.uuid4().hex[:8]
         self._nodes = []

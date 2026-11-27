@@ -80,9 +80,15 @@ All scripts live in `scripts/tck/`.
 - `deploy_namespace.py <NS>` is the deploy step: TCP class load and compile,
   schema, `CY_*` UDFs.
 - `run_all.sh <out> [area ...]` runs every area, or only the named ones, with
-  one `behave` process per area.
+  one `behave` process per area. It exits 0 only when every area wrote results,
+  at least one scenario ran and none failed; any failing scenario, a run with
+  no scenario, or an area that wrote no results (behave crashed or timed out)
+  gives exit 1. A gate reads that status; a run expected to carry known
+  failures reads `results.tsv` instead. `run_sharded.sh` follows the same rule
+  over all its shards.
 - `summarize.py <out> [out.tsv]` prints the summary line and writes the
-  per-scenario TSV.
+  per-scenario TSV. `--exit-status` makes its own exit status the gate's
+  (1 when no scenario ran or any failed), as `run_all.sh` passes it.
 - `run_sharded.sh <out> <NS> [NS ...]` runs the whole suite split across
   several namespaces in parallel. Areas are dealt out largest first, so the
   shards finish together. It writes one `results.tsv`. With nine namespaces a

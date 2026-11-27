@@ -5,11 +5,9 @@ from iris_vector_graph.engine import IRISGraphEngine
 
 @pytest.fixture(scope="module")
 def guard_engine(arno_iris_connection):
-    engine = IRISGraphEngine(arno_iris_connection, embedding_dimension=128)
-    try:
-        engine.initialize_schema()
-    except Exception:
-        pass  # schema may already exist
+    # the session namespace's vector width; a schema that fails to initialise must fail the test, not be skipped
+    engine = IRISGraphEngine(arno_iris_connection, embedding_dimension=768)
+    engine.initialize_schema()
     return engine
 
 
@@ -18,9 +16,11 @@ class TestStructuralGuardCorrectness:
     """Verify EXISTS guard does not drop valid results vs non-guarded query."""
 
     def _setup_nodes(self, engine):
-        engine.create_node("sg_alice", labels=["Person"], properties={"score": "0.9", "age": "30"})
-        engine.create_node("sg_bob", labels=["Person"], properties={"score": "0.3"})
-        engine.create_node("sg_carol", labels=["Person"], properties={"age": "25"})
+        # numbers, not numeric text: openCypher never holds a number against a string, so `n.score > 0.5`
+        # over the text "0.9" is false (the translator follows it; see CHANGELOG, R308)
+        engine.create_node("sg_alice", labels=["Person"], properties={"score": 0.9, "age": 30})
+        engine.create_node("sg_bob", labels=["Person"], properties={"score": 0.3})
+        engine.create_node("sg_carol", labels=["Person"], properties={"age": 25})
 
     def _teardown_nodes(self, engine):
         for nid in ("sg_alice", "sg_bob", "sg_carol"):
@@ -49,11 +49,11 @@ class TestStructuralGuardCorrectness:
             self._teardown_nodes(guard_engine)
 
     def test_inline_property_guard_correctness(self, guard_engine):
-        """MATCH (n {score: '0.9'}) returns sg_alice only."""
+        """MATCH (n {score: 0.9}) returns sg_alice only."""
         self._setup_nodes(guard_engine)
         try:
             result = guard_engine.execute_cypher(
-                "MATCH (n {score: '0.9'}) RETURN n.node_id AS id"
+                "MATCH (n {score: 0.9}) RETURN n.node_id AS id"
             )
             assert result.error is None, f"Query error: {result.error}"
             ids = self._ids_from_result(result)

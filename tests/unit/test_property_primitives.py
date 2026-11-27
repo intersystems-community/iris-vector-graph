@@ -365,7 +365,7 @@ class TestPropertyPrimitivesIntegration:
         from iris_vector_graph.engine import IRISGraphEngine
 
         self.__class__._prefix = f"proptest-{__import__('uuid').uuid4().hex[:8]}"
-        self.__class__.engine = IRISGraphEngine(iris_connection, embedding_dimension=4)
+        self.__class__.engine = IRISGraphEngine(iris_connection, embedding_dimension=768)
         self.engine.initialize_schema()
 
         # Insert test nodes with properties

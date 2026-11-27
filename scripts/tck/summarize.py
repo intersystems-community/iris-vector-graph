@@ -2,7 +2,7 @@
 """Summarise an openCypher TCK run and compare runs.
 
 Usage:
-    summarize.py RUN_DIR [OUT.tsv] [--features DIR] [--list-ignored]
+    summarize.py RUN_DIR [OUT.tsv] [--features DIR] [--list-ignored] [--exit-status]
     summarize.py diff A.tsv B.tsv [--features DIR]
 
 RUN_DIR holds behave JUnit XML (``RUN_DIR/<area>/TESTS-*.xml``), as written by
@@ -16,6 +16,9 @@ RUN_DIR holds behave JUnit XML (``RUN_DIR/<area>/TESTS-*.xml``), as written by
        feature); excluded from numerator and denominator, whatever it did
 
 The summary line is ``passed / eligible (N ignored upstream; T in total)``.
+
+Without ``--exit-status`` the exit status says only whether results were found (1: none). With it, the run
+is a gate: exit 1 when no scenario ran or any scenario failed, 0 otherwise. ``scripts/tck/run_all.sh`` passes it.
 
 The TSV has one line per scenario, sorted: ``<verdict>\\t<key>`` where key is
 ``<feature file stem>.<Feature name>::<scenario name>``. Older two-column files
@@ -196,12 +199,20 @@ def _main_summary(argv: list[str]) -> int:
     ap.add_argument("tsv", nargs="?")
     ap.add_argument("--features", default=str(DEFAULT_FEATURES))
     ap.add_argument("--list-ignored", action="store_true", help="print the upstream-@ignore keys")
+    ap.add_argument(
+        "--exit-status",
+        action="store_true",
+        help="exit 1 when no scenario ran or any scenario failed (a gate), not only when no results were found",
+    )
     ns = ap.parse_args(argv)
     v = collect(ns.run_dir, ns.features)
     if not v:
         print(f"no JUnit results under {ns.run_dir}", file=sys.stderr)
         return 1
     c = counts(v)
+    if ns.exit_status and c.eligible == 0:
+        print(f"no eligible scenario ran under {ns.run_dir}", file=sys.stderr)
+        return 1
     print(summary_line(c))
     print(f"failed {c.failed}, skipped by harness {c.skipped}")
     env = environment_dependent()
@@ -214,7 +225,7 @@ def _main_summary(argv: list[str]) -> int:
             print("  IGNORED", k)
     if ns.tsv:
         write_tsv(v, ns.tsv)
-    return 0
+    return 1 if ns.exit_status and c.failed else 0
 
 
 def _main_diff(argv: list[str]) -> int:
