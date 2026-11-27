@@ -84,7 +84,8 @@ The containers persist across machine restarts while Docker runs. Data survives 
 stopped gracefully first (`docker exec <container> iris stop IRIS quietly`).
 
 Tests that need a namespace of their own use a scratch namespace with its own database, made by
-`scripts/dev/make_scratch_namespace.py` (names starting `IVG262` or `IVG460`), never `USER` on a shared container.
+`scripts/dev/make_scratch_namespace.py` (names starting `IVG262`, `IVG460`, `IVG463` or `IVG470`), never `USER` on a
+shared container.
 
 ### The FHIR namespace (IVGFHIR)
 

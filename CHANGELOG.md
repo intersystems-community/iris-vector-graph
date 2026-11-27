@@ -215,6 +215,56 @@ Y`, which no node usually holds: `MATCH (a:Doc)-[:REFERS]->(b:Req|Test)` answere
   the instance, so a second connection or process and a different parameter value run at once, and only a new query
   shape compiles. `FROM %INORDER` would cut five hops to 0.37 s and the later runs to 0.105 s; IVG does not add it,
   because it pins the order the translator wrote. Measurements and workaround: `docs/KNOWN_ISSUES.md`.
+Fixes for the findings of the code review of 4.7.0 that 4.7.1 did not take.
+
+**Fixed: Cypher**
+
+- **A value that spells SQL no longer takes an index hint.** The `%IGNOREINDEX` hints on a write's lookups
+  (`(SELECT ... val_key = '...')`) and per-node guards (`NOT EXISTS (SELECT 1 FROM rdf_props WHERE s = ...)`) were
+  placed by scanning the finished SQL, quoted values included. `MATCH (n:C {name: "(SELECT x FROM Graph_KG.nodes z
+WHERE z.val_key = 'q')"}) SET n.f = 1` answered the node and wrote nothing, and `MERGE` on that value made a
+  duplicate on every run. Both now write the one node (`f` is 1; three MERGEs leave one node). A value that holds
+  unbalanced parentheses is read the same way.
+- **A number filter on a node property matches stored numbers only for every node you can reach.** 4.7.0's rule (a
+  stored number of that value, never the string `'.95'` or `'5'`) covered a property joined by MATCH. With the numbers
+  0.95 and 5 stored beside the strings `'.95'`, `'0.95'` and `'5'`, these still read the strings as numbers: a range
+  after `WITH` (`WITH x WHERE x.p >= 0.95` answered all five nodes, now the two numbers); `x.p = 5` and `x.p <> 5` on a
+  node from `UNWIND collected AS x` (the string `'5'` matched `= 5` and was missed by `<> 5`); and the same filters in
+  `[x IN nodes WHERE ...]` and `any(x IN nodes(p) WHERE ...)`. They now answer stored numbers only, on the native and
+  SQL routes. (`UNWIND nodes(p) AS x WITH x ...` over a variable-length path still fails with SQLCODE -149, whatever
+  the filter; it is loud, and not this rule's.)
+- **A `SET` on a namespace without `Prop_Set` says so.** On a namespace set up before 4.7.0 and not set up again,
+  `SET n.p = toInteger(n.p)` over the string `'30'` kept the string and answered success without a word. The
+  translator now logs once per process that the classes predate 4.7.0 and that `initialize_schema()` deploys them.
+
+**Fixed: writes and purges**
+
+- **A purge with `retire_bare_nodes=False` works on a namespace whose classes predate 4.5.0.** 4.7.0 always sent the
+  option as a fourth argument, and `PurgeRawBefore` of those classes has three parameters (`<PARAMETER>`); `purge_before`
+  sent `PurgeBefore` a second argument the same way. The argument is sent only when the option is on, as 4.6.5 did; the
+  class's own default is off, so the answer is the same where the class has it.
+- **A failed adjacency-index probe is logged.** `engine._adjacency_indexed` took any failure of the dictionary read
+  for "no index", and every edge writer then wrote `^KG` itself with no word of why. It still does (the safe path), and
+  the log names the cause and what the writers do.
+- **`import_rdf`'s refused-batch message is true inside a caller's transaction.** It said "the batches before this one
+  are committed" where those batches are open in the caller's transaction. It now says so there.
+
+**Fixed: setup and tooling**
+
+- **`scripts/deploy_production.py` says what its class deploy did.** It logged "ObjectScript classes deployed." when no
+  classes ship (now an error naming the namespace and that nothing was deployed) and when every class was current (now
+  "already current ... nothing was loaded"); a deploy that loaded classes logs how many.
+- **`scripts/dev/tcp_setup.py drop_namespace` refuses a name before it deletes anything.** 4.7.0 listed and deleted the
+  namespace's Task Manager tasks first and only then did `DeleteNamespace` refuse the name:
+  `drop_namespace(native, "%SYS", own=())` deleted every task in `%SYS`. The module refuses any name not starting `IVG`
+  first, and `IVGDev.Setup.TaskIds` and `DeleteTask` refuse a namespace or a task outside `IVG*`.
+- **E2E tests:** `scratch_vars.requires` skips a variable that names anything but an `IVG470*`, `IVG463*`, `IVG460*`
+  or `IVG262*` namespace (`IVG_R470_WR_NS=USER` was written to); `test_470_node_load_new_namespace_e2e` counts global
+  references per chunk where it compared two timings (ten 1,000-row UNWIND chunks: about 93,000 references each from the
+  third on; with the hint off, six chunks read 3.2 million rising to 33 million); `test_470_silent_writers_e2e` checks
+  `load_networkx` against its one predicate.
+- `Graph.KG.Adjacency`'s class comment names every writer that goes on without a refused lock (`Put`, `PutShadow`,
+  `Remove`, `PutKeyed`, `RemoveKeyed`, `RemoveSource`, `RowUpdate`); it said "the row writers".
 
 ### v4.7.1 (2026-11-14)
 
