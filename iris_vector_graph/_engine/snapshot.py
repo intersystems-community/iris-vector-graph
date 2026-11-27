@@ -721,9 +721,14 @@ class SnapshotMixin:
                 # It was passed over (4.6.0 R276): the batch counted as written and was not.
                 from iris_vector_graph.errors import GraphWriteError
 
+                # 4.7.2: inside a caller's transaction the batches before this one are open in it, not committed
+                earlier = (
+                    "the batches before this one are still open in the caller's transaction; its commit or rollback "
+                    "decides them"
+                    if in_caller else "the batches before this one are committed"
+                )
                 raise GraphWriteError(
-                    "import_rdf", e,
-                    left=f"the batches before this one are committed ({triple_count} triples read so far)",
+                    "import_rdf", e, left=f"{earlier} ({triple_count} triples read so far)",
                 ) from e
             batch_nodes.clear()
             batch_edges.clear()
