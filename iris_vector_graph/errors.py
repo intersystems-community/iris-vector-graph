@@ -229,21 +229,6 @@ class PowerIterationFailedConvergence(IVGError, RuntimeError):
             raise cls(message.split("PowerIterationFailedConvergence:", 1)[1].strip())
 
 
-__all__ = [
-    "IVGError",
-    "GraphWriteError",
-    "GraphWriteSchemaError",
-    "PrerequisiteError",
-    "IndexNotFoundError",
-    "IndexNotBuiltError",
-    "EmbeddingsMissingError",
-    "IndexNotSyncedError",
-    "NodeNotFoundError",
-    "ParallelEdgesPresentError",
-    "PowerIterationFailedConvergence",
-]
-
-
 class FusionLegError(IVGError, RuntimeError):
     """One or both legs of ``kg_RRF_FUSE`` failed.
 
@@ -258,3 +243,20 @@ class FusionLegError(IVGError, RuntimeError):
         self.errors = dict(errors)
         parts = [f"{leg} leg (index {legs[leg]!r}): {errors[leg]}" for leg in legs]
         super().__init__("kg_RRF_FUSE: " + "; ".join(parts))
+
+
+__all__ = [
+    "IVGError",
+    "GraphWriteError",
+    "GraphWriteSchemaError",
+    "PrerequisiteError",
+    "IndexNotFoundError",
+    "IndexNotBuiltError",
+    "EmbeddingsMissingError",
+    "IndexNotSyncedError",
+    "FusionLegError",
+    "NodeNotFoundError",
+    "ParallelEdgesPresentError",
+    "PowerIterationFailedConvergence",
+]
+

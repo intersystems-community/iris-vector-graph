@@ -1379,6 +1379,7 @@ class VectorMixin:
                     if len(merged) >= top_k:
                         break
             return merged
+
     def _named_fusion_index(
         self, param: str, name: str, kinds: Sequence[str], graph_id: str
     ) -> str:
