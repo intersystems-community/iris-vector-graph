@@ -16366,6 +16366,27 @@ def _static_number(expr, context, infinite_ok: bool = False):
 # out, the check kept 4.6.5's spellings, found the string '6' for `MERGE (n:M {v: 6})`, and created nothing).
 _NODE_VAL_RE = re.compile(r"(_?m?p\d+)\.val")
 
+_PROP_READ_RE = re.compile(r"\(SELECT val FROM \S*rdf_props WHERE ")
+
+
+def _is_node_val_sql(sql: str) -> bool:
+    """`sql` reads a node property row's `val` as stored (4.7.2): the join's column (`_NODE_VAL_RE`), or the one scalar
+    subquery a carried, unwound or collected node's property reads (`(SELECT val FROM rdf_props WHERE s = ... AND "key"
+    = 'p')`). Its `$LISTBUILD` type byte is the column's (measured, 2026.3: 9 for a stored 0.95, 4 for 5, 1 for the
+    strings '.95' and '5'), so `_stored_number_test` holds of it. 4.7.0's number rule (row 24) took only the column, and
+    `x.p = 0.95` over an unwound or carried node still matched the strings '.95' and '0.95'."""
+    text = sql.strip()
+    if _NODE_VAL_RE.fullmatch(text):
+        return True
+    if not (_PROP_READ_RE.match(text) and text.endswith(")")):
+        return False
+    depth = 0
+    for i, ch in enumerate(_blank_sql_literals(text)):
+        depth += 1 if ch == "(" else -1 if ch == ")" else 0
+        if depth == 0 and i < len(text) - 1:
+            return False  # `(...) op (...)`, not one subquery
+    return depth == 0
+
 
 def _marker_free_side(sql: str, expr, context) -> Optional[str]:
     """`sql` for a second copy of a comparison operand: as it is when it has no `?`, a number parameter's value
@@ -16431,7 +16452,10 @@ def _node_number_eq_sql(col_sql: str, value, negate: bool, value_key: bool) -> s
         return f"({col_sql} IS NOT NULL AND NOT ({hit}))"
     if not value_key or (isinstance(value, float) and value != value):
         return f"({hit})"
-    alias = _NODE_VAL_RE.fullmatch(col_sql).group(1)
+    column = _NODE_VAL_RE.fullmatch(col_sql)
+    if column is None:  # a property subquery has no val_key to read by index
+        return f"({hit})"
+    alias = column.group(1)
     keys = ", ".join([f"'{t}'" for t in _number_texts(value)] + [f"CAST(CAST('{exact}' AS DOUBLE) AS VARCHAR(128))"])
     return f"({alias}.val_key IN ({keys}) AND {hit})"
 
@@ -16451,7 +16475,7 @@ def _number_eq_sql(col_sql: str, value, negate: bool = False, doubles: bool = Fa
     """
     # an infinity is stored as text (the API's 'inf', R307; IRIS's JSON has none), so it keeps the spellings
     finite = not (isinstance(value, float) and value in (float("inf"), float("-inf")))
-    if doubles and finite and _NODE_VAL_RE.fullmatch(col_sql.strip()):
+    if doubles and finite and _is_node_val_sql(col_sql):
         return _node_number_eq_sql(col_sql.strip(), value, negate, value_key)
     spellings = ", ".join(f"'{t}'" for t in _number_texts(value))
     if col_sql.startswith("CASE WHEN ") and col_sql.endswith(" END"):
@@ -16498,7 +16522,14 @@ def _stored_number_comparison(op, left_expr, right_expr, context) -> Optional[st
             and context.path_elem_vars.get(prop.variable) != "node"
             and prop.variable not in context.collected_node_variables
         )
-        if not (rel_text or _is_stored_property(prop, context)):
+        # 4.7.2: a node reached as a path element or from a collected list is JSON text holding its id; its property
+        # reads as the row's `val` through a subquery, so the number rule of 4.7.0 row 24 holds of it too
+        node_element = (
+            isinstance(prop, ast.PropertyReference)
+            and prop.variable in context.scalar_variables
+            and (context.path_elem_vars.get(prop.variable) == "node" or prop.variable in context.collected_node_variables)
+        )
+        if not (rel_text or node_element or _is_stored_property(prop, context)):
             continue
         # 4.6.0 R307: an infinity too; the API stored it as the text 'inf', which `= ?` missed
         num = _static_number(other, context, infinite_ok=True)
@@ -19208,7 +19239,7 @@ def _translate_boolean_expression(expr, context, direct: bool) -> str:
         # CASE alone IRIS 2026.3 planned the query from nodes with temp files, 105 ms where it took 11 (50k rows).
         def _as_number(sql):
             nonlocal typed
-            if _NODE_VAL_RE.fullmatch(sql.strip()):
+            if _is_node_val_sql(sql):
                 typed = True
                 return _stored_number_value(sql.strip())
             return f"CAST({sql} AS DOUBLE)"
@@ -31786,6 +31817,14 @@ def _translate_where_with_alias_expansion(expr, alias_to_expr: dict, context) ->
                 ast.BooleanOperator.GREATER_THAN_OR_EQUAL: ">=",
             }
             if op in op_map:
+                if op not in (ast.BooleanOperator.EQUALS, ast.BooleanOperator.NOT_EQUALS) and right_expr is not None:
+                    # 4.7.2: a stored property orders against a number only when it holds one (4.7.0 row 24, as
+                    # translate_boolean_expression does); here `WITH x WHERE x.p >= 0.95` compared the row's text, so
+                    # the strings '.95' and '5' were kept
+                    if _static_number(_expanded(right_expr), context) is not None and _is_node_val_sql(left):
+                        left = _stored_number_value(left.strip())
+                    elif _static_number(_expanded(left_expr), context) is not None and _is_node_val_sql(right):
+                        right = _stored_number_value(right.strip())
                 return f"{left} {op_map[op]} {right}"
             # For other operators, fall through to standard translation
             return translate_boolean_expression(expr, context)

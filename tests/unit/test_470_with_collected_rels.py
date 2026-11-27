@@ -5,7 +5,7 @@ the stages after it read: `size(rs)`, `rs[0]`, a DELETE of an element. A RETURN 
 query answered `['R', 'R']` where openCypher answers the relationships. The stage now also keeps each relationship
 as RETURN spells one (`{"type", "props"}`, the same JSON text `RETURN collect(r)` aggregates), in the same aggregate,
 so in the same order, and a RETURN of the name reads that, marked for the engine to read into dicts. The live answers
-are tests/e2e/test_470_with_collected_rels_e2e.py.
+are tests/e2e/test_470_rels_and_paths_e2e.py (row 19).
 """
 
 from __future__ import annotations
