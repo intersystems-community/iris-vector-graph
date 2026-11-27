@@ -1488,19 +1488,18 @@ class VectorMixin:
         vec_list = _json.loads(query_vector) if isinstance(query_vector, str) else query_vector
         graph_id = DEFAULT_GRAPH if graph is None else graph
 
+        vec_name: Optional[str] = vector_index
+        vec_type: Optional[str] = None
         if vector_index is not None:
-            self._named_fusion_index("vector_index", vector_index, ("ivf", "hnsw"), graph_id)
+            vec_type = self._named_fusion_index("vector_index", vector_index, ("ivf", "hnsw"), graph_id)
         if text_index is not None and query_text:
             self._named_fusion_index("text_index", text_index, ("bm25",), graph_id)
 
         failed: Dict[str, str] = {}
         errors: Dict[str, BaseException] = {}
 
-        vec_name: Optional[str] = vector_index
         try:
-            if vector_index is not None:
-                vec_type = self._index_registry[vector_index]
-            else:
+            if vector_index is None:
                 vec_name, vec_type = self._fusion_leg_index(("ivf", "hnsw"), graph_id)
             if vec_type == "ivf":
                 # ivf_search answers (node_id, score) tuples; reading them as dicts raised
@@ -1518,7 +1517,7 @@ class VectorMixin:
         try:
             if query_text:  # skip BM25 leg when no text query provided
                 if text_index is None:
-                    txt_name, _txt_type = self._fusion_leg_index(("bm25",), graph_id)
+                    txt_name, _ = self._fusion_leg_index(("bm25",), graph_id)
                     self._warn_if_text_index_ambiguous(txt_name, graph_id)
                 if txt_name is not None:
                     txt_results = self.bm25_search(txt_name, query_text, k=k2)

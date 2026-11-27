@@ -259,4 +259,3 @@ __all__ = [
     "ParallelEdgesPresentError",
     "PowerIterationFailedConvergence",
 ]
-
