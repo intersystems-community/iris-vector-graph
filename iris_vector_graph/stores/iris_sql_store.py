@@ -2818,8 +2818,10 @@ class IRISGraphStore:
         # failed <PARAMETER> with it off): the Python default is on and the class's stays 0 (ObjectScript callers such
         # as opsreview rely on it), so leaving it out is "off" on every class that has it. On a class that has not, "on"
         # raises, which is the answer: it cannot retire.
-        args = (validate_graph_name(graph), str(ts_end), str(ts_start)) + ((1,) if retire_bare_nodes else ())
-        result = self._call_classmethod("Graph.KG.TemporalIndex", "PurgeRawBefore", *args)
+        result = self._call_classmethod(
+            "Graph.KG.TemporalIndex", "PurgeRawBefore",
+            validate_graph_name(graph), str(ts_end), str(ts_start), *((1,) if retire_bare_nodes else ()),
+        )
         # "deleted", "deleted:skipped" or, with retire_bare_nodes, "deleted:skipped:retired"
         parts = str(result).split(":")
         nums = [int(p) if p else 0 for p in parts] + [0, 0]
